@@ -31,9 +31,13 @@ class Streamer:
     def __init__(self, source, host, width, height, fps, bitrate, encoder):
         """source: a PipeWire node id, or "test" for a moving test pattern."""
         if source == "test":
+            # Same picture in a local window: photograph both screens to read
+            # the end-to-end latency off the two timers.
             video = (f"videotestsrc is-live=true pattern=ball ! "
                      f"video/x-raw,width={width},height={height},framerate={fps}/1 ! "
-                     f"timeoverlay font-desc=\"Sans 90\" valignment=center halignment=center")
+                     f"timeoverlay font-desc=\"Sans 90\" valignment=center halignment=center ! "
+                     f"tee name=preview ! queue max-size-buffers=1 leaky=downstream ! "
+                     f"videoconvert ! autovideosink sync=false preview.")
         else:
             # Mutter only sends frames on damage; keepalive repeats the last
             # one so the sink keeps receiving data on a static screen.
