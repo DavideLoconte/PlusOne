@@ -19,6 +19,8 @@ Always ready, one click away.
   traffic (measured: 20% of packets over 30 ms while searching).
 - Touch, resolution and quality settings apply from the next connection
   without restarting anything.
+- Ending a session also closes its touch connection, which used to linger
+  for about 30 s after a reconnect.
 - New app ID `io.github.gabrielesantangelo.PlusOne` (needed for Flathub).
   Flatpak users: `flatpak uninstall io.github.santal.PlusOne` after
   installing this version.

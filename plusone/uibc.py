@@ -31,6 +31,7 @@ class UibcServer:
         self.sock.bind(("0.0.0.0", port))
         self.sock.listen(1)
         self.down = set()
+        self.conns = set()  # open sink connections, closed with the server
         threading.Thread(target=self._serve, daemon=True).start()
 
     def _serve(self):
@@ -40,7 +41,8 @@ class UibcServer:
             except OSError:
                 return
             log("UIBC: sink connected from", addr)
-            threading.Thread(target=self._handle, args=(conn,), daemon=True).start()
+            self.conns.add(conn)
+            threading.Thread(target=self._handle, args=(conn, addr), daemon=True).start()
 
     def _recv(self, conn, n):
         data = b""
@@ -51,13 +53,16 @@ class UibcServer:
             data += chunk
         return data
 
-    def _handle(self, conn):
+    def _handle(self, conn, addr):
         try:
-            self._loop(conn)
+            self._loop(conn, addr)
         except Exception as e:  # noqa: BLE001 - report and keep the app alive
             log("UIBC: handler crashed:", repr(e))
+        finally:
+            self.conns.discard(conn)
+            conn.close()
 
-    def _loop(self, conn):
+    def _loop(self, conn, addr):
         try:
             while True:
                 head = self._recv(conn, 4)
@@ -74,7 +79,7 @@ class UibcServer:
                 else:
                     log(f"UIBC: ignoring category {category} ({len(body)} bytes)")
         except (EOFError, OSError) as e:
-            log("UIBC: sink disconnected", e)
+            log("UIBC: sink disconnected", addr, e)
             for slot in list(self.down):
                 self.injector.touch_up(slot)
             self.down.clear()
@@ -132,10 +137,13 @@ class UibcServer:
 
     def close(self):
         self._close_pen()
-        # shutdown() wakes the thread blocked in accept(); close() alone leaves
-        # the port listening until the process exits.
-        try:
-            self.sock.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
+        # shutdown() wakes the threads blocked in accept() and recv(); close()
+        # alone leaves the port listening until the process exits, and a
+        # connection from the previous session would linger until TCP gives
+        # up on it (about 30 s after the Wi-Fi Direct group goes away).
+        for sock in (self.sock, *list(self.conns)):
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
         self.sock.close()

@@ -99,3 +99,15 @@ def test_close_frees_the_port():
     srv.close()
     again = UibcServer(Recorder(), port=port)
     again.close()
+
+
+def test_close_ends_open_connections():
+    # A sink connection from the previous session must not outlive it.
+    srv = UibcServer(Recorder(), port=0)
+    sink = socket.create_connection(srv.sock.getsockname())
+    assert wait_for(lambda: srv.conns)
+    srv.close()
+    sink.settimeout(2)
+    assert sink.recv(1) == b""  # EOF, not a hang
+    sink.close()
+    assert wait_for(lambda: not srv.conns)
