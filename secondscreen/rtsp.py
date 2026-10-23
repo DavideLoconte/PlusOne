@@ -115,11 +115,15 @@ class WfdSession:
             f"wfd_presentation_URL: rtsp://{self.our_ip}/wfd1.0/streamid=0 none",
             "wfd_client_rtp_ports: RTP/AVP/UDP;unicast 19000 0 mode=play",
         ]
-        if self.uibc_port and "none" not in self.caps.get("wfd_uibc_capability", "none"):
+        # The sink's answer ends in "port=none" (the source picks the port),
+        # so only a bare "none" means no UIBC support.
+        if self.uibc_port and self.caps.get("wfd_uibc_capability", "none") != "none":
+            # Fingers arrive as generic touch events; the S Pen only as an HIDC
+            # "Gesture" device (libsecuibc: "Source Device supports HIDC Gesture(pen)").
             lines += [
-                "wfd_uibc_capability: input_category_list=GENERIC;"
+                "wfd_uibc_capability: input_category_list=GENERIC, HIDC;"
                 "generic_cap_list=Mouse, SingleTouch, MultiTouch, Keyboard;"
-                f"hidc_cap_list=none;port={self.uibc_port}",
+                f"hidc_cap_list=Gesture/USB;port={self.uibc_port}",
                 "wfd_uibc_setting: enable",
             ]
         return "\r\n".join(lines) + "\r\n"

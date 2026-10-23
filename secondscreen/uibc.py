@@ -15,9 +15,15 @@ TOUCH_DOWN, TOUCH_UP, TOUCH_MOVE, KEY_DOWN, KEY_UP = 0, 1, 2, 3, 4
 
 
 class UibcServer:
-    def __init__(self, injector, port=50000):
-        """injector: object with touch_down/touch_motion/touch_up(slot, x, y)."""
+    def __init__(self, injector, port=50000, pen_factory=None):
+        """injector: object with touch_down/touch_motion/touch_up(slot, x, y).
+
+        pen_factory(descriptor) returns an object with report(data)/close()
+        for the S Pen, which arrives as an HIDC device.
+        """
         self.injector = injector
+        self.pen_factory = pen_factory
+        self.pen = None
         self.port = port
         self.scale = (1.0, 1.0)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -61,6 +67,8 @@ class UibcServer:
                     body = body[2:]
                 if category == 0:
                     self._generic(body)
+                elif category == 1:
+                    self._hidc(body)
                 else:
                     log(f"UIBC: ignoring category {category} ({len(body)} bytes)")
         except (EOFError, OSError):
@@ -68,6 +76,7 @@ class UibcServer:
             for slot in list(self.down):
                 self.injector.touch_up(slot)
             self.down.clear()
+            self._close_pen()
 
     def _generic(self, body):
         while len(body) >= 3:
@@ -90,5 +99,30 @@ class UibcServer:
             else:
                 log(f"UIBC: generic event {ie_id} {desc.hex()}")
 
+    def _hidc(self, body):
+        # HIDC (WFD 4.11.4): input path, HID type, usage (0 report, 1 descriptor),
+        # 2-byte length, then the raw HID data.
+        if len(body) < 5:
+            return
+        hid_type, usage = body[1], body[2]
+        length = struct.unpack(">H", body[3:5])[0]
+        data = body[5:5 + length]
+        if usage == 1:
+            log(f"UIBC: HID descriptor for type {hid_type}: {data.hex()}")
+            self._close_pen()
+            if self.pen_factory:
+                try:
+                    self.pen = self.pen_factory(data)
+                except OSError as e:
+                    log("pen unavailable:", e)
+        elif self.pen:
+            self.pen.report(data)
+
+    def _close_pen(self):
+        if self.pen:
+            self.pen.close()
+            self.pen = None
+
     def close(self):
+        self._close_pen()
         self.sock.close()

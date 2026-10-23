@@ -11,8 +11,8 @@ from dataclasses import dataclass
 
 from gi.repository import GLib
 
-from . import log, media, tablet
-from .display import VirtualMonitor
+from . import log, media, pen, tablet
+from .display import VirtualMonitor, virtual_monitor_edid
 from .p2p import P2PLink
 from .rtsp import MODES, WfdSession
 from .uibc import UibcServer
@@ -100,7 +100,7 @@ class Controller:
             self.monitor = VirtualMonitor(on_ready=self._start_stream)
             if s.touch:
                 try:
-                    self.uibc = UibcServer(self.monitor, UIBC_PORT)
+                    self.uibc = UibcServer(self.monitor, UIBC_PORT, pen_factory=self._make_pen)
                 except OSError as e:
                     log("touch disabled:", e)
         threading.Thread(target=self._accept_loop, daemon=True).start()
@@ -173,6 +173,16 @@ class Controller:
                                       mode=(s.width, s.height, s.fps),
                                       uibc_port=UIBC_PORT if self.uibc else None)
             self.session.run()
+
+    def _make_pen(self, descriptor):
+        # Called on the UIBC thread once the tablet describes its pen.
+        if pen.uhid_available():
+            device = pen.UhidPen(descriptor)
+            edid = virtual_monitor_edid()
+            if edid:
+                pen.map_to_monitor(edid)
+            return device
+        return pen.PointerPen(self.monitor, (self.settings.width, self.settings.height))
 
     def _on_play(self, session):
         def go():

@@ -13,6 +13,20 @@ RD_NAME = "org.gnome.Mutter.RemoteDesktop"
 SC_NAME = "org.gnome.Mutter.ScreenCast"
 
 
+def virtual_monitor_edid():
+    """(vendor, product, serial) of the newest Mutter virtual monitor, or None."""
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    state = bus.call_sync("org.gnome.Mutter.DisplayConfig", "/org/gnome/Mutter/DisplayConfig",
+                          "org.gnome.Mutter.DisplayConfig", "GetCurrentState", None, None,
+                          Gio.DBusCallFlags.NONE, -1, None).unpack()
+    # state[1]: monitors as ((connector, vendor, product, serial), modes, props)
+    virtual = [m[0] for m in state[1] if m[0][0].startswith("Meta-")]
+    if not virtual:
+        return None
+    newest = max(virtual, key=lambda spec: int(spec[3], 16))
+    return newest[1], newest[2], newest[3]
+
+
 class VirtualMonitor:
     def __init__(self, on_ready):
         """on_ready(node_id) runs on the GLib loop once PipeWire has the stream."""
