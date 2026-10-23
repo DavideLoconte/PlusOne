@@ -12,6 +12,7 @@ The reports are also published, all of them, to readers in this process
 (`feed`): the signing window draws with those.
 """
 import collections
+import math
 import os
 import struct
 import threading
@@ -42,13 +43,54 @@ def parse_report(data):
     return bits, x / AXIS_MAX, y / AXIS_MAX, min(1.0, pressure / PRESSURE_MAX)
 
 
-class Feed:
-    """Every pen report from the tablet, for readers in this process.
+class Despike:
+    """Drops the stray samples Second Screen sends.
 
-    After a Wi-Fi hiccup the tablet sends the reports it held back in one
-    burst; Mutter and GTK pass on only the last of those, so a fast stroke
-    drawn from desktop events gets straight corners. A reader here gets all
-    of them (about 285 a second) as (time, bits, x, y, pressure)."""
+    Now and then, in the middle of a stroke, the tablet sends a sample from a
+    few reports ahead and then carries on in order (that position comes again
+    later): drawn as is, a 4-15 pt needle sticks out of the line. Holding each
+    report back by one (3.5 ms) shows it, as the pen jumping away and
+    straight back, and that report is dropped."""
+
+    JUMP = 0.0015  # of the screen width: about 3 pixels
+
+    def __init__(self):
+        self.held = None    # (report, parsed) waiting for the next report
+        self.last = None    # position of the last report passed on, tip down
+        self.dropped = 0
+
+    def feed(self, data):
+        """Reports to pass on, in order."""
+        sample = parse_report(data)
+        drawing = sample is not None and bool(sample[0] & TIP)
+        out = []
+        if self.held:
+            report, (bits, x, y, _pressure) = self.held
+            self.held = None
+            if (drawing and bits == sample[0] and self.last
+                    and self._stray(self.last, (x, y), sample[1:3])):
+                self.dropped += 1
+            else:
+                out.append(report)
+                self.last = (x, y)
+        if drawing:
+            self.held = (data, sample)
+        else:  # hovering or lifted: nothing to hold back
+            self.last = None
+            out.append(data)
+        return out
+
+    @classmethod
+    def _stray(cls, before, here, after):
+        a, b = math.dist(before, here), math.dist(here, after)
+        return a > cls.JUMP and b > cls.JUMP and math.dist(before, after) < 0.3 * min(a, b)
+
+
+class Feed:
+    """Every pen report from the tablet (about 285 a second), for readers in
+    this process, as (time, bits, x, y, pressure): they get each one as it
+    arrives, a few milliseconds before the desktop delivers it, and whatever
+    the desktop merges."""
 
     def __init__(self):
         self.readers = []

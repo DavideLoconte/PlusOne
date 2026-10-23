@@ -18,9 +18,11 @@ Sign on the tablet.
   themes), tools sit in a floating bar under it with an eraser button, *My
   signature* shows your signature, a faint preview follows the pen while
   placing it, and messages are toasts.
-- Strokes are drawn from every pen report the tablet sends (about 285 a
-  second), read directly from the UIBC channel: the desktop drops the reports
-  that arrive in a burst after a Wi-Fi hiccup, which left straight corners.
+- Stray pen samples are dropped: now and then Second Screen sends, mid-stroke,
+  a sample from a few reports ahead, which drew a 4-15 pt needle out of the
+  line (in any app using the pen).
+- While the signing window fills the tablet it draws from the pen reports
+  as they arrive (about 285 a second), not from desktop events.
 - Saved signature (draw once, place with one tap), date and text fields, undo,
   page navigation.
 - The signature is stamped onto the original pages (pypdf), so text, forms and

@@ -67,3 +67,35 @@ def test_feed_gives_every_report_to_each_reader():
     feed.unlisten(a)
     feed.publish(pen_report(0x10, 0, 0, 0))
     assert len(a) == 300 and len(b) == 301
+
+
+def stroke(*points, bits=0x11):
+    return [pen_report(bits, x, y, 1000) for x, y in points]
+
+
+def run(despike, reports):
+    return [r for report in reports for r in despike.feed(report)]
+
+
+def test_despike_drops_a_sample_from_ahead():
+    from plusone.pen import Despike
+    d = Despike()
+    # Moving right 10 units a report; the fourth is a sample from 12 reports
+    # ahead (as Second Screen sends now and then); then the tip lifts.
+    path = [(1000 + 10 * i, 5000) for i in range(8)]
+    reports = stroke(*path[:3], (1150, 5000), *path[3:]) + [pen_report(0x10, 1080, 5000, 0)]
+    out = run(d, reports)
+    assert out == stroke(*path) + [pen_report(0x10, 1080, 5000, 0)]
+    assert d.dropped == 1
+
+
+def test_despike_keeps_fast_strokes_corners_and_hover():
+    from plusone.pen import Despike
+    d = Despike()
+    fast = [(1000 + 300 * i, 5000) for i in range(6)]           # big steps, one way
+    corner = [(3000, 5000 + 300 * i) for i in range(1, 5)]      # then a right angle
+    hover = [pen_report(0x10, 3000, 6500, 0), pen_report(0x00, 3000, 6500, 0)]
+    reports = stroke(*fast, *corner) + hover
+    assert run(d, reports) == reports and d.dropped == 0
+    # Hover reports are never held back.
+    assert d.feed(pen_report(0x10, 10, 10, 0)) == [pen_report(0x10, 10, 10, 0)]
