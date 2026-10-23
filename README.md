@@ -197,6 +197,9 @@ remote desktop  ◀──── touch ───── UIBC server ◀───�
 
 Details, evidence and the tools used are in [docs/FINDINGS.md](docs/FINDINGS.md).
 
+What comes next, and the convenience rules every feature follows, is in
+[docs/ROADMAP.md](docs/ROADMAP.md).
+
 ## Development
 
 ```
