@@ -5,6 +5,7 @@ tile on the tablet.
 """
 import shutil
 import subprocess
+import time
 
 from . import log
 
@@ -45,8 +46,23 @@ def prepare(serial, restart=True):
     if restart:
         # A fresh Second Screen instance negotiates Wi-Fi Direct reliably.
         _adb("-s", serial, "shell", "am", "force-stop", PACKAGE)
-    _adb("-s", serial, "shell", "cmd", "statusbar", "click-tile", TILE)
-    log("tablet: opened Second Screen")
+    # Right after a force-stop the tile service is still rebinding and may
+    # swallow the click, so check that the receiver actually came up.
+    for _ in range(3):
+        _adb("-s", serial, "shell", "cmd", "statusbar", "click-tile", TILE)
+        for _ in range(8):
+            time.sleep(0.5)
+            if _foreground_is_second_screen(serial):
+                log("tablet: opened Second Screen")
+                return True
+    log("tablet: could not open Second Screen, open it by hand")
+    return False
+
+
+def _foreground_is_second_screen(serial):
+    out = _adb("-s", serial, "shell", "dumpsys", "activity", "activities").stdout
+    top = next((line for line in out.splitlines() if "topResumedActivity" in line), "")
+    return PACKAGE in top
 
 
 def close(serial):

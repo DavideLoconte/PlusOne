@@ -92,7 +92,8 @@ def parse_params(body):
 class WfdSession:
     """Runs one sink connection; callbacks fire on the session thread."""
 
-    def __init__(self, conn, on_play, on_idr, on_close, mode=(1920, 1200, 60), uibc_port=None):
+    def __init__(self, conn, on_play, on_idr, on_close, mode=(1920, 1200, 60), uibc_port=None,
+                 sink_ip=None):
         self.conn = conn
         self.rtsp = Rtsp(conn)
         self.on_play = on_play
@@ -100,7 +101,9 @@ class WfdSession:
         self.on_close = on_close
         self.uibc_port = uibc_port
         self.mode = mode
-        self.sink_ip = conn.getpeername()[0]
+        # Over an adb tunnel the RTSP peer is 127.0.0.1; RTP then goes to the
+        # tablet's LAN address instead.
+        self.sink_ip = sink_ip or conn.getpeername()[0]
         self.our_ip = conn.getsockname()[0]
         self.session_id = "SS%08d" % (int(time.time()) % 10**8)
         self.caps = {}
