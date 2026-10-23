@@ -44,10 +44,10 @@ def curve(points):
     the pen reports at a fixed rate whatever its speed).
 
     Yields (start, control 1, control 2, end, pressure at start, at end)."""
-    pts = [points[0]]
+    pts = [tuple(points[0])]
     for pt in points[1:]:
-        if pt[:2] != pts[-1][:2]:
-            pts.append(pt)
+        if tuple(pt[:2]) != pts[-1][:2]:
+            pts.append(tuple(pt))
     for i in range(len(pts) - 1):
         p0, p1, p2 = pts[max(i - 1, 0)], pts[i], pts[i + 1]
         p3 = pts[min(i + 2, len(pts) - 1)]

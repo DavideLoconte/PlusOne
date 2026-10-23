@@ -3,11 +3,20 @@
 Video-only MPEG-TS: without an audio track the sink renders frames as they
 arrive instead of syncing them to an audio clock (measured ~90 ms -> ~50 ms).
 """
+import time
+
 from gi.repository import Gst
 
 from . import log
 
 # name -> (GStreamer element, settings, raw format it takes), in preference order.
+# A keyframe of a page of text is 80-140 KB, sent as 60-100 RTP packets back
+# to back (udpsink's max-bitrate does not pace with sync=false). Keep them
+# smaller and rarer: the sink asks for one when it lost data.
+KEYFRAME_SECONDS = 10      # periodic keyframe interval
+VBV_FRAMES = 4             # a keyframe may be this many average frames
+MIN_KEYFRAME_GAP = 1.0     # seconds between keyframes forced on request
+
 ENCODERS = {
     "nvenc": ("nvh264enc", "preset=low-latency-hq zerolatency=true bframes=0 rc-mode=cbr "
               "bitrate={bitrate} gop-size={gop} aud=false", "BGRA"),
@@ -52,7 +61,7 @@ class Streamer:
                      f"video/x-raw,format={CAPTURE_FORMAT},width={width},height={height},"
                      f"max-framerate={fps}/1")
         element, options, raw_format = ENCODERS[encoder]
-        enc = f"{element} name=enc " + options.format(bitrate=bitrate, gop=fps * 2)
+        enc = f"{element} name=enc " + options.format(bitrate=bitrate, gop=fps * KEYFRAME_SECONDS)
         self.pipeline = Gst.parse_launch(
             f"{video} ! queue max-size-buffers=1 leaky=downstream ! "
             f"videoconvert n-threads=4 ! video/x-raw,format={raw_format} ! "
@@ -60,6 +69,8 @@ class Streamer:
             f"queue max-size-buffers=2 ! mpegtsmux alignment=7 ! "
             f"rtpmp2tpay pt=33 mtu=1400 ! "
             f"udpsink host={host} port={port} bind-port={bind_port} sync=false async=false")
+        self._cap_keyframes(self.pipeline.get_by_name("enc"), bitrate, fps)
+        self._last_keyframe = 0.0
         self.pipeline.get_bus().add_signal_watch()
         self.pipeline.get_bus().connect("message::error", self._on_error)
         log(f"pipeline: {width}x{height}@{fps} {encoder} {bitrate} kbit/s -> {host}:{port}")
@@ -74,7 +85,23 @@ class Streamer:
     def stop(self):
         self.pipeline.set_state(Gst.State.NULL)
 
+    @staticmethod
+    def _cap_keyframes(enc, bitrate, fps):
+        """Each encoder names its rate-control buffer differently; set the
+        ones this one has (kbit or milliseconds)."""
+        kbit, ms = int(bitrate / fps * VBV_FRAMES), int(1000 * VBV_FRAMES / fps)
+        for prop, value in (("vbv-buffer-size", kbit), ("cpb-size", kbit),
+                            ("cpb-length", ms), ("vbv-buf-capacity", ms)):
+            if enc.find_property(prop):
+                enc.set_property(prop, value)
+
     def force_keyframe(self):
+        # After a loss the sink keeps asking; one keyframe per second is
+        # enough, more only add bursts that cause more loss.
+        now = time.monotonic()
+        if now - self._last_keyframe < MIN_KEYFRAME_GAP:
+            return
+        self._last_keyframe = now
         s = Gst.Structure.new_from_string("GstForceKeyUnit, all-headers=(boolean)true")
         self.pipeline.get_by_name("enc").get_static_pad("sink").send_event(
             Gst.Event.new_custom(Gst.EventType.CUSTOM_DOWNSTREAM, s))

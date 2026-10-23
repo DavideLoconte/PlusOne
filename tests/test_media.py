@@ -40,3 +40,41 @@ def test_test_pattern_reaches_udp():
         assert pkt[1] & 0x7F == 33           # MP2T payload type
         assert pkt[12] == 0x47               # MPEG-TS sync byte right after the header
         assert (len(pkt) - 12) % 188 == 0    # whole TS packets
+
+
+def test_keyframe_requests_are_rate_limited(monkeypatch):
+    from plusone import media
+    sent = []
+
+    class Pad:
+        def send_event(self, event):
+            sent.append(event)
+
+    class Enc:
+        def get_static_pad(self, name):
+            return Pad()
+
+    class Pipeline:
+        def get_by_name(self, name):
+            return Enc()
+
+    streamer = media.Streamer.__new__(media.Streamer)
+    streamer.pipeline, streamer._last_keyframe = Pipeline(), 0.0
+    clock = iter([100.0, 100.3, 100.9, 101.2])
+    monkeypatch.setattr(media.time, "monotonic", lambda: next(clock))
+    for _ in range(4):
+        streamer.force_keyframe()
+    assert len(sent) == 2  # at 100.0 and 101.2
+
+
+def test_keyframe_cap_is_set_on_the_encoder():
+    import gi
+    gi.require_version("Gst", "1.0")
+    from gi.repository import Gst
+    from plusone import media
+    Gst.init(None)
+    enc = Gst.ElementFactory.make("x264enc")
+    if enc is None:
+        pytest.skip("x264enc not installed")
+    media.Streamer._cap_keyframes(enc, 20000, 60)
+    assert enc.get_property("vbv-buf-capacity") == int(1000 * media.VBV_FRAMES / 60)
