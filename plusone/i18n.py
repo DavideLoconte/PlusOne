@@ -28,6 +28,9 @@ _IT = {
     "Ready in the background": "Pronto in background",
     "Starts at login and stays ready after you close this window":
         "Parte all'accesso e resta pronto anche dopo aver chiuso questa finestra",
+    "Quick Settings toggle": "Interruttore nelle impostazioni rapide",
+    "Adds a “Tablet” button to GNOME's Quick Settings":
+        "Aggiunge un pulsante «Tablet» alle impostazioni rapide di GNOME",
     "Open Second Screen from here": "Apri Second Screen da qui",
     "Uses adb: needs wireless debugging on the tablet": "Usa adb: serve il debug wireless sul tablet",
     "adb is not available": "adb non è disponibile",

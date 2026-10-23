@@ -6,8 +6,9 @@ Always ready, one click away.
 
 - *Tablet* toggle in GNOME's Quick Settings (GNOME Shell 45–49): connect and
   disconnect with one click, state as subtitle, icon in the top bar while
-  connected. Shipped in the `.deb` and switched on automatically once; a zip
-  for Flatpak users is attached to the release.
+  connected. Shipped in the `.deb` but off: turn it on from Plus One's window
+  or the Extensions app (Plus One never enables shell extensions by itself).
+  A zip for Flatpak users is attached to the release.
 - Plus One runs in the background from login (*Ready in the background*, on by
   default): no window needed, nothing running on the radio while idle.
   D-Bus interface `io.github.gabrielesantangelo.PlusOne1` for the toggle,

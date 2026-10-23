@@ -58,8 +58,10 @@ from your distribution. It also installs a udev rule that lets the logged-in
 user create virtual HID devices (`/dev/uhid`), which is how the S Pen becomes a
 tablet with pressure; any program you run gets the same ability.
 
-The *Tablet* Quick Settings toggle is included and switches itself on the
-first time Plus One runs after you log in again.
+The *Tablet* Quick Settings toggle (a GNOME Shell extension) is included but
+off: after logging out and back in, turn it on in Plus One's window
+(*Options → Quick Settings toggle*) or in the *Extensions* app. Plus One never
+enables shell extensions by itself.
 
 Uninstall with `sudo apt remove plus-one`.
 
@@ -156,6 +158,7 @@ If the tablet is connected over adb (see below) Plus One writes this file for yo
 | Resolution | *Automatic* (default) reads the tablet's preferred mode from its EDID (1920×1200 on a Tab S10 FE+), or pick 1920×1200, 1680×1050, 1440×900, 1280×800 (16:10), 1920×1080, 1280×720 (16:9). |
 | Quality | Video bitrate in Mbit/s. 20 is a good default; raise it for crisper text. |
 | Touch and S Pen | Forward finger touches and the pen from the tablet. |
+| Quick Settings toggle | Turns the *Tablet* GNOME Shell extension on or off. Shown when the extension is installed (the `.deb`, or the zip for Flatpak users) and GNOME Shell knows it, which is after the next login. |
 | Ready in the background | Start at login and keep running after the window closes, so the Quick Settings toggle connects at once. Costs nothing while idle. |
 | Open Second Screen from here | Uses `adb` to open the tile for you. Needs *USB debugging* or *Wireless debugging* on the tablet; off by default. |
 | Language | System, English or Italiano. |

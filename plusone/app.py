@@ -102,33 +102,38 @@ def set_autostart(enabled, config_dir=None):
                     "NoDisplay=true\nX-GNOME-Autostart-enabled=true\n")
 
 
-def enable_shell_extension(settings):
-    """Turn the Quick Settings toggle on the first time the shell knows it.
-
-    Only once: if the user disables it later, that choice stays."""
-    if settings.extension_enabled_once:
-        return
+def _shell_extensions_call(method, args, reply_type, callback):
     bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
 
-    def got_info(conn, res):
+    def done(conn, res):
         try:
-            info = conn.call_finish(res).unpack()[0]
+            result = conn.call_finish(res).unpack()
         except GLib.Error:
-            return  # not GNOME Shell, or no access from a sandbox
-        if not info:
-            return  # not installed, or installed after the shell started
-        settings.extension_enabled_once = True
-        save_settings(settings)
-        if info.get("state") != 1:  # 1 = enabled
-            log("enabling the Quick Settings toggle")
-            conn.call("org.gnome.Shell.Extensions", "/org/gnome/Shell/Extensions",
-                      "org.gnome.Shell.Extensions", "EnableExtension",
-                      GLib.Variant("(s)", (EXTENSION,)), None, Gio.DBusCallFlags.NONE, -1,
-                      None, None)
+            result = None  # not GNOME Shell, or no access from a sandbox
+        if callback:
+            callback(result)
 
-    bus.call("org.gnome.Shell.Extensions", "/org/gnome/Shell/Extensions",
-             "org.gnome.Shell.Extensions", "GetExtensionInfo", GLib.Variant("(s)", (EXTENSION,)),
-             GLib.VariantType("(a{sv})"), Gio.DBusCallFlags.NONE, -1, None, got_info)
+    bus.call("org.gnome.Shell.Extensions", "/org/gnome/Shell/Extensions", "org.gnome.Shell.Extensions",
+             method, args, reply_type, Gio.DBusCallFlags.NONE, -1, None, done)
+
+
+def shell_extension_state(callback):
+    """callback(None) if the Quick Settings toggle is not installed (or the
+    shell cannot tell), else callback(True/False) for enabled or not."""
+    def got(result):
+        info = result[0] if result else {}
+        callback(info.get("state") == 1 if info else None)
+    _shell_extensions_call("GetExtensionInfo", GLib.Variant("(s)", (EXTENSION,)),
+                           GLib.VariantType("(a{sv})"), got)
+
+
+def set_shell_extension(enabled, callback=None):
+    """Only ever on the user's explicit request: Plus One never turns shell
+    extensions on by itself."""
+    log("Quick Settings toggle", "on" if enabled else "off")
+    _shell_extensions_call("EnableExtension" if enabled else "DisableExtension",
+                           GLib.Variant("(s)", (EXTENSION,)), GLib.VariantType("(b)"),
+                           callback)
 
 
 class PlusOneApp(Adw.Application):
@@ -157,7 +162,6 @@ class PlusOneApp(Adw.Application):
     def do_startup(self):
         Adw.Application.do_startup(self)
         Gst.init(None)
-        enable_shell_extension(self.settings)
         if self.settings.background:
             set_autostart(True)
         self._update_hold()

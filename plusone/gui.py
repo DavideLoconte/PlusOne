@@ -8,6 +8,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
 from . import i18n, once  # noqa: E402
+from .app import set_shell_extension, shell_extension_state  # noqa: E402
 from .engine import State  # noqa: E402
 from .i18n import _  # noqa: E402
 from .rtsp import MODES  # noqa: E402
@@ -73,6 +74,8 @@ class Window(Adw.ApplicationWindow):
         self.options_group = Adw.PreferencesGroup()
         self.touch_row = Adw.SwitchRow(active=self.settings.touch)
         self.background_row = Adw.SwitchRow(active=self.settings.background)
+        # Shown once the shell says the extension is installed (never in a Flatpak).
+        self.extension_row = Adw.SwitchRow(visible=False)
         self.has_adb = shutil.which("adb") is not None
         self.adb_row = Adw.SwitchRow(active=self.settings.use_adb and self.has_adb,
                                      sensitive=self.has_adb)
@@ -81,7 +84,8 @@ class Window(Adw.ApplicationWindow):
         language = self.settings.language if self.settings.language in i18n.LANGUAGES else "auto"
         self.language_row.set_selected(i18n.LANGUAGES.index(language))
         self._language_handler = self.language_row.connect("notify::selected", self._on_language)
-        for row in (self.touch_row, self.background_row, self.adb_row, self.language_row):
+        for row in (self.touch_row, self.background_row, self.extension_row, self.adb_row,
+                    self.language_row):
             self.options_group.add(row)
         page.add(self.options_group)
         # Settings are read when a connection starts: lock them while one is up.
@@ -105,6 +109,9 @@ class Window(Adw.ApplicationWindow):
             row.connect(signal, self._apply_settings)
         self.background_row.connect("notify::active",
                                     lambda row, _p: app.set_background(row.get_active()))
+        self._extension_handler = self.extension_row.connect(
+            "notify::active", lambda row, _p: set_shell_extension(row.get_active()))
+        shell_extension_state(self._show_extension_state)
         app.listeners.append(self._refresh)
         app.log_listeners.append(self._append_log)
         self.connect("close-request", self._on_close)
@@ -120,6 +127,8 @@ class Window(Adw.ApplicationWindow):
         self.touch_row.set_title(_("Touch and S Pen"))
         self.background_row.set_title(_("Ready in the background"))
         self.background_row.set_subtitle(_("Starts at login and stays ready after you close this window"))
+        self.extension_row.set_title(_("Quick Settings toggle"))
+        self.extension_row.set_subtitle(_("Adds a “Tablet” button to GNOME's Quick Settings"))
         self.adb_row.set_title(_("Open Second Screen from here"))
         self.adb_row.set_subtitle(_("Uses adb: needs wireless debugging on the tablet")
                                   if self.has_adb else _("adb is not available"))
@@ -143,6 +152,13 @@ class Window(Adw.ApplicationWindow):
         self.app.save_settings()
         # Not from inside this notify emission: _translate swaps the row's model.
         GLib.idle_add(once(self._translate))
+
+    def _show_extension_state(self, enabled):
+        if enabled is None:
+            return  # not installed, or not GNOME Shell
+        with self.extension_row.handler_block(self._extension_handler):
+            self.extension_row.set_active(enabled)
+        self.extension_row.set_visible(True)
 
     # -- controller ------------------------------------------------------------
     def _apply_settings(self, *_args):

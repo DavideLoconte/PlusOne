@@ -40,7 +40,6 @@ class Settings:
     # login, so the Quick Settings toggle connects at once.
     background: bool = True
     language: str = "auto"
-    extension_enabled_once: bool = False  # see app.enable_shell_extension
 
 
 class State:
