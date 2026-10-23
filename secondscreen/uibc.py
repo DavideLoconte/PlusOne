@@ -24,6 +24,7 @@ class UibcServer:
         self.injector = injector
         self.pen_factory = pen_factory
         self.pen = None
+        self.reports = 0
         self.port = port
         self.scale = (1.0, 1.0)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -57,6 +58,12 @@ class UibcServer:
 
     def _handle(self, conn):
         try:
+            self._loop(conn)
+        except Exception as e:  # noqa: BLE001 - report and keep the app alive
+            log("UIBC: handler crashed:", repr(e))
+
+    def _loop(self, conn):
+        try:
             while True:
                 head = self._recv(conn, 4)
                 has_ts = head[0] & 0x10
@@ -71,8 +78,8 @@ class UibcServer:
                     self._hidc(body)
                 else:
                     log(f"UIBC: ignoring category {category} ({len(body)} bytes)")
-        except (EOFError, OSError):
-            log("UIBC: sink disconnected")
+        except (EOFError, OSError) as e:
+            log("UIBC: sink disconnected", e)
             for slot in list(self.down):
                 self.injector.touch_up(slot)
             self.down.clear()
@@ -116,7 +123,12 @@ class UibcServer:
                 except OSError as e:
                     log("pen unavailable:", e)
         elif self.pen:
+            self.reports += 1
+            if self.reports in (1, 100) or self.reports % 2000 == 0:
+                log(f"UIBC: pen report #{self.reports} {data.hex()}")
             self.pen.report(data)
+        else:
+            log("UIBC: pen report before any descriptor, dropped")
 
     def _close_pen(self):
         if self.pen:
