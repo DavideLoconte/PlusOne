@@ -10,7 +10,9 @@ import collections
 import json
 import os
 import shutil
+import signal
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -22,7 +24,7 @@ gi.require_version("Gst", "1.0")
 gi.require_version("NM", "1.0")
 from gi.repository import Adw, Gio, GLib, Gst  # noqa: E402
 
-from . import add_log_handler, i18n, log, once  # noqa: E402
+from . import __version__, add_log_handler, i18n, log, once  # noqa: E402
 from .engine import Controller, Settings, State  # noqa: E402
 from .i18n import _  # noqa: E402
 from .signing import Signing  # noqa: E402
@@ -38,6 +40,7 @@ INTERFACE_XML = f"""
     <method name="SignDocument">
       <arg type="s" name="path" direction="in"/>
     </method>
+    <property name="Version" type="s" access="read"/>
     <property name="State" type="s" access="read"/>
     <property name="Active" type="b" access="read"/>
     <property name="Title" type="s" access="read"/>
@@ -299,7 +302,8 @@ class PlusOneApp(Adw.Application):
     # -- D-Bus -------------------------------------------------------------
     def _properties(self):
         title, detail = self.status_text()
-        return {"State": GLib.Variant("s", self.controller.state),
+        return {"Version": GLib.Variant("s", __version__),
+                "State": GLib.Variant("s", self.controller.state),
                 "Active": GLib.Variant("b", self.controller.running),
                 "Title": GLib.Variant("s", title),
                 "Detail": GLib.Variant("s", detail),
@@ -332,6 +336,53 @@ class PlusOneApp(Adw.Application):
         return False
 
 
+OBJECT_PATH = "/" + APP_ID.replace(".", "/")
+
+
+def _owner_pid(bus):
+    try:
+        return bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+                             "GetConnectionUnixProcessID", GLib.Variant("(s)", (APP_ID,)), None,
+                             Gio.DBusCallFlags.NONE, 2000, None).unpack()[0]
+    except GLib.Error:
+        return None
+
+
+def _running_property(bus, name):
+    try:
+        return bus.call_sync(APP_ID, OBJECT_PATH, "org.freedesktop.DBus.Properties", "Get",
+                             GLib.Variant("(ss)", (INTERFACE, name)), None,
+                             Gio.DBusCallFlags.NO_AUTO_START, 2000, None).unpack()[0]
+    except GLib.Error:
+        return None  # 0.3 had no Version; older releases no interface at all
+
+
+def replace_older_instance():
+    """After an upgrade the previous version may still run in the background,
+    and GApplication would hand it requests it does not know (like --sign).
+    Stop it, unless it is in the middle of a connection."""
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    pid = _owner_pid(bus)
+    if pid is None:
+        return
+    version = _running_property(bus, "Version")
+    if version == __version__:
+        return
+    if _running_property(bus, "State") in ("connecting", "streaming"):
+        log(f"Plus One {version or '(older)'} is connected; leaving it running")
+        return
+    log(f"replacing Plus One {version or '(older)'} (pid {pid}) with {__version__}")
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return
+    for _ in range(30):
+        if _owner_pid(bus) is None:
+            return
+        time.sleep(0.1)
+
+
 def main(argv=None):
     log("Plus One", sys.argv[1:] or "")
+    replace_older_instance()
     return PlusOneApp().run(argv if argv is not None else sys.argv[:1])
