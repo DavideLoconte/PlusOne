@@ -25,6 +25,7 @@ class UibcServer:
         self.pen_factory = pen_factory
         self.pen = None
         self.reports = 0
+        self.pen_states = set()  # pen state bytes logged so far
         self.port = port
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -116,6 +117,7 @@ class UibcServer:
         data = body[5:5 + length]
         if usage == 1:
             log(f"UIBC: HID descriptor for type {hid_type}: {data.hex()}")
+            self.pen_states = set()
             self._close_pen()
             if self.pen_factory:
                 try:
@@ -126,6 +128,11 @@ class UibcServer:
             self.reports += 1
             if self.reports in (1, 100) or self.reports % 2000 == 0:
                 log(f"UIBC: pen report #{self.reports} {data.hex()}")
+            # Byte 1 holds tip, side button, eraser and in-range bits on the
+            # Samsung pen: log each combination once, to see what a button sends.
+            if len(data) > 1 and data[1] not in self.pen_states:
+                self.pen_states.add(data[1])
+                log(f"UIBC: pen state {data[1]:#04x} in {data.hex()}")
             self.pen.report(data)
         else:
             log("UIBC: pen report before any descriptor, dropped")

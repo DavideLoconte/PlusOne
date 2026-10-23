@@ -1,8 +1,9 @@
 """Toolkit-free helpers for the signing window: page view and saved signature."""
 import json
+import math
 import os
 
-from .pdf import Stroke
+from .pdf import Stroke, Text
 
 SIGNATURE_WIDTH = 140.0  # points (about 5 cm) when a saved signature is placed
 
@@ -58,6 +59,38 @@ def place(signature, x, y, width=SIGNATURE_WIDTH):
     return [Stroke([(x + sx * width, y - height / 2 + sy * width, p) for sx, sy, p in s],
                    width=max(0.6, min(pen, 3.0)))
             for s in signature["strokes"]]
+
+
+def touches(mark, a, b, radius):
+    """Whether an eraser of this radius going from a to b (page points)
+    touches mark."""
+    if isinstance(mark, Text):
+        # Rough box around the text: glyphs average about half an em.
+        x0, x1 = mark.x - radius, mark.x + 0.55 * mark.size * len(mark.text) + radius
+        y0, y1 = mark.y - mark.size - radius, mark.y + 0.25 * mark.size + radius
+        return any(x0 <= x <= x1 and y0 <= y <= y1 for x, y in (a, b))
+    pts = [tuple(pt[:2]) for pt in mark.points]
+    reach = radius + mark.width / 2
+    if len(pts) == 1:
+        return _to_segment(pts[0], a, b) <= reach
+    return any(_between_segments(p, q, a, b) <= reach for p, q in zip(pts, pts[1:]))
+
+
+def _to_segment(pt, a, b):
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    length = dx * dx + dy * dy
+    t = 0.0 if not length else max(0.0, min(1.0, ((pt[0] - a[0]) * dx + (pt[1] - a[1]) * dy) / length))
+    return math.dist(pt, (a[0] + t * dx, a[1] + t * dy))
+
+
+def _side(a, b, c):
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def _between_segments(p, q, a, b):
+    if _side(a, b, p) * _side(a, b, q) < 0 and _side(p, q, a) * _side(p, q, b) < 0:
+        return 0.0  # they cross
+    return min(_to_segment(p, a, b), _to_segment(q, a, b), _to_segment(a, p, q), _to_segment(b, p, q))
 
 
 def load_signature(path):

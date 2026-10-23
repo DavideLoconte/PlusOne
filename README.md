@@ -148,8 +148,9 @@ Tablet*, or launch *Sign on Tablet* from the app grid and pick a file).
 1. If the tablet is not connected yet, Plus One connects it: tap **Second
    screen** on the tablet.
 2. The document opens full screen on the tablet. Sign with the S Pen: it
-   draws with pressure; fingers never draw, so resting your hand is fine.
-   Pinch with two fingers to zoom and move.
+   draws with pressure, and erases while you hold its side button; fingers
+   never draw, so resting your hand is fine. Pinch with two fingers to zoom
+   and move.
 3. Tap **Done**. `name-signed.pdf` is saved next to the original (which is
    left untouched) and a notification offers *Open* and *Show in folder*. If
    the connection was opened for signing, the tablet disconnects again.

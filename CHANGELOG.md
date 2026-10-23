@@ -10,6 +10,8 @@ Sign on the tablet.
   draw (palm rejection) and pinch to zoom. *Done* saves `name-signed.pdf`
   next to the original, untouched, and the tablet disconnects again if it was
   connected for this.
+- Hold the S Pen's side button to erase whole strokes; undo restores them,
+  and also a cleared page.
 - Saved signature (draw once, place with one tap), date and text fields, undo,
   page navigation.
 - The signature is stamped onto the original pages (pypdf), so text, forms and

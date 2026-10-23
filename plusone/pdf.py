@@ -15,7 +15,8 @@ from dataclasses import dataclass, field
 import cairo
 
 INK = (0.05, 0.1, 0.35)  # dark blue, reads as a pen signature
-PEN_WIDTH = 1.6          # points at full pressure
+PEN_WIDTH = 2.8          # points at full pressure
+FULL_PRESSURE = 0.6      # firm writing with the S Pen reads 0.3-0.5
 
 
 @dataclass
@@ -57,6 +58,12 @@ def curve(points):
         yield p1[:2], c1, c2, p2[:2], p1[2], p2[2]
 
 
+def ink_width(width, pressure):
+    """Line width for a pen pressure (0..1): from a hairline for a light
+    touch to the full width for firm writing, so pressure shows."""
+    return width * (0.1 + 0.9 * min(1.0, max(0.0, pressure) / FULL_PRESSURE))
+
+
 def draw_marks(cr, marks):
     """Draw marks on a cairo context set up in display space (points)."""
     cr.set_source_rgb(*INK)
@@ -69,12 +76,12 @@ def draw_marks(cr, marks):
             segments = list(curve(mark.points))
             if not segments:
                 x, y, p = mark.points[0]
-                cr.arc(x, y, mark.width * (0.3 + 0.7 * p) / 2, 0, 2 * math.pi)
+                cr.arc(x, y, ink_width(mark.width, p) / 2, 0, 2 * math.pi)
                 cr.fill()
                 continue
             # Segment by segment: the width follows the pen pressure.
             for start, c1, c2, end, p0, p1 in segments:
-                cr.set_line_width(mark.width * (0.3 + 0.7 * (p0 + p1) / 2))
+                cr.set_line_width(ink_width(mark.width, (p0 + p1) / 2))
                 cr.move_to(*start)
                 cr.curve_to(*c1, *c2, *end)
                 cr.stroke()

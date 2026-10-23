@@ -1,10 +1,11 @@
 """Full-screen window for signing a PDF with the pen, shown on the tablet.
 
-The S Pen draws (with pressure); fingers never do, so a palm resting on the
-screen leaves no marks. Two fingers zoom and move the page. A mouse also
-draws, for signing on the PC.
+The S Pen draws (with pressure) and, with its side button held, erases;
+fingers never draw, so a palm resting on the screen leaves no marks. Two
+fingers zoom and move the page. A mouse also draws, for signing on the PC.
 """
 import datetime
+import math
 import os
 import threading
 
@@ -18,11 +19,15 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Poppler  # noqa: E402
 
 from . import log, once  # noqa: E402
 from .i18n import _  # noqa: E402
-from .ink import View, load_signature, place, save_signature  # noqa: E402
+from .ink import View, load_signature, place, save_signature, touches  # noqa: E402
 from .pdf import Stroke, Text, draw_marks, output_path, save_signed  # noqa: E402
 
 SIGNATURE = os.path.join(GLib.get_user_data_dir(), "plus-one", "signature.json")
 PEN_SOURCES = (Gdk.InputSource.PEN, Gdk.InputSource.TOUCHSCREEN)
+NO_PRESSURE = 0.35  # mouse, or a pen that reports none: a medium line
+ERASER_RADIUS = 12  # widget pixels around the pen tip
+# The S Pen's side button arrives as the stylus' second or third button.
+ERASE_BUTTONS = Gdk.ModifierType.BUTTON2_MASK | Gdk.ModifierType.BUTTON3_MASK
 
 
 def tablet_monitor():
@@ -53,6 +58,9 @@ class PageArea(Gtk.DrawingArea):
         self.fitted = False
         self._cache = None  # (page index, zoom, surface)
         self._stroke = None
+        self._eraser = None   # page point under the eraser, while erasing
+        self._erased = False  # this eraser stroke removed something already
+        self._logged_tool = False
         self.set_draw_func(self._draw)
         self.connect("resize", lambda *a: self.fit())
 
@@ -117,7 +125,7 @@ class PageArea(Gtk.DrawingArea):
     # -- input -----------------------------------------------------------------
     def _pressure(self, gesture):
         ok, value = gesture.get_axis(Gdk.AxisUse.PRESSURE)
-        return value if ok and value > 0 else 0.5
+        return value if ok and value > 0 else NO_PRESSURE
 
     def _begin(self, x, y, pressure):
         px, py = self.view.to_page(x, y)
@@ -149,7 +157,7 @@ class PageArea(Gtk.DrawingArea):
         for coord in coords if ok else []:
             axes = coord.axes
             pressure = axes[Gdk.AxisUse.PRESSURE]
-            samples.append((axes[Gdk.AxisUse.X], axes[Gdk.AxisUse.Y], pressure if pressure > 0 else 0.5))
+            samples.append((axes[Gdk.AxisUse.X], axes[Gdk.AxisUse.Y], pressure if pressure > 0 else NO_PRESSURE))
         return samples
 
     def _finish(self):
@@ -157,15 +165,49 @@ class PageArea(Gtk.DrawingArea):
             self.window.add_mark(self._stroke)
             self._stroke = None
 
+    def _is_eraser(self, gesture):
+        """Side button held, or the eraser end of a pen that has one."""
+        tool = gesture.get_device_tool()
+        state = gesture.get_current_event_state()
+        if not self._logged_tool:
+            self._logged_tool = True
+            log(f"pen: tool {tool.get_tool_type().value_nick if tool else None}, buttons {int(state):#x}")
+        if tool is not None and tool.get_tool_type() == Gdk.DeviceToolType.ERASER:
+            return True
+        return bool(state & ERASE_BUTTONS)
+
+    def _erase_to(self, x, y):
+        point = self.view.to_page(x, y)
+        start = self._eraser or point
+        # The first removal opens an undo step; the rest of the stroke joins it.
+        if self.window.erase(start, point, ERASER_RADIUS / self.view.zoom, new_step=not self._erased):
+            self._erased = True
+        self._eraser = point
+        self.queue_draw()
+
     def _pen_down(self, gesture, x, y):
+        if self._is_eraser(gesture):
+            self._erased = False
+            self._erase_to(x, y)
+            return
         self._begin(x, y, self._pressure(gesture))
 
     def _pen_motion(self, gesture, x, y):
+        if self._eraser is not None:
+            for sx, sy, _pressure in self._backlog(gesture):
+                self._erase_to(sx, sy)
+            self._erase_to(x, y)
+            return
         for sample in self._backlog(gesture):
             self._extend(*sample)
         self._extend(x, y, self._pressure(gesture))
 
     def _pen_up(self, gesture, x, y):
+        if self._eraser is not None:
+            self._erase_to(x, y)
+            self._eraser = None
+            self.queue_draw()
+            return
         self._extend(x, y, self._pressure(gesture))
         self._finish()
 
@@ -176,11 +218,11 @@ class PageArea(Gtk.DrawingArea):
             gesture.set_state(Gtk.EventSequenceState.DENIED)
             return
         self._mouse_origin = (x, y)
-        self._begin(x, y, 0.6)
+        self._begin(x, y, NO_PRESSURE)
 
     def _mouse_update(self, gesture, dx, dy):
         x, y = self._mouse_origin
-        self._extend(x + dx, y + dy, 0.6)
+        self._extend(x + dx, y + dy, NO_PRESSURE)
 
     def _mouse_end(self, gesture, dx, dy):
         self._finish()
@@ -223,6 +265,11 @@ class PageArea(Gtk.DrawingArea):
         if self._stroke is not None:
             marks.append(self._stroke)
         draw_marks(cr, marks)
+        if self._eraser is not None:
+            cr.set_source_rgba(0.3, 0.3, 0.3, 0.8)
+            cr.set_line_width(1.5 / v.zoom)
+            cr.arc(*self._eraser, ERASER_RADIUS / v.zoom, 0, 2 * math.pi)
+            cr.stroke()
         cr.restore()
 
 
@@ -236,7 +283,7 @@ class SignWindow(Adw.ApplicationWindow):
         self.doc = open_document(path)
         self.index = 0
         self.marks = {}       # page index -> [Stroke | Text]
-        self.history = []     # (page index, mark), for undo
+        self.history = []     # (page index, its marks before a change), for undo
         self.pending = None   # marks waiting for a tap to be placed
         self.result = None
         self.signature = load_signature(SIGNATURE)
@@ -313,22 +360,38 @@ class SignWindow(Adw.ApplicationWindow):
         self.area.fitted = False
         self._update()
 
-    def add_mark(self, mark):
-        self.marks.setdefault(self.index, []).append(mark)
-        self.history.append((self.index, mark))
+    def add_mark(self, *marks):
+        """Add marks to this page, undone in one step."""
+        current = self.marks.setdefault(self.index, [])
+        self.history.append((self.index, list(current)))
+        current.extend(marks)
         self._update()
+
+    def erase(self, a, b, radius, new_step):
+        """Remove the marks an eraser going from a to b touches; True if
+        any. new_step: undo restores them separately from earlier erasing."""
+        current = self.marks.get(self.index, [])
+        keep = [m for m in current if not touches(m, a, b, radius)]
+        if len(keep) == len(current):
+            return False
+        if new_step:
+            self.history.append((self.index, current))
+        self.marks[self.index] = keep
+        self._update()
+        return True
 
     def _undo(self):
         if self.history:
-            index, mark = self.history.pop()
-            self.marks[index].remove(mark)
+            index, marks = self.history.pop()
+            self.marks[index] = marks
             if index != self.index:
                 self.show_page(index)
         self._update()
 
     def _clear_page(self):
-        for mark in self.marks.pop(self.index, []):
-            self.history = [(i, m) for i, m in self.history if m is not mark]
+        marks = self.marks.pop(self.index, [])
+        if marks:
+            self.history.append((self.index, marks))
         self._update()
 
     def _update(self):
@@ -350,8 +413,7 @@ class SignWindow(Adw.ApplicationWindow):
         """Called by the page on a tap; True if it placed something."""
         if self.pending is None:
             return False
-        for mark in self.pending(x, y):
-            self.add_mark(mark)
+        self.add_mark(*self.pending(x, y))
         self.pending = None
         self.banner.set_revealed(False)
         return True

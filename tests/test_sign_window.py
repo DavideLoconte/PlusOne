@@ -75,6 +75,26 @@ def test_draw_undo_and_pages(window):
     assert not win.done.get_sensitive()
 
 
+def test_eraser_and_undo(window):
+    win, _results, _src = window
+    keep, gone = Stroke([(100, 100, 0.5), (150, 100, 0.5)]), Stroke([(100, 200, 0.5), (150, 200, 0.5)])
+    other = Stroke([(100, 300, 0.5), (150, 300, 0.5)])
+    win.add_mark(keep, gone, other)
+    assert win.erase((120, 190), (120, 210), 3, new_step=True)     # crosses `gone`
+    assert win.marks[0] == [keep, other]
+    assert not win.erase((300, 0), (300, 50), 3, new_step=False)  # touches nothing
+    assert win.erase((120, 290), (120, 310), 3, new_step=False)    # same eraser stroke
+    assert win.marks[0] == [keep]
+    win._undo()                                                   # one step brings both back
+    assert win.marks[0] == [keep, gone, other]
+    win._clear_page()
+    assert not win.marks.get(0)
+    win._undo()                                                   # clearing can be undone too
+    assert win.marks[0] == [keep, gone, other]
+    win._undo()                                                   # the three strokes were one step
+    assert win.marks[0] == []
+
+
 def test_keep_and_place_signature(window):
     win, _results, _src = window
     win.add_mark(Stroke([(100, 100, 0.5), (160, 140, 0.7)]))

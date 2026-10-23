@@ -97,3 +97,26 @@ def test_two_samples_make_a_straight_segment():
     from plusone.pdf import curve
     (start, c1, c2, end, _p0, _p1), = curve([(0, 0, 0.5), (9, 3, 0.5)])
     assert c1 == pytest.approx([3, 1]) and c2 == pytest.approx([6, 2])
+
+
+def test_pressure_shows_in_the_width():
+    from plusone.pdf import PEN_WIDTH, ink_width
+    light, firm = ink_width(PEN_WIDTH, 0.15), ink_width(PEN_WIDTH, 0.45)
+    assert firm > 2 * light                         # the usual writing range differs visibly
+    assert ink_width(PEN_WIDTH, 0.9) == ink_width(PEN_WIDTH, 2) == PEN_WIDTH
+    assert ink_width(PEN_WIDTH, -1) == ink_width(PEN_WIDTH, 0) > 0
+
+
+def test_eraser_touches_strokes_it_passes_over():
+    from plusone.ink import touches
+    from plusone.pdf import Text
+    stroke = Stroke([(0, 0, 0.5), (100, 0, 0.5)], width=2)
+    assert touches(stroke, (50, 5), (50, 5), radius=4.5)       # within radius + half the line
+    assert not touches(stroke, (50, 8), (50, 8), radius=4.5)
+    # A fast eraser jumps over the line between two samples: still erased.
+    assert touches(stroke, (50, -30), (50, 30), radius=1)
+    assert not touches(stroke, (120, -30), (120, 30), radius=1)
+    assert touches(Stroke([(10, 10, 0.5)]), (12, 12), (12, 12), radius=3)
+    date = Text(100, 200, "24/10/2026", size=11)
+    assert touches(date, (130, 196), (130, 196), radius=1)
+    assert not touches(date, (130, 230), (130, 230), radius=1)
