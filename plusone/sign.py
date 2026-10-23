@@ -127,9 +127,30 @@ class PageArea(Gtk.DrawingArea):
         self.queue_draw()
 
     def _extend(self, x, y, pressure):
-        if self._stroke is not None:
-            self._stroke.points.append((*self.view.to_page(x, y), pressure))
-            self.queue_draw()
+        if self._stroke is None:
+            return
+        px, py = self.view.to_page(x, y)
+        last = self._stroke.points[-1]
+        if (px, py) == last[:2]:
+            # Same position, new pressure: about half the pen's reports.
+            self._stroke.points[-1] = (px, py, max(pressure, last[2]))
+        else:
+            self._stroke.points.append((px, py, pressure))
+        self.queue_draw()
+
+    def _backlog(self, gesture):
+        """Samples GTK merged into this motion event (it delivers one per
+        frame); without them fast curves turn into polygons."""
+        try:
+            ok, coords = gesture.get_backlog()
+        except (TypeError, ValueError):
+            return []
+        samples = []
+        for coord in coords if ok else []:
+            axes = coord.axes
+            pressure = axes[Gdk.AxisUse.PRESSURE]
+            samples.append((axes[Gdk.AxisUse.X], axes[Gdk.AxisUse.Y], pressure if pressure > 0 else 0.5))
+        return samples
 
     def _finish(self):
         if self._stroke is not None:
@@ -140,6 +161,8 @@ class PageArea(Gtk.DrawingArea):
         self._begin(x, y, self._pressure(gesture))
 
     def _pen_motion(self, gesture, x, y):
+        for sample in self._backlog(gesture):
+            self._extend(*sample)
         self._extend(x, y, self._pressure(gesture))
 
     def _pen_up(self, gesture, x, y):

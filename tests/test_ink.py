@@ -72,3 +72,28 @@ def test_missing_or_broken_signature(tmp_path):
 def test_normalize_single_dot():
     signature = normalize([Stroke([(10, 10, 1.0)])])
     assert signature["strokes"] == [[[0.0, 0.0, 1.0]]]
+
+
+def test_curve_passes_through_samples_without_repeats():
+    from plusone.pdf import curve
+    pts = [(0, 0, 0.5), (0, 0, 0.9), (10, 5, 0.5), (20, 0, 0.5), (20, 0, 0.5)]
+    segments = list(curve(pts))
+    assert [s[0] for s in segments] == [(0, 0), (10, 5)]
+    assert [s[3] for s in segments] == [(10, 5), (20, 0)]
+
+
+def test_curve_does_not_overshoot_uneven_samples():
+    # Collinear samples spaced 1, 1, 20 apart (fast pen): a uniform
+    # Catmull-Rom would bulge backwards; chord-length tangents stay on the line.
+    from plusone.pdf import curve
+    pts = [(0, 0, 0.5), (1, 0, 0.5), (2, 0, 0.5), (22, 0, 0.5)]
+    for start, c1, c2, end, _p0, _p1 in curve(pts):
+        for c in (c1, c2):
+            assert c[1] == pytest.approx(0)
+            assert min(start[0], end[0]) - 1e-9 <= c[0] <= max(start[0], end[0]) + 1e-9
+
+
+def test_two_samples_make_a_straight_segment():
+    from plusone.pdf import curve
+    (start, c1, c2, end, _p0, _p1), = curve([(0, 0, 0.5), (9, 3, 0.5)])
+    assert c1 == pytest.approx([3, 1]) and c2 == pytest.approx([6, 2])

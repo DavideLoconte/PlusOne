@@ -37,6 +37,26 @@ class Text:
     size: float = 11.0
 
 
+def curve(points):
+    """Smooth path through the pen samples: for each pair of samples, the
+    Bézier control points of a Catmull-Rom spline with chord-length
+    tangents (no overshoot where samples are unevenly spaced, which they are:
+    the pen reports at a fixed rate whatever its speed).
+
+    Yields (start, control 1, control 2, end, pressure at start, at end)."""
+    pts = [points[0]]
+    for pt in points[1:]:
+        if pt[:2] != pts[-1][:2]:
+            pts.append(pt)
+    for i in range(len(pts) - 1):
+        p0, p1, p2 = pts[max(i - 1, 0)], pts[i], pts[i + 1]
+        p3 = pts[min(i + 2, len(pts) - 1)]
+        d01, d12, d23 = math.dist(p0[:2], p1[:2]), math.dist(p1[:2], p2[:2]), math.dist(p2[:2], p3[:2])
+        c1 = [p1[k] + (p2[k] - p0[k]) * d12 / (3 * (d01 + d12)) for k in (0, 1)]
+        c2 = [p2[k] - (p3[k] - p1[k]) * d12 / (3 * (d12 + d23)) for k in (0, 1)]
+        yield p1[:2], c1, c2, p2[:2], p1[2], p2[2]
+
+
 def draw_marks(cr, marks):
     """Draw marks on a cairo context set up in display space (points)."""
     cr.set_source_rgb(*INK)
@@ -44,17 +64,19 @@ def draw_marks(cr, marks):
     cr.set_line_join(cairo.LINE_JOIN_ROUND)
     for mark in marks:
         if isinstance(mark, Stroke):
-            pts = mark.points
-            if len(pts) == 1:
-                x, y, p = pts[0]
+            if not mark.points:
+                continue
+            segments = list(curve(mark.points))
+            if not segments:
+                x, y, p = mark.points[0]
                 cr.arc(x, y, mark.width * (0.3 + 0.7 * p) / 2, 0, 2 * math.pi)
                 cr.fill()
                 continue
             # Segment by segment: the width follows the pen pressure.
-            for (x0, y0, p0), (x1, y1, p1) in zip(pts, pts[1:]):
+            for start, c1, c2, end, p0, p1 in segments:
                 cr.set_line_width(mark.width * (0.3 + 0.7 * (p0 + p1) / 2))
-                cr.move_to(x0, y0)
-                cr.line_to(x1, y1)
+                cr.move_to(*start)
+                cr.curve_to(*c1, *c2, *end)
                 cr.stroke()
         elif isinstance(mark, Text):
             cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
