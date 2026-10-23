@@ -22,11 +22,23 @@ Tablet-side tweaks found by reverse engineering Second Screen (see
 sink gets `sink_latency_mode low` in `/sdcard/Documents/wfd/wfdconfig.txt`,
 and the stream carries no audio so frames are shown without A/V sync.
 
-## Usage
+## Install
+
+Debian/Ubuntu package (recommended):
 
 ```bash
-./install.sh          # once: adds "Schermo Tablet" to the app grid
+packaging/build-deb.sh                                # -> dist/schermo-tablet_<version>_all.deb
+sudo apt install ./dist/schermo-tablet_0.1.0_all.deb
 ```
+
+The package also installs a udev rule giving the logged-in user access to
+`/dev/uhid`, so the S Pen becomes a real tablet (pressure, tilt). Any program
+the user runs can then create virtual input devices.
+
+From the checkout, without root: `./install.sh` (menu entry pointing here;
+run `sudo ./enable-pen.sh` once for pen pressure).
+
+## Usage
 
 Open **Schermo Tablet**, press **Avvia**, then tap **Second screen** in the
 tablet's quick settings. The tablet becomes a third monitor within a few

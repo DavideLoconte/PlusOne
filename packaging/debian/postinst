@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+if [ "$1" = "configure" ]; then
+    # Apply the S Pen rule now: /dev/uhid only exists once the module is loaded.
+    udevadm control --reload 2>/dev/null || true
+    modprobe uhid 2>/dev/null || true
+    udevadm trigger --action=change --subsystem-match=misc --sysname-match=uhid 2>/dev/null || true
+fi
+exit 0
