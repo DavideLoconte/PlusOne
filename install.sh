@@ -20,5 +20,6 @@ Keywords=tablet;monitor;second screen;miracast;display;
 StartupNotify=true
 DESKTOP
 update-desktop-database "$apps" 2>/dev/null || true
-gtk-update-icon-cache -q "${icons%/scalable/apps}" 2>/dev/null || true
+# -f -t: the per-user hicolor dir has no index.theme, and a stale cache hides new icons.
+gtk-update-icon-cache -q -f -t "${icons%/scalable/apps}" 2>/dev/null || true
 echo "Installato: cerca «Schermo Tablet» tra le applicazioni (o lancia schermo-tablet)."
