@@ -4,6 +4,12 @@
 
 <h1 align="center">Plus One</h1>
 
+<p align="center">
+  <a href="https://github.com/GabrieleSantangelo/PlusOne/actions/workflows/ci.yml"><img src="https://github.com/GabrieleSantangelo/PlusOne/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/GabrieleSantangelo/PlusOne/releases/latest"><img src="https://img.shields.io/github/v/release/GabrieleSantangelo/PlusOne" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT"></a>
+</p>
+
 <p align="center">Your Samsung Galaxy Tab as a wireless second monitor for GNOME on Linux.<br>
 No app to install on the tablet: it talks to the <b>Second Screen</b> feature Samsung ships for Windows PCs.</p>
 
@@ -55,7 +61,7 @@ Uninstall with `sudo apt remove plus-one`.
 ### From source
 
 ```bash
-git clone <this repository> plus-one && cd plus-one
+git clone https://github.com/GabrieleSantangelo/PlusOne.git plus-one && cd plus-one
 ./install.sh               # menu entry + icon for your user, no root
 sudo ./enable-pen.sh       # optional: S Pen pressure and tilt (uhid access)
 ```

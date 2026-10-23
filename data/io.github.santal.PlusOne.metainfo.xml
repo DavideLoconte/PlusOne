@@ -8,6 +8,8 @@
     <name>santal1210</name>
   </developer>
   <content_rating type="oars-1.1"/>
+  <url type="homepage">https://github.com/GabrieleSantangelo/PlusOne</url>
+  <url type="bugtracker">https://github.com/GabrieleSantangelo/PlusOne/issues</url>
   <summary>Your Galaxy Tab as a second monitor</summary>
   <description>
     <p>Extends the GNOME desktop onto a Samsung Galaxy Tab through the

@@ -64,6 +64,7 @@ Installed-Size: $size
 Depends: python3 (>= 3.10), python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1 (>= 1.4), gir1.2-gstreamer-1.0, gir1.2-nm-1.0, gstreamer1.0-pipewire, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, network-manager, kmod, udev
 Recommends: gstreamer1.0-vaapi, gstreamer1.0-plugins-ugly, gstreamer1.0-x
 Suggests: adb
+Homepage: https://github.com/GabrieleSantangelo/PlusOne
 Description: use a Samsung Galaxy Tab as a second monitor via Second Screen
  Extends the GNOME desktop onto a Galaxy Tab through the tablet's built-in
  Second Screen app: Mutter virtual monitor, Wi-Fi Direct, low-latency H.264
