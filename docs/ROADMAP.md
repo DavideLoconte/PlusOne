@@ -1,5 +1,10 @@
 # Plus One roadmap
 
+The goal: the tablet becomes part of the Linux desktop like any other
+peripheral. Its screen, touch and pen, but also its camera, microphone and
+speakers (usually better than a laptop's) show up where GNOME already lists
+such devices, and are used only when you pick them.
+
 ## The rule: convenience first
 
 Being able to use the tablet is not enough; every task has to be quick to
@@ -94,7 +99,11 @@ step, less than 10 s of overhead.
 - **Portrait**, if the sink accepts it (research `wfd_sec_portrait_display` and
   the 7260 side channel).
 - **Adaptive bitrate** from the RTCP loss reports the tablet already sends.
-- Optional **audio on the tablet** for videos (costs ~40 ms of latency).
+- Optional **audio on the tablet through Second Screen**, no app needed: the
+  tablet appears as a speaker in GNOME Sound; picking it reconnects with an
+  audio track. Video latency goes from ~50 to ~90 ms (the sink syncs video to
+  audio), so this suits films more than desktop work. The companion app (0.7)
+  removes that cost.
 
 ### 0.6 — Quick Share
 
@@ -114,7 +123,35 @@ step, less than 10 s of overhead.
 Acceptance: send = right-click → *Send to tablet*; receive = share on the
 tablet → notification on the PC.
 
-### 0.7 — Polish
+### 0.7 — Companion app: camera, microphone, speakers
+
+Second Screen only carries the picture, touch, pen and (at a latency cost)
+audio. The rest of the tablet's hardware needs a small Plus One app on the
+tablet: optional, installed once, and it stays out of the way.
+
+- **Camera as a webcam**: front or rear camera, encoded on the tablet
+  (MediaCodec H.264), decoded on the PC and published as a PipeWire camera,
+  so it appears in GNOME Snapshot, Firefox, OBS, browser meetings. For apps
+  that only know V4L2 (some Chrome/Zoom builds) an optional v4l2loopback
+  device, set up once like the pen permission.
+- **Microphone**: a PipeWire input "Tablet microphone".
+- **Speakers**: a PipeWire output "Tablet speakers" with its own low-latency
+  audio stream (Opus/PCM), independent of the video, so it does not slow the
+  display down.
+- **On demand, one tap at most**: the devices are always listed on the PC;
+  when an app starts using one, Plus One wakes the companion, which shows one
+  notification on the tablet (Android needs a visible start for camera and
+  microphone). Nothing runs while unused.
+- **Transport**: the Wi-Fi Direct link when the display is connected, else the
+  home Wi-Fi (mDNS); encrypted and paired once with a code.
+- **Install**: the APK is in the GitHub release, sent to the tablet with
+  Plus One's own *Send to tablet* (0.6); no developer options.
+- Kotlin, no Google services; built and attached to releases by CI.
+
+Acceptance: in a meeting app pick "Tablet camera" → 1 tap on the tablet →
+video, nothing else to start.
+
+### 0.8 — Polish
 
 - Optional USB mode through adb and the MS-MICE path (steadier link for
   people with a free port).
@@ -129,6 +166,10 @@ tablet → notification on the PC.
   the last tap.
 - Persistent Wi-Fi Direct groups for faster reconnects.
 - Mitigations for Intel `iwlwifi` firmware crashes during group formation.
+- Android's built-in USB webcam mode (UVC, Android 14+, `ro.usb.uvc.enabled`):
+  a zero-app camera for people who can plug the tablet in.
+- Whether the companion app can start the display too (fewer apps involved
+  when it is installed).
 
 ## Not planned
 
