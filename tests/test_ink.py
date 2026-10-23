@@ -120,3 +120,65 @@ def test_eraser_touches_strokes_it_passes_over():
     date = Text(100, 200, "24/10/2026", size=11)
     assert touches(date, (130, 196), (130, 196), radius=1)
     assert not touches(date, (130, 230), (130, 230), radius=1)
+
+
+def raw_samples(*runs, t0=100.0):
+    """Feed-style samples: runs of (bits, count), moving right 0.01 a sample."""
+    out, t, x = [], t0, 0.0
+    for bits, count in runs:
+        for _ in range(count):
+            out.append((t, bits, x, 0.5, 0.3 if bits & 1 else 0.0))
+            t, x = t + 0.0035, x + 0.01
+    return out
+
+
+def test_raw_pen_finds_the_stroke_gtk_reports():
+    import collections
+    from plusone.ink import RawPen
+    reader = collections.deque(raw_samples((0x10, 5), (0x11, 3), (0x10, 4), (0x11, 6)))
+    pen = RawPen(reader)
+    begun = pen.begin()                       # the latest touch, from its start
+    assert len(begun) == 6 and begun[0] == (pytest.approx(0.12), 0.5, 0.3)
+    assert pen.drawing
+    reader.extend(raw_samples((0x11, 2), (0x10, 1), (0x11, 5), t0=100.1))
+    assert len(pen.more()) == 2               # up to the tip lifting, not the next touch
+    assert not pen.drawing and pen.more() == []
+
+
+def test_raw_pen_tip_already_up_or_no_samples():
+    import collections
+    from plusone.ink import RawPen
+    pen = RawPen(collections.deque(raw_samples((0x11, 4), (0x10, 2))))
+    assert len(pen.begin()) == 4 and not pen.drawing   # a quick dot
+    assert RawPen(collections.deque()).begin() is None
+    assert RawPen(collections.deque(raw_samples((0x10, 9)))).begin() is None
+
+
+def test_raw_pen_forgets_old_samples():
+    import collections
+    from plusone.ink import RawPen
+    reader = collections.deque(raw_samples((0x11, 3)))
+    pen = RawPen(reader)
+    reader.extend(raw_samples((0x10, 3), t0=105.0))
+    assert pen.begin() is None and len(pen.recent) == 3
+
+
+def test_pen_settings(tmp_path):
+    from plusone.ink import MAX_WIDTH, load_pen, save_pen
+    from plusone.pdf import INK, PEN_WIDTH
+    path = str(tmp_path / "plus-one" / "pen.json")
+    assert load_pen(path) == (INK, PEN_WIDTH)
+    save_pen(path, (0.8, 0.1, 0.1), 4.5)
+    assert load_pen(path) == ((0.8, 0.1, 0.1), 4.5)
+    save_pen(path, (0.8, 0.1, 0.1), 99)
+    assert load_pen(path)[1] == MAX_WIDTH
+    (tmp_path / "bad.json").write_text('{"color": [2, 0, 0], "width": 1}')
+    assert load_pen(str(tmp_path / "bad.json")) == (INK, PEN_WIDTH)
+
+
+def test_placed_signature_uses_the_pen(tmp_path):
+    path = tmp_path / "signature.json"
+    save_signature(str(path), strokes())
+    placed = place(load_signature(str(path)), 0, 0, width=60, pen=2.0, color=(1, 0, 0))
+    assert {s.color for s in placed} == {(1, 0, 0)}
+    assert all(s.width == pytest.approx(2.0) for s in placed)  # drawn 60 wide, placed 60 wide

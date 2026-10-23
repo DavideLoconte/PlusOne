@@ -7,10 +7,15 @@ in-range bits, X/Y 0..32767, pressure 0..4096, X/Y tilt -90..90), then
 and those reports into a virtual HID device, so the kernel creates a proper
 tablet (pressure and tilt reach Krita, GIMP, Xournal++...). Otherwise the pen
 drives the pointer through Mutter's remote desktop session.
+
+The reports are also published, all of them, to readers in this process
+(`feed`): the signing window draws with those.
 """
+import collections
 import os
 import struct
 import threading
+import time
 
 from gi.repository import Gio
 
@@ -25,6 +30,47 @@ TABLET_SCHEMA = "org.gnome.desktop.peripherals.tablet"
 BTN_LEFT, BTN_RIGHT = 0x110, 0x111
 TIP, BARREL, IN_RANGE = 0x01, 0x02, 0x10
 AXIS_MAX = 32767
+PRESSURE_MAX = 4096
+
+
+def parse_report(data):
+    """(bits, x, y, pressure) of a pen report, all but bits 0..1; None if
+    it is not one."""
+    if len(data) < 8 or data[0] != 0x14:
+        return None
+    bits, x, y, pressure = struct.unpack("<BHHH", data[1:8])
+    return bits, x / AXIS_MAX, y / AXIS_MAX, min(1.0, pressure / PRESSURE_MAX)
+
+
+class Feed:
+    """Every pen report from the tablet, for readers in this process.
+
+    After a Wi-Fi hiccup the tablet sends the reports it held back in one
+    burst; Mutter and GTK pass on only the last of those, so a fast stroke
+    drawn from desktop events gets straight corners. A reader here gets all
+    of them (about 285 a second) as (time, bits, x, y, pressure)."""
+
+    def __init__(self):
+        self.readers = []
+
+    def listen(self):
+        reader = collections.deque(maxlen=4096)
+        self.readers = self.readers + [reader]
+        return reader
+
+    def unlisten(self, reader):
+        self.readers = [r for r in self.readers if r is not reader]
+
+    def publish(self, data):
+        readers = self.readers  # called from the UIBC thread
+        if readers:
+            sample = parse_report(data)
+            if sample:
+                for reader in readers:
+                    reader.append((time.monotonic(),) + sample)
+
+
+feed = Feed()
 
 
 def uhid_available():

@@ -1,11 +1,15 @@
-"""Toolkit-free helpers for the signing window: page view and saved signature."""
+"""Toolkit-free helpers for the signing window: page view, pen samples,
+pen settings and saved signature."""
+import collections
 import json
 import math
 import os
 
-from .pdf import Stroke, Text
+from .pdf import INK, PEN_WIDTH, Stroke, Text
 
 SIGNATURE_WIDTH = 140.0  # points (about 5 cm) when a saved signature is placed
+MIN_WIDTH, MAX_WIDTH = 0.8, 6.0  # pen widths offered, points
+TIP = 0x01  # tip switch bit of a pen report
 
 
 class View:
@@ -41,6 +45,78 @@ class View:
         self.oy += dy
 
 
+class RawPen:
+    """Pen samples straight from the tablet (a pen.Feed reader), so a stroke
+    is drawn from all of them rather than from what the desktop passes on.
+    Samples are (time, bits, x, y, pressure)."""
+
+    HISTORY = 1.0  # seconds kept: the desktop reports a touch after the tablet
+
+    def __init__(self, reader):
+        self.reader = reader
+        self.recent = collections.deque()
+        self.drawing = False
+
+    def _pull(self):
+        new = []
+        while self.reader:
+            new.append(self.reader.popleft())
+        self.recent.extend(new)
+        while self.recent and self.recent[0][0] < self.recent[-1][0] - self.HISTORY:
+            self.recent.popleft()
+        return new
+
+    def begin(self):
+        """(x, y, pressure) of the stroke the tip is drawing, from where it
+        touched down, or None if the tablet sent none."""
+        self._pull()
+        samples = list(self.recent)
+        end = len(samples)
+        while end and not samples[end - 1][1] & TIP:
+            end -= 1
+        start = end
+        while start and samples[start - 1][1] & TIP:
+            start -= 1
+        if start == end:
+            return None
+        self.drawing = end == len(samples)  # tip still down: more to come
+        return [s[2:5] for s in samples[start:end]]
+
+    def more(self):
+        """Samples that arrived since, up to the tip lifting."""
+        out = []
+        for sample in self._pull():
+            if not self.drawing:
+                break
+            if sample[1] & TIP:
+                out.append(sample[2:5])
+            else:
+                self.drawing = False
+        return out
+
+
+def load_pen(path):
+    """(colour, width) last chosen for the pen."""
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        color = tuple(float(c) for c in data["color"])
+        width = float(data["width"])
+        if len(color) == 3 and all(0 <= c <= 1 for c in color):
+            return color, max(MIN_WIDTH, min(MAX_WIDTH, width))
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    return INK, PEN_WIDTH
+
+
+def save_pen(path, color, width):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".part"
+    with open(tmp, "w") as f:
+        json.dump({"color": list(color), "width": width}, f)
+    os.replace(tmp, path)
+
+
 def normalize(strokes):
     """Strokes as a size-free signature: top-left at 0,0, width 1."""
     x0 = min(s.bounds()[0] for s in strokes)
@@ -51,13 +127,14 @@ def normalize(strokes):
                         for s in strokes]}
 
 
-def place(signature, x, y, width=SIGNATURE_WIDTH):
-    """Strokes of a normalized signature with its left/vertical centre at x, y."""
+def place(signature, x, y, width=SIGNATURE_WIDTH, pen=PEN_WIDTH, color=INK):
+    """Strokes of a normalized signature with its left/vertical centre at x,
+    y, drawn with the pen's current width and colour."""
     height = max((pt[1] for s in signature["strokes"] for pt in s), default=0) * width
     # Pen width scales with the signature so a small one does not look bold.
-    pen = Stroke().width * width / signature.get("width", width)
+    scaled = pen * width / signature.get("width", width)
     return [Stroke([(x + sx * width, y - height / 2 + sy * width, p) for sx, sy, p in s],
-                   width=max(0.6, min(pen, 3.0)))
+                   width=max(0.6, min(scaled, pen * 1.5)), color=color)
             for s in signature["strokes"]]
 
 

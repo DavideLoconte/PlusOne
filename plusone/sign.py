@@ -14,20 +14,25 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
+gi.require_version("Graphene", "1.0")
 gi.require_version("Poppler", "0.18")
-from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Poppler  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gtk, Poppler  # noqa: E402
 
 from . import log, once  # noqa: E402
 from .i18n import _  # noqa: E402
-from .ink import View, load_signature, place, save_signature, touches  # noqa: E402
-from .pdf import Stroke, Text, draw_marks, output_path, save_signed  # noqa: E402
+from .ink import (MAX_WIDTH, MIN_WIDTH, RawPen, View, load_pen, load_signature,  # noqa: E402
+                  place, save_pen, save_signature, touches)
+from .pdf import INK, Stroke, Text, draw_marks, output_path, save_signed  # noqa: E402
+from .pen import feed as pen_feed  # noqa: E402
 
 SIGNATURE = os.path.join(GLib.get_user_data_dir(), "plus-one", "signature.json")
+PEN = os.path.join(GLib.get_user_config_dir(), "plus-one", "pen.json")
 PEN_SOURCES = (Gdk.InputSource.PEN, Gdk.InputSource.TOUCHSCREEN)
 NO_PRESSURE = 0.35  # mouse, or a pen that reports none: a medium line
 ERASER_RADIUS = 12  # widget pixels around the pen tip
 # The S Pen's side button arrives as the stylus' second or third button.
 ERASE_BUTTONS = Gdk.ModifierType.BUTTON2_MASK | Gdk.ModifierType.BUTTON3_MASK
+RAW_TOLERANCE = 24  # widget pixels between where the tablet and GTK put the tip
 
 
 def tablet_monitor():
@@ -61,6 +66,11 @@ class PageArea(Gtk.DrawingArea):
         self._eraser = None   # page point under the eraser, while erasing
         self._erased = False  # this eraser stroke removed something already
         self._logged_tool = False
+        self._logged_mismatch = False
+        self.raw = RawPen(pen_feed.listen())
+        self._raw_map = None    # tablet (0..1) to widget pixels, while drawing from it
+        self._raw_tick = None
+        self.raw_counts = [0, 0]  # samples drawn from the tablet, desktop events meanwhile
         self.set_draw_func(self._draw)
         self.connect("resize", lambda *a: self.fit())
 
@@ -68,6 +78,7 @@ class PageArea(Gtk.DrawingArea):
         stylus.connect("down", self._pen_down)
         stylus.connect("motion", self._pen_motion)
         stylus.connect("up", self._pen_up)
+        stylus.connect("cancel", lambda g, seq: self._pen_cancel())
         self.add_controller(stylus)
 
         mouse = Gtk.GestureDrag(button=Gdk.BUTTON_PRIMARY)
@@ -131,7 +142,7 @@ class PageArea(Gtk.DrawingArea):
         px, py = self.view.to_page(x, y)
         if self.window.place_at(px, py):
             return
-        self._stroke = Stroke([(px, py, pressure)])
+        self._stroke = Stroke([(px, py, pressure)], width=self.window.pen_width, color=self.window.pen_color)
         self.queue_draw()
 
     def _extend(self, x, y, pressure):
@@ -185,18 +196,84 @@ class PageArea(Gtk.DrawingArea):
         self._eraser = point
         self.queue_draw()
 
+    # GTK says when and where the pen touches the page; while the window
+    # fills the tablet, the points come from the tablet's own reports (all of
+    # them, see pen.Feed), otherwise from GTK's events.
+    def _tablet_mapping(self):
+        """(x scale, y scale, x offset, y offset) from tablet samples to
+        widget pixels, or None unless this window fills the tablet."""
+        native = self.get_native()
+        surface = native.get_surface() if native else None
+        if surface is None or not self.window.is_fullscreen():
+            return None
+        monitor = self.get_display().get_monitor_at_surface(surface)
+        if monitor is None or not (monitor.get_connector() or "").startswith("Meta-"):
+            return None
+        geometry = monitor.get_geometry()
+        tx, ty = native.get_surface_transform()
+        ok, origin = native.compute_point(self, Graphene.Point().init(0, 0))
+        return (geometry.width, geometry.height, origin.x - tx, origin.y - ty) if ok else None
+
+    def _from_tablet(self, sample):
+        sx, sy, ox, oy = self._raw_map
+        x, y, pressure = sample
+        return x * sx + ox, y * sy + oy, pressure
+
+    def _raw_begin(self, x, y):
+        """Widget samples of the stroke GTK reports starting at x, y, or None."""
+        self._raw_map = self._tablet_mapping()
+        samples = self.raw.begin() if self._raw_map else None
+        if not samples:
+            return None
+        samples = [self._from_tablet(s) for s in samples]
+        if math.dist(samples[0][:2], (x, y)) > RAW_TOLERANCE:
+            self.raw.drawing = False
+            if not self._logged_mismatch:
+                self._logged_mismatch = True
+                log(f"pen: tablet samples land at {samples[0][:2]}, GTK at {(x, y)}: using GTK's")
+            return None
+        return samples
+
+    def _raw_more(self, *_args):
+        for sample in self.raw.more():
+            self._extend(*self._from_tablet(sample))
+            self.raw_counts[0] += 1
+        return GLib.SOURCE_CONTINUE
+
+    def _raw_stop(self):
+        if self._raw_tick is not None:
+            self._raw_more()
+            self.remove_tick_callback(self._raw_tick)
+            self._raw_tick = None
+            self.raw.drawing = False
+
     def _pen_down(self, gesture, x, y):
         if self._is_eraser(gesture):
             self._erased = False
             self._erase_to(x, y)
             return
-        self._begin(x, y, self._pressure(gesture))
+        samples = self._raw_begin(x, y)
+        if samples is None:
+            self._begin(x, y, self._pressure(gesture))
+            return
+        self._begin(*samples[0])
+        if self._stroke is None:  # the tap placed a signature, date or text
+            self.raw.drawing = False
+            return
+        for sample in samples[1:]:
+            self._extend(*sample)
+        self.raw_counts[0] += len(samples)
+        self._raw_tick = self.add_tick_callback(self._raw_more)
 
     def _pen_motion(self, gesture, x, y):
         if self._eraser is not None:
             for sx, sy, _pressure in self._backlog(gesture):
                 self._erase_to(sx, sy)
             self._erase_to(x, y)
+            return
+        if self._raw_tick is not None:
+            self.raw_counts[1] += 1 + len(self._backlog(gesture))
+            self._raw_more()
             return
         for sample in self._backlog(gesture):
             self._extend(*sample)
@@ -208,7 +285,15 @@ class PageArea(Gtk.DrawingArea):
             self._eraser = None
             self.queue_draw()
             return
-        self._extend(x, y, self._pressure(gesture))
+        if self._raw_tick is not None:
+            self._raw_stop()
+        else:
+            self._extend(x, y, self._pressure(gesture))
+        self._finish()
+
+    def _pen_cancel(self):
+        self._raw_stop()
+        self._eraser = None
         self._finish()
 
     def _mouse_begin(self, gesture, x, y):
@@ -287,6 +372,7 @@ class SignWindow(Adw.ApplicationWindow):
         self.pending = None   # marks waiting for a tap to be placed
         self.result = None
         self.signature = load_signature(SIGNATURE)
+        self.pen_color, self.pen_width = load_pen(PEN)
 
         toolbar = Adw.ToolbarView()
         header = Adw.HeaderBar(show_end_title_buttons=False)
@@ -314,6 +400,7 @@ class SignWindow(Adw.ApplicationWindow):
         bar.append(self.page_label)
         self.next = self._tool(bar, "go-next-symbolic", None, lambda: self.show_page(self.index + 1))
         bar.append(Gtk.Separator())
+        bar.append(self._pen_button())
         self.undo = self._tool(bar, "edit-undo-symbolic", _("Undo"), self._undo)
         self._tool(bar, "edit-clear-all-symbolic", _("Clear page"), self._clear_page)
         bar.append(Gtk.Separator())
@@ -335,6 +422,59 @@ class SignWindow(Adw.ApplicationWindow):
         self.add_controller(keys)
         self.connect("close-request", self._on_close)
         self.show_page(0)
+
+    def _pen_button(self):
+        """Shows the pen's colour and width; its popover changes them."""
+        self.pen_swatch = Gtk.DrawingArea(content_width=24, content_height=24)
+        self.pen_swatch.set_draw_func(lambda a, cr, w, h: self._dot(
+            cr, w, h, self.pen_color, 6 + 14 * (self.pen_width - MIN_WIDTH) / (MAX_WIDTH - MIN_WIDTH)))
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8,
+                      margin_top=6, margin_bottom=6, margin_start=6, margin_end=6)
+        colors = Gtk.Box(spacing=6, halign=Gtk.Align.CENTER)
+        first = None
+        for name, color in ((_("Blue ink"), INK), (_("Black"), (0.08, 0.08, 0.1)),
+                            (_("Blue"), (0.1, 0.3, 0.85)), (_("Red"), (0.8, 0.1, 0.1)),
+                            (_("Green"), (0.1, 0.5, 0.2))):
+            dot = Gtk.DrawingArea(content_width=28, content_height=28)
+            dot.set_draw_func(lambda a, cr, w, h, c=color: self._dot(cr, w, h, c, 22))
+            button = Gtk.ToggleButton(child=dot, tooltip_text=name, css_classes=["circular", "flat"],
+                                      active=color == self.pen_color)
+            if first:
+                button.set_group(first)
+            first = first or button
+            button.connect("toggled", lambda b, c=color: b.get_active() and self._set_pen(color=c))
+            colors.append(button)
+        box.append(colors)
+        box.append(Gtk.Label(label=_("Thickness"), xalign=0, css_classes=["dim-label"]))
+        scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, MIN_WIDTH, MAX_WIDTH, 0.1)
+        scale.set_value(self.pen_width)
+        scale.connect("value-changed", lambda s: self._set_pen(width=s.get_value()))
+        box.append(scale)
+        self.pen_preview = Gtk.DrawingArea(content_width=240, content_height=48)
+        self.pen_preview.set_draw_func(self._draw_preview)
+        box.append(self.pen_preview)
+        return Gtk.MenuButton(child=self.pen_swatch, popover=Gtk.Popover(child=box),
+                              tooltip_text=_("Pen"), css_classes=["flat"])
+
+    @staticmethod
+    def _dot(cr, width, height, color, size):
+        cr.set_source_rgb(*color)
+        cr.arc(width / 2, height / 2, size / 2, 0, 2 * math.pi)
+        cr.fill()
+
+    def _draw_preview(self, area, cr, width, height):
+        # A short wave written lightly, then firmly, then lightly again.
+        cr.scale(1.5, 1.5)
+        points = [(6 + i * 1.4, height / 3 + 7 * math.sin(i / 9), 0.05 + 0.55 * math.sin(math.pi * i / 100))
+                  for i in range(101)]
+        draw_marks(cr, [Stroke(points, width=self.pen_width, color=self.pen_color)])
+
+    def _set_pen(self, color=None, width=None):
+        self.pen_color = color or self.pen_color
+        self.pen_width = width or self.pen_width
+        save_pen(PEN, self.pen_color, self.pen_width)
+        self.pen_swatch.queue_draw()
+        self.pen_preview.queue_draw()
 
     def _tool(self, bar, icon, label, callback):
         child = Adw.ButtonContent(icon_name=icon, label=label) if label else None
@@ -420,7 +560,8 @@ class SignWindow(Adw.ApplicationWindow):
 
     def _place_signature(self):
         if self.signature:
-            self._arm(lambda x, y: place(self.signature, x, y), _("Tap where your signature goes"))
+            self._arm(lambda x, y: place(self.signature, x, y, pen=self.pen_width, color=self.pen_color),
+                      _("Tap where your signature goes"))
 
     def _keep_signature(self):
         strokes = [m for m in self.marks.get(self.index, []) if isinstance(m, Stroke)]
@@ -434,7 +575,7 @@ class SignWindow(Adw.ApplicationWindow):
 
     def _place_date(self):
         today = datetime.date.today().strftime("%d/%m/%Y")
-        self._arm(lambda x, y: [Text(x, y, today)], _("Tap where the date goes"))
+        self._arm(lambda x, y: [Text(x, y, today, color=self.pen_color)], _("Tap where the date goes"))
 
     def _ask_text(self):
         dialog = Adw.MessageDialog(transient_for=self, heading=_("Text to add"))
@@ -448,7 +589,7 @@ class SignWindow(Adw.ApplicationWindow):
         def answered(d, response):
             text = entry.get_text().strip()
             if response == "ok" and text:
-                self._arm(lambda x, y: [Text(x, y, text)], _("Tap where the text goes"))
+                self._arm(lambda x, y: [Text(x, y, text, color=self.pen_color)], _("Tap where the text goes"))
         dialog.connect("response", answered)
         dialog.present()
 
@@ -514,6 +655,10 @@ class SignWindow(Adw.ApplicationWindow):
         self.close()
 
     def _on_close(self, _window):
+        pen_feed.unlisten(self.area.raw.reader)
+        drawn, desktop = self.area.raw_counts
+        if drawn:
+            log(f"pen: drew {drawn} tablet samples; the desktop passed on {desktop} meanwhile")
         callback, self.on_done = self.on_done, None
         if callback:
             callback(self.result)

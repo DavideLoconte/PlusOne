@@ -23,6 +23,7 @@ FULL_PRESSURE = 0.6      # firm writing with the S Pen reads 0.3-0.5
 class Stroke:
     points: list = field(default_factory=list)  # (x, y, pressure 0..1)
     width: float = PEN_WIDTH
+    color: tuple = INK
 
     def bounds(self):
         xs = [p[0] for p in self.points]
@@ -36,6 +37,7 @@ class Text:
     y: float          # baseline
     text: str
     size: float = 11.0
+    color: tuple = INK
 
 
 def curve(points):
@@ -66,10 +68,10 @@ def ink_width(width, pressure):
 
 def draw_marks(cr, marks):
     """Draw marks on a cairo context set up in display space (points)."""
-    cr.set_source_rgb(*INK)
     cr.set_line_cap(cairo.LINE_CAP_ROUND)
     cr.set_line_join(cairo.LINE_JOIN_ROUND)
     for mark in marks:
+        cr.set_source_rgb(*mark.color)
         if isinstance(mark, Stroke):
             if not mark.points:
                 continue

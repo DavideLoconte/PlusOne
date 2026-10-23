@@ -12,6 +12,11 @@ Sign on the tablet.
   connected for this.
 - Hold the S Pen's side button to erase whole strokes; undo restores them,
   and also a cleared page.
+- Pen colour (five inks) and thickness, remembered; pressure shows in the
+  line.
+- Strokes are drawn from every pen report the tablet sends (about 285 a
+  second), read directly from the UIBC channel: the desktop drops the reports
+  that arrive in a burst after a Wi-Fi hiccup, which left straight corners.
 - Saved signature (draw once, place with one tap), date and text fields, undo,
   page navigation.
 - The signature is stamped onto the original pages (pypdf), so text, forms and

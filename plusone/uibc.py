@@ -10,6 +10,7 @@ import struct
 import threading
 
 from . import log
+from .pen import feed as pen_feed
 
 TOUCH_DOWN, TOUCH_UP, TOUCH_MOVE = 0, 1, 2
 
@@ -133,6 +134,7 @@ class UibcServer:
             if len(data) > 1 and data[1] not in self.pen_states:
                 self.pen_states.add(data[1])
                 log(f"UIBC: pen state {data[1]:#04x} in {data.hex()}")
+            pen_feed.publish(data)
             self.pen.report(data)
         else:
             log("UIBC: pen report before any descriptor, dropped")

@@ -43,3 +43,27 @@ def test_pointer_pen_close_releases_buttons():
     pen.report(report(0x11, 10, 10, 1))
     pen.close()
     assert injector.calls[-1] == ("pointer_button", BTN_LEFT, False)
+
+
+def pen_report(bits, x, y, pressure):
+    return struct.pack("<BBHHHbb", 0x14, bits, x, y, pressure, 0, 0)
+
+
+def test_parse_report():
+    from plusone.pen import parse_report
+    bits, x, y, pressure = parse_report(pen_report(0x11, 32767, 0, 2048))
+    assert (bits, x, y, pressure) == (0x11, 1.0, 0.0, 0.5)
+    assert parse_report(b"\x15" + bytes(9)) is None and parse_report(b"\x14\x11") is None
+
+
+def test_feed_gives_every_report_to_each_reader():
+    from plusone.pen import Feed
+    feed = Feed()
+    feed.publish(pen_report(0x11, 0, 0, 0))   # nobody listening: dropped
+    a, b = feed.listen(), feed.listen()
+    for i in range(300):
+        feed.publish(pen_report(0x11, i, i, 100))
+    assert len(a) == len(b) == 300 and a[-1][1:] == (0x11, 299 / 32767, 299 / 32767, 100 / 4096)
+    feed.unlisten(a)
+    feed.publish(pen_report(0x10, 0, 0, 0))
+    assert len(a) == 300 and len(b) == 301

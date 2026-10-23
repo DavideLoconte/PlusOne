@@ -155,9 +155,11 @@ Tablet*, or launch *Sign on Tablet* from the app grid and pick a file).
    left untouched) and a notification offers *Open* and *Show in folder*. If
    the connection was opened for signing, the tablet disconnects again.
 
-Also in the window: **Keep as my signature** (draw it once), then **My
-signature** places it with one tap; **Date** and **Text** add a date or a few
-words where you tap; **Undo**, **Clear page**, page arrows and **Fit**.
+The pen button in the toolbar sets the colour and the thickness; Plus One
+remembers them. Also in the window: **Keep as my signature** (draw it
+once), then **My signature** places it with one tap; **Date** and **Text**
+add a date or a few words where you tap; **Undo**, **Clear page**, page
+arrows and **Fit**.
 If the tablet does not connect, the notification offers *Sign on this PC*
 (mouse or a pen tablet). The signature is drawn into the page (a simple
 electronic signature), not a cryptographic digital signature.
