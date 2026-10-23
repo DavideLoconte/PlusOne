@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches the app version
+        run: |
+          version="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' plusone/__init__.py)"
+          test "v$version" = "$GITHUB_REF_NAME" || {
+            echo "tag $GITHUB_REF_NAME does not match __version__ $version"; exit 1; }
+      - name: Build test container
+        run: docker build -f Dockerfile.ci -t plus-one-ci .
+      - name: Tests and package (the release is only made if they pass)
+        run: |
+          mkdir -p dist
+          docker run --rm -v "$PWD/dist:/src/dist" plus-one-ci
+      - name: Release notes from CHANGELOG.md
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '/^## /{p = ($2 == v)} p' CHANGELOG.md | tail -n +2 > notes.md
+          test -s notes.md || echo "Plus One $GITHUB_REF_NAME" > notes.md
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.deb \
+            --title "Plus One $GITHUB_REF_NAME" --notes-file notes.md

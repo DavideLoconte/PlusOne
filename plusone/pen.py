@@ -31,12 +31,21 @@ def uhid_available():
 
 
 class UhidPen:
+    @staticmethod
+    def create_event(descriptor):
+        """struct uhid_event { u32 type; struct uhid_create2_req } (packed)."""
+        return struct.pack("<I128s64s64sHHIIII", UHID_CREATE2, DEVICE_NAME.encode(),
+                           b"plus-one", b"", len(descriptor), BUS_VIRTUAL,
+                           VENDOR, PRODUCT, 1, 0) + descriptor
+
+    @staticmethod
+    def input_event(data):
+        """struct uhid_event { u32 type; struct uhid_input2_req { u16 size; data } }."""
+        return struct.pack("<IH", UHID_INPUT2, len(data)) + data
+
     def __init__(self, descriptor):
         self.fd = os.open(UHID_PATH, os.O_RDWR | os.O_CLOEXEC)
-        req = struct.pack("<I128s64s64sHHIIII", UHID_CREATE2, DEVICE_NAME.encode(),
-                          b"plus-one", b"", len(descriptor), BUS_VIRTUAL,
-                          VENDOR, PRODUCT, 1, 0) + descriptor
-        os.write(self.fd, req)
+        os.write(self.fd, self.create_event(descriptor))
         # The kernel queues start/open notifications; drain them so the queue
         # never fills up.
         threading.Thread(target=self._drain, daemon=True).start()
@@ -50,7 +59,7 @@ class UhidPen:
             pass
 
     def report(self, data):
-        os.write(self.fd, struct.pack("<IH", UHID_INPUT2, len(data)) + data)
+        os.write(self.fd, self.input_event(data))
 
     def close(self):
         try:

@@ -42,6 +42,9 @@ _IT = {
     "The tablet is not answering: reopen Second Screen": "Il tablet non risponde: riapri Second Screen",
 }
 
+# Templates that read the same in every language.
+NEUTRAL = {"{error}", "{name} · {width}×{height} @ {fps} Hz"}
+
 _current = "en"
 
 

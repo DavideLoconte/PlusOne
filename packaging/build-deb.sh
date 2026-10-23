@@ -7,6 +7,7 @@ top="$(dirname "$here")"
 version="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$top/plusone/__init__.py")"
 app_id=io.github.santal.PlusOne
 pkg=plus-one
+maintainer="santal1210 <sant.nino02@gmail.com>"
 root="$top/build/deb/${pkg}_${version}_all"
 
 rm -rf "$root"
@@ -47,7 +48,7 @@ install -m 644 "$top/README.md" "$root/usr/share/doc/$pkg/README.md"
     echo
     echo "  * Release $version."
     echo
-    echo " -- $(git -C "$top" log -1 --format='%an <%ae>')  $(date -R)"
+    echo " -- $maintainer  $(date -R)"
 } | gzip -9n > "$root/usr/share/doc/$pkg/changelog.gz"
 chmod 644 "$root/usr/share/doc/$pkg/"*
 
@@ -59,10 +60,10 @@ Version: $version
 Section: utils
 Priority: optional
 Architecture: all
-Maintainer: $(git -C "$top" log -1 --format='%an <%ae>')
+Maintainer: $maintainer
 Installed-Size: $size
 Depends: python3 (>= 3.10), python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1 (>= 1.4), gir1.2-gstreamer-1.0, gir1.2-nm-1.0, gstreamer1.0-pipewire, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, network-manager, kmod, udev
-Recommends: gstreamer1.0-vaapi, gstreamer1.0-plugins-ugly
+Recommends: gstreamer1.0-vaapi, gstreamer1.0-plugins-ugly, gstreamer1.0-x
 Suggests: adb
 Description: use a Samsung Galaxy Tab as a second monitor via Second Screen
  Extends the GNOME desktop onto a Galaxy Tab through the tablet's built-in
