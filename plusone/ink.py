@@ -20,12 +20,14 @@ class View:
     def __init__(self):
         self.zoom, self.ox, self.oy = 1.0, 0.0, 0.0
 
-    def fit(self, page_w, page_h, widget_w, widget_h, margin=16):
-        """Whole page visible and centred."""
+    def fit(self, page_w, page_h, widget_w, widget_h, margin=16, bottom=0):
+        """Whole page visible and centred, clear of the bottom `bottom`
+        pixels (where the toolbar floats)."""
+        height = widget_h - bottom
         self.zoom = max(self.MIN_ZOOM, min((widget_w - 2 * margin) / page_w,
-                                           (widget_h - 2 * margin) / page_h))
+                                           (height - 2 * margin) / page_h))
         self.ox = (widget_w - page_w * self.zoom) / 2
-        self.oy = (widget_h - page_h * self.zoom) / 2
+        self.oy = (height - page_h * self.zoom) / 2
 
     def to_page(self, x, y):
         return (x - self.ox) / self.zoom, (y - self.oy) / self.zoom

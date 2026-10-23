@@ -182,3 +182,11 @@ def test_placed_signature_uses_the_pen(tmp_path):
     placed = place(load_signature(str(path)), 0, 0, width=60, pen=2.0, color=(1, 0, 0))
     assert {s.color for s in placed} == {(1, 0, 0)}
     assert all(s.width == pytest.approx(2.0) for s in placed)  # drawn 60 wide, placed 60 wide
+
+
+def test_fit_leaves_room_for_the_toolbar():
+    view = View()
+    view.fit(595, 842, 1920, 1100, margin=16, bottom=80)
+    top = view.to_widget(0, 0)[1]
+    bottom = view.to_widget(595, 842)[1]
+    assert top == pytest.approx(16) and bottom == pytest.approx(1100 - 80 - 16)

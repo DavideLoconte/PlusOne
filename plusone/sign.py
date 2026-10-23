@@ -33,6 +33,44 @@ ERASER_RADIUS = 12  # widget pixels around the pen tip
 # The S Pen's side button arrives as the stylus' second or third button.
 ERASE_BUTTONS = Gdk.ModifierType.BUTTON2_MASK | Gdk.ModifierType.BUTTON3_MASK
 RAW_TOLERANCE = 24  # widget pixels between where the tablet and GTK put the tip
+TOOLBAR_SPACE = 84  # pixels kept clear under the page for the floating toolbar
+
+CSS = """
+.sign-canvas { background-color: mix(@window_bg_color, @window_fg_color, 0.08); }
+.floating-bar {
+  background-color: @popover_bg_color;
+  color: @popover_fg_color;
+  border-radius: 999px;
+  padding: 5px;
+  box-shadow: 0 0 0 1px alpha(black, 0.06), 0 2px 6px alpha(black, 0.1), 0 6px 20px alpha(black, 0.1);
+}
+.floating-bar button { min-width: 42px; min-height: 42px; padding: 0; border-radius: 999px; }
+.floating-bar button.text-button { padding: 0 14px; }
+.floating-bar separator { margin: 9px 4px; }
+.floating-bar .page-number { font-feature-settings: "tnum"; margin: 0 2px; }
+.hint-bar {
+  background-color: @accent_bg_color;
+  color: @accent_fg_color;
+  border-radius: 999px;
+  padding: 4px 4px 4px 18px;
+  font-weight: bold;
+  box-shadow: 0 2px 6px alpha(black, 0.15), 0 6px 20px alpha(black, 0.12);
+}
+.hint-bar button { color: inherit; min-width: 34px; min-height: 34px; padding: 0; border-radius: 999px; }
+button.swatch, button.swatch:hover, button.swatch:checked, button.swatch:active {
+  background: none; box-shadow: none; min-width: 38px; min-height: 38px; padding: 0;
+}
+"""
+
+
+def load_css():
+    provider = Gtk.CssProvider()
+    if hasattr(provider, "load_from_string"):  # GTK 4.12
+        provider.load_from_string(CSS)
+    else:
+        provider.load_from_data(CSS.encode(), -1)
+    Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(), provider,
+                                              Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
 
 def tablet_monitor():
@@ -57,7 +95,7 @@ class PageArea(Gtk.DrawingArea):
     def __init__(self, window):
         # A natural size, or a window that is not maximized shrinks to nothing.
         super().__init__(hexpand=True, vexpand=True, focusable=True,
-                         content_width=480, content_height=600)
+                         content_width=480, content_height=600, css_classes=["sign-canvas"])
         self.window = window
         self.view = View()
         self.fitted = False
@@ -71,6 +109,7 @@ class PageArea(Gtk.DrawingArea):
         self._raw_map = None    # tablet (0..1) to widget pixels, while drawing from it
         self._raw_tick = None
         self.raw_counts = [0, 0]  # samples drawn from the tablet, desktop events meanwhile
+        self._hover = None  # pen or mouse position while something waits to be placed
         self.set_draw_func(self._draw)
         self.connect("resize", lambda *a: self.fit())
 
@@ -101,6 +140,11 @@ class PageArea(Gtk.DrawingArea):
         scroll.connect("scroll", self._scroll)
         self.add_controller(scroll)
 
+        hover = Gtk.EventControllerMotion()
+        hover.connect("motion", self._hover_at)
+        hover.connect("leave", lambda c: self._hover_at(c, None, None))
+        self.add_controller(hover)
+
     # -- view ------------------------------------------------------------------
     def page_size(self):
         return self.window.page().get_size()
@@ -108,7 +152,7 @@ class PageArea(Gtk.DrawingArea):
     def fit(self):
         w, h = self.get_width(), self.get_height()
         if w and h:
-            self.view.fit(*self.page_size(), w, h)
+            self.view.fit(*self.page_size(), w, h, margin=24, bottom=TOOLBAR_SPACE)
             self.fitted = True
             self.queue_draw()
 
@@ -134,6 +178,13 @@ class PageArea(Gtk.DrawingArea):
         return True
 
     # -- input -----------------------------------------------------------------
+    def _hover_at(self, _controller, x, y):
+        """Pen hovering (or mouse): shows what a tap would place, and where."""
+        hover = (x, y) if x is not None and self.window.pending else None
+        if hover != self._hover:
+            self._hover = hover
+            self.queue_draw()
+
     def _pressure(self, gesture):
         ok, value = gesture.get_axis(Gdk.AxisUse.PRESSURE)
         return value if ok and value > 0 else NO_PRESSURE
@@ -185,7 +236,7 @@ class PageArea(Gtk.DrawingArea):
             log(f"pen: tool {tool.get_tool_type().value_nick if tool else None}, buttons {int(state):#x}")
         if tool is not None and tool.get_tool_type() == Gdk.DeviceToolType.ERASER:
             return True
-        return bool(state & ERASE_BUTTONS)
+        return bool(state & ERASE_BUTTONS) or self.window.erasing()
 
     def _erase_to(self, x, y):
         point = self.view.to_page(x, y)
@@ -303,14 +354,23 @@ class PageArea(Gtk.DrawingArea):
             gesture.set_state(Gtk.EventSequenceState.DENIED)
             return
         self._mouse_origin = (x, y)
-        self._begin(x, y, NO_PRESSURE)
+        if self.window.erasing():
+            self._erased = False
+            self._erase_to(x, y)
+        else:
+            self._begin(x, y, NO_PRESSURE)
 
     def _mouse_update(self, gesture, dx, dy):
         x, y = self._mouse_origin
-        self._extend(x + dx, y + dy, NO_PRESSURE)
+        if self._eraser is not None:
+            self._erase_to(x + dx, y + dy)
+        else:
+            self._extend(x + dx, y + dy, NO_PRESSURE)
 
     def _mouse_end(self, gesture, dx, dy):
+        self._eraser = None
         self._finish()
+        self.queue_draw()
 
     # -- drawing ---------------------------------------------------------------
     def _page_surface(self, scale):
@@ -331,10 +391,21 @@ class PageArea(Gtk.DrawingArea):
     def _draw(self, area, cr, width, height):
         if not self.fitted:
             self.fit()
-        cr.set_source_rgb(0.85, 0.85, 0.87)
-        cr.paint()
         v = self.view
         w, h = self.page_size()
+        # The page floats over the background on a soft shadow: stacked
+        # rounded layers, darkest at the page's edge, fading out in 14 px.
+        cr.set_source_rgba(0, 0, 0, 0.012)
+        for spread in range(1, 15):
+            x, y = v.ox - spread, v.oy - spread + 3
+            x1, y1 = v.ox + w * v.zoom + spread, v.oy + h * v.zoom + spread + 3
+            cr.new_sub_path()
+            cr.arc(x1 - spread, y + spread, spread, -math.pi / 2, 0)
+            cr.arc(x1 - spread, y1 - spread, spread, 0, math.pi / 2)
+            cr.arc(x + spread, y1 - spread, spread, math.pi / 2, math.pi)
+            cr.arc(x + spread, y + spread, spread, math.pi, 3 * math.pi / 2)
+            cr.close_path()
+            cr.fill()
         cr.save()
         cr.translate(v.ox, v.oy)
         scale, surface = self._page_surface(v.zoom * self.get_scale_factor())
@@ -351,18 +422,31 @@ class PageArea(Gtk.DrawingArea):
             marks.append(self._stroke)
         draw_marks(cr, marks)
         if self._eraser is not None:
-            cr.set_source_rgba(0.3, 0.3, 0.3, 0.8)
-            cr.set_line_width(1.5 / v.zoom)
             cr.arc(*self._eraser, ERASER_RADIUS / v.zoom, 0, 2 * math.pi)
+            cr.set_source_rgba(1, 1, 1, 0.6)
+            cr.fill_preserve()
+            cr.set_source_rgba(0.3, 0.3, 0.3, 0.9)
+            cr.set_line_width(1.5 / v.zoom)
             cr.stroke()
+        if self._hover and self.window.pending:
+            # A faint preview of what the tap will place.
+            cr.push_group()
+            draw_marks(cr, self.window.pending(*v.to_page(*self._hover)))
+            cr.pop_group_to_source()
+            cr.paint_with_alpha(0.4)
         cr.restore()
 
 
 class SignWindow(Adw.ApplicationWindow):
+    _css_loaded = False
+
     def __init__(self, app, path, on_done):
         """on_done(signed path or None) runs once, when the window closes."""
         super().__init__(application=app, title=os.path.basename(path),
                          default_width=1000, default_height=820)
+        if not SignWindow._css_loaded:
+            load_css()
+            SignWindow._css_loaded = True
         self.path = path
         self.on_done = on_done
         self.doc = open_document(path)
@@ -374,7 +458,6 @@ class SignWindow(Adw.ApplicationWindow):
         self.signature = load_signature(SIGNATURE)
         self.pen_color, self.pen_width = load_pen(PEN)
 
-        toolbar = Adw.ToolbarView()
         header = Adw.HeaderBar(show_end_title_buttons=False)
         cancel = Gtk.Button(label=_("Cancel"))
         cancel.connect("clicked", lambda b: self._cancel())
@@ -382,79 +465,138 @@ class SignWindow(Adw.ApplicationWindow):
         self.done = Gtk.Button(label=_("Done"), css_classes=["suggested-action"])
         self.done.connect("clicked", lambda b: self._save())
         header.pack_end(self.done)
-        self.title = Adw.WindowTitle(title=os.path.basename(path))
+        self.title = Adw.WindowTitle(title=os.path.basename(path),
+                                     subtitle=_("Write with the pen · hold its button to erase"))
         header.set_title_widget(self.title)
-        toolbar.add_top_bar(header)
 
         self.area = PageArea(self)
-        self.banner = Adw.Banner()
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        content.append(self.banner)
-        content.append(self.area)
-        toolbar.set_content(content)
+        overlay = Gtk.Overlay(child=self.area)
+        overlay.add_overlay(self._tools())
+        overlay.add_overlay(self._pages())
+        overlay.add_overlay(self._hint())
+        overlay.add_overlay(self._keep_chip())
+        self.toasts = Adw.ToastOverlay(child=overlay)
 
-        bar = Gtk.Box(spacing=6, halign=Gtk.Align.CENTER, margin_top=6, margin_bottom=6,
-                      css_classes=["toolbar"])
-        self.prev = self._tool(bar, "go-previous-symbolic", None, lambda: self.show_page(self.index - 1))
-        self.page_label = Gtk.Label(width_chars=8)
-        bar.append(self.page_label)
-        self.next = self._tool(bar, "go-next-symbolic", None, lambda: self.show_page(self.index + 1))
-        bar.append(Gtk.Separator())
-        bar.append(self._pen_button())
-        self.undo = self._tool(bar, "edit-undo-symbolic", _("Undo"), self._undo)
-        self._tool(bar, "edit-clear-all-symbolic", _("Clear page"), self._clear_page)
-        bar.append(Gtk.Separator())
-        self.sign_button = self._tool(bar, "document-edit-symbolic", _("My signature"), self._place_signature)
-        self.keep_button = self._tool(bar, "document-save-symbolic", _("Keep as my signature"),
-                                      self._keep_signature)
-        self._tool(bar, "x-office-calendar-symbolic", _("Date"), self._place_date)
-        self._tool(bar, "insert-text-symbolic", _("Text"), self._ask_text)
-        bar.append(Gtk.Separator())
-        self._tool(bar, "zoom-fit-best-symbolic", _("Fit"), self.area.fit)
-        toolbar.add_bottom_bar(bar)
-        self.set_content(toolbar)
+        view = Adw.ToolbarView(content=self.toasts)
+        view.add_top_bar(header)
+        self.set_content(view)
 
         keys = Gtk.ShortcutController()
         keys.add_shortcut(Gtk.Shortcut.new(Gtk.ShortcutTrigger.parse_string("<Control>z"),
                                            Gtk.CallbackAction.new(lambda *a: self._undo() or True)))
         keys.add_shortcut(Gtk.Shortcut.new(Gtk.ShortcutTrigger.parse_string("Escape"),
-                                           Gtk.CallbackAction.new(lambda *a: self._cancel() or True)))
+                                           Gtk.CallbackAction.new(lambda *a: self._escape() or True)))
         self.add_controller(keys)
         self.connect("close-request", self._on_close)
         self.show_page(0)
+
+    # -- toolbar ---------------------------------------------------------------
+    def _tools(self):
+        """The floating toolbar under the page."""
+        bar = Gtk.Box(spacing=2, css_classes=["floating-bar"], halign=Gtk.Align.CENTER,
+                      valign=Gtk.Align.END, margin_bottom=18)
+        bar.append(self._pen_button())
+        eraser_icon = Gtk.DrawingArea(content_width=20, content_height=20)
+        eraser_icon.set_draw_func(self._draw_eraser_icon)
+        self.eraser = Gtk.ToggleButton(child=eraser_icon, tooltip_text=_("Eraser"), css_classes=["flat"])
+        bar.append(self.eraser)
+        bar.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
+        self.undo = self._tool(bar, "edit-undo-symbolic", _("Undo"), self._undo)
+        self._tool(bar, "user-trash-symbolic", _("Clear page"), self._clear_page)
+        bar.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
+        self.signature_thumb = Gtk.DrawingArea(content_width=58, content_height=28)
+        self.signature_thumb.set_draw_func(self._draw_signature_thumb)
+        self.sign_button = Gtk.Button(child=self.signature_thumb, tooltip_text=_("My signature"),
+                                      css_classes=["flat"])
+        self.sign_button.connect("clicked", lambda b: self._place_signature())
+        bar.append(self.sign_button)
+        self._tool(bar, "x-office-calendar-symbolic", _("Date"), self._place_date)
+        self._tool(bar, "insert-text-symbolic", _("Text"), self._ask_text)
+        bar.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
+        self._tool(bar, "zoom-fit-best-symbolic", _("Fit"), self.area.fit)
+        return bar
+
+    def _tool(self, bar, icon, tooltip, callback):
+        button = Gtk.Button(icon_name=icon, tooltip_text=tooltip, css_classes=["flat"])
+        button.connect("clicked", lambda b: callback())
+        bar.append(button)
+        return button
+
+    def _pages(self):
+        """Page arrows and number, bottom left; only for several pages."""
+        self.pages = Gtk.Box(css_classes=["floating-bar"], halign=Gtk.Align.START, valign=Gtk.Align.END,
+                             margin_start=18, margin_bottom=18, visible=self.doc.get_n_pages() > 1)
+        self.prev = self._tool(self.pages, "go-previous-symbolic", _("Previous page"),
+                               lambda: self.show_page(self.index - 1))
+        self.page_label = Gtk.Label(css_classes=["page-number"])
+        self.pages.append(self.page_label)
+        self.next = self._tool(self.pages, "go-next-symbolic", _("Next page"),
+                               lambda: self.show_page(self.index + 1))
+        return self.pages
+
+    def _hint(self):
+        """What a tap will do, while a signature, date or text waits to be placed."""
+        self.hint_label = Gtk.Label()
+        close = Gtk.Button(icon_name="window-close-symbolic", tooltip_text=_("Cancel"), css_classes=["flat"])
+        close.connect("clicked", lambda b: self._disarm())
+        box = Gtk.Box(spacing=10, css_classes=["hint-bar"])
+        box.append(self.hint_label)
+        box.append(close)
+        self.hint = Gtk.Revealer(child=box, halign=Gtk.Align.CENTER, valign=Gtk.Align.START, margin_top=14,
+                                 transition_type=Gtk.RevealerTransitionType.SLIDE_DOWN)
+        return self.hint
+
+    def _keep_chip(self):
+        """Offered once something is drawn and no signature is saved yet."""
+        button = Gtk.Button(child=Adw.ButtonContent(icon_name="document-save-symbolic",
+                                                    label=_("Keep as my signature")), css_classes=["flat"])
+        button.connect("clicked", lambda b: self._keep_signature())
+        self.keep_button = Gtk.Box(css_classes=["floating-bar"], halign=Gtk.Align.CENTER, valign=Gtk.Align.END,
+                                   margin_bottom=18 + 52 + 12, visible=False)
+        self.keep_button.append(button)
+        return self.keep_button
 
     def _pen_button(self):
         """Shows the pen's colour and width; its popover changes them."""
         self.pen_swatch = Gtk.DrawingArea(content_width=24, content_height=24)
         self.pen_swatch.set_draw_func(lambda a, cr, w, h: self._dot(
             cr, w, h, self.pen_color, 6 + 14 * (self.pen_width - MIN_WIDTH) / (MAX_WIDTH - MIN_WIDTH)))
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8,
-                      margin_top=6, margin_bottom=6, margin_start=6, margin_end=6)
-        colors = Gtk.Box(spacing=6, halign=Gtk.Align.CENTER)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10,
+                      margin_top=8, margin_bottom=8, margin_start=8, margin_end=8)
+        colors = Gtk.Box(spacing=4, halign=Gtk.Align.CENTER)
         first = None
         for name, color in ((_("Blue ink"), INK), (_("Black"), (0.08, 0.08, 0.1)),
                             (_("Blue"), (0.1, 0.3, 0.85)), (_("Red"), (0.8, 0.1, 0.1)),
                             (_("Green"), (0.1, 0.5, 0.2))):
-            dot = Gtk.DrawingArea(content_width=28, content_height=28)
-            dot.set_draw_func(lambda a, cr, w, h, c=color: self._dot(cr, w, h, c, 22))
-            button = Gtk.ToggleButton(child=dot, tooltip_text=name, css_classes=["circular", "flat"],
+            dot = Gtk.DrawingArea(content_width=38, content_height=38)
+            button = Gtk.ToggleButton(child=dot, tooltip_text=name, css_classes=["swatch"],
                                       active=color == self.pen_color)
+            dot.set_draw_func(lambda a, cr, w, h, c=color, b=button: self._draw_swatch(cr, w, h, c, b.get_active()))
             if first:
                 button.set_group(first)
             first = first or button
-            button.connect("toggled", lambda b, c=color: b.get_active() and self._set_pen(color=c))
+            button.connect("toggled", lambda b, c=color, d=dot: self._swatch_toggled(b, c, d))
             colors.append(button)
         box.append(colors)
-        box.append(Gtk.Label(label=_("Thickness"), xalign=0, css_classes=["dim-label"]))
+        box.append(Gtk.Label(label=_("Thickness"), xalign=0, css_classes=["caption-heading", "dim-label"]))
         scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, MIN_WIDTH, MAX_WIDTH, 0.1)
         scale.set_value(self.pen_width)
         scale.connect("value-changed", lambda s: self._set_pen(width=s.get_value()))
         box.append(scale)
-        self.pen_preview = Gtk.DrawingArea(content_width=240, content_height=48)
+        self.pen_preview = Gtk.DrawingArea(content_width=240, content_height=56)
         self.pen_preview.set_draw_func(self._draw_preview)
-        box.append(self.pen_preview)
-        return Gtk.MenuButton(child=self.pen_swatch, popover=Gtk.Popover(child=box),
-                              tooltip_text=_("Pen"), css_classes=["flat"])
+        frame = Gtk.Frame(child=self.pen_preview, css_classes=["view"])
+        box.append(frame)
+        popover = Gtk.Popover(child=box)
+        # Picking the pen means drawing again.
+        popover.connect("show", lambda p: self.eraser.set_active(False))
+        return Gtk.MenuButton(child=self.pen_swatch, popover=popover, tooltip_text=_("Pen"),
+                              css_classes=["flat"])
+
+    def _swatch_toggled(self, button, color, dot):
+        dot.queue_draw()
+        if button.get_active():
+            self._set_pen(color=color)
 
     @staticmethod
     def _dot(cr, width, height, color, size):
@@ -462,12 +604,51 @@ class SignWindow(Adw.ApplicationWindow):
         cr.arc(width / 2, height / 2, size / 2, 0, 2 * math.pi)
         cr.fill()
 
+    def _draw_swatch(self, cr, width, height, color, chosen):
+        self._dot(cr, width, height, color, 24)
+        if chosen:  # a ring around the chosen ink
+            cr.set_line_width(2.5)
+            cr.arc(width / 2, height / 2, 16, 0, 2 * math.pi)
+            cr.stroke()
+
     def _draw_preview(self, area, cr, width, height):
         # A short wave written lightly, then firmly, then lightly again.
+        cr.set_source_rgb(1, 1, 1)
+        cr.paint()
         cr.scale(1.5, 1.5)
-        points = [(6 + i * 1.4, height / 3 + 7 * math.sin(i / 9), 0.05 + 0.55 * math.sin(math.pi * i / 100))
+        points = [(10 + i * 1.3, height / 3 + 7 * math.sin(i / 9), 0.05 + 0.55 * math.sin(math.pi * i / 100))
                   for i in range(101)]
         draw_marks(cr, [Stroke(points, width=self.pen_width, color=self.pen_color)])
+
+    def _draw_eraser_icon(self, area, cr, width, height):
+        color = area.get_color()
+        cr.set_source_rgba(color.red, color.green, color.blue, color.alpha)
+        cr.translate(width / 2, height / 2)
+        cr.rotate(math.pi / 4)
+        # An eraser tilted 45 degrees: solid body, outlined rubber end.
+        cr.rectangle(-4, -8, 8, 9)
+        cr.fill()
+        cr.set_line_width(1.6)
+        cr.rectangle(-3.2, 1.8, 6.4, 5.4)
+        cr.stroke()
+
+    def _draw_signature_thumb(self, area, cr, width, height):
+        if not self.signature:
+            # A dim scribble: no signature saved yet.
+            color = area.get_color()
+            cr.set_source_rgba(color.red, color.green, color.blue, 0.35)
+            cr.set_line_width(1.6)
+            cr.move_to(6, height * 0.65)
+            for i in range(1, 47):
+                cr.line_to(6 + i, height * 0.65 - 6 * math.sin(i / 3.2) * (1 - i / 60))
+            cr.stroke()
+            return
+        strokes = self.signature["strokes"]
+        tall = max((pt[1] for s in strokes for pt in s), default=0) or 0.01
+        scale = min(width - 6, (height - 6) / tall)
+        ox, oy = (width - scale) / 2, (height - tall * scale) / 2
+        draw_marks(cr, [Stroke([(ox + x * scale, oy + y * scale, p) for x, y, p in s], width=2.2,
+                               color=self.pen_color) for s in strokes])
 
     def _set_pen(self, color=None, width=None):
         self.pen_color = color or self.pen_color
@@ -475,17 +656,13 @@ class SignWindow(Adw.ApplicationWindow):
         save_pen(PEN, self.pen_color, self.pen_width)
         self.pen_swatch.queue_draw()
         self.pen_preview.queue_draw()
+        self.signature_thumb.queue_draw()
 
-    def _tool(self, bar, icon, label, callback):
-        child = Adw.ButtonContent(icon_name=icon, label=label) if label else None
-        button = Gtk.Button(css_classes=["flat"])
-        if child:
-            button.set_child(child)
-        else:
-            button.set_icon_name(icon)
-        button.connect("clicked", lambda b: callback())
-        bar.append(button)
-        return button
+    def erasing(self):
+        return self.eraser.get_active()
+
+    def toast(self, text, timeout=4):
+        self.toasts.add_toast(Adw.Toast(title=text, timeout=timeout))
 
     # -- pages and marks -------------------------------------------------------
     def page(self):
@@ -494,7 +671,7 @@ class SignWindow(Adw.ApplicationWindow):
     def show_page(self, index):
         n = self.doc.get_n_pages()
         self.index = max(0, min(n - 1, index))
-        self.page_label.set_label(_("Page {n} of {total}").format(n=self.index + 1, total=n))
+        self.page_label.set_label(f"{self.index + 1} / {n}")
         self.prev.set_sensitive(self.index > 0)
         self.next.set_sensitive(self.index < n - 1)
         self.area.fitted = False
@@ -546,17 +723,28 @@ class SignWindow(Adw.ApplicationWindow):
     def _arm(self, make_marks, message):
         """Next tap (pen, finger or mouse) places make_marks(x, y)."""
         self.pending = make_marks
-        self.banner.set_title(message)
-        self.banner.set_revealed(True)
+        self.eraser.set_active(False)
+        self.hint_label.set_label(message)
+        self.hint.set_reveal_child(True)
+
+    def _disarm(self):
+        self.pending = None
+        self.hint.set_reveal_child(False)
+        self.area.queue_draw()
 
     def place_at(self, x, y):
         """Called by the page on a tap; True if it placed something."""
         if self.pending is None:
             return False
         self.add_mark(*self.pending(x, y))
-        self.pending = None
-        self.banner.set_revealed(False)
+        self._disarm()
         return True
+
+    def _escape(self):
+        if self.pending:
+            self._disarm()
+        else:
+            self._cancel()
 
     def _place_signature(self):
         if self.signature:
@@ -568,10 +756,9 @@ class SignWindow(Adw.ApplicationWindow):
         if strokes:
             save_signature(SIGNATURE, strokes)
             self.signature = load_signature(SIGNATURE)
+            self.signature_thumb.queue_draw()
             self._update()
-            self.banner.set_title(_("Saved: next time, “My signature” places it with one tap"))
-            self.banner.set_revealed(True)
-            GLib.timeout_add_seconds(4, once(self.banner.set_revealed, False))
+            self.toast(_("Saved: next time, “My signature” places it with one tap"))
 
     def _place_date(self):
         today = datetime.date.today().strftime("%d/%m/%Y")
@@ -596,8 +783,7 @@ class SignWindow(Adw.ApplicationWindow):
     # -- closing ---------------------------------------------------------------
     def _save(self, dst=None):
         self.done.set_sensitive(False)
-        self.banner.set_title(_("Saving…"))
-        self.banner.set_revealed(True)
+        self.done.set_child(Gtk.Spinner(spinning=True))
         marks = {i: list(m) for i, m in self.marks.items() if m}
 
         def work():
@@ -616,14 +802,18 @@ class SignWindow(Adw.ApplicationWindow):
             self._save_as()
             return
         if isinstance(result, Exception):
-            self.banner.set_title(_("Could not save: {error}").format(error=result))
-            self.done.set_sensitive(True)
+            self.toast(_("Could not save: {error}").format(error=result), timeout=0)
+            self._saving_over()
             return
         self.result = result
         self.close()
 
+    def _saving_over(self):
+        self.done.set_label(_("Done"))
+        self.done.set_sensitive(True)
+
     def _save_as(self):
-        self.banner.set_title(_("Choose where to save the signed copy"))
+        self.toast(_("Choose where to save the signed copy"))
         name = os.path.basename(output_path(self.path))
         dialog = Gtk.FileDialog(title=_("Save the signed PDF"), initial_name=name)
 
@@ -633,8 +823,7 @@ class SignWindow(Adw.ApplicationWindow):
             except GLib.Error:
                 file = None  # cancelled: keep the marks, let the user retry
             if file is None or not file.get_path():
-                self.banner.set_revealed(False)
-                self.done.set_sensitive(True)
+                self._saving_over()
                 return
             self._save(file.get_path())
         dialog.save(self, None, chosen)

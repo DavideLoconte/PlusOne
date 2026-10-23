@@ -14,6 +14,10 @@ Sign on the tablet.
   and also a cleared page.
 - Pen colour (five inks) and thickness, remembered; pressure shows in the
   line.
+- A cleaner signing window: the page floats on a soft shadow (light and dark
+  themes), tools sit in a floating bar under it with an eraser button, *My
+  signature* shows your signature, a faint preview follows the pen while
+  placing it, and messages are toasts.
 - Strokes are drawn from every pen report the tablet sends (about 285 a
   second), read directly from the UIBC channel: the desktop drops the reports
   that arrive in a burst after a Wi-Fi hiccup, which left straight corners.
