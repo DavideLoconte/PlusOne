@@ -20,6 +20,7 @@ _IT = {
     "Stop": "Ferma",
     "Display": "Schermo",
     "Resolution": "Risoluzione",
+    "Automatic": "Automatica",
     "Quality": "Qualità",
     "Mbit/s: higher is sharper but uses more bandwidth": "Mbit/s: più alto = più nitido, più banda",
     "Options": "Opzioni",
@@ -39,7 +40,6 @@ _IT = {
     "Connecting to {name}…": "Collegamento a {name}…",
     "The tablet is not answering: close and reopen Second Screen":
         "Il tablet non risponde: chiudi e riapri Second Screen",
-    "The tablet is not answering: reopen Second Screen": "Il tablet non risponde: riapri Second Screen",
 }
 
 # Templates that read the same in every language.

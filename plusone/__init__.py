@@ -13,6 +13,14 @@ def log(*parts):
         handler(line)
 
 
+def once(fn, *args):
+    """Wrap fn for GLib.idle_add / timeout_add so it runs a single time."""
+    def run():
+        fn(*args)
+        return False
+    return run
+
+
 def add_log_handler(handler):
     """handler(line) is called from whichever thread logged; marshal as needed."""
     _handlers.append(handler)

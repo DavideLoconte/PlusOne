@@ -11,7 +11,7 @@ import threading
 
 from . import log
 
-TOUCH_DOWN, TOUCH_UP, TOUCH_MOVE, KEY_DOWN, KEY_UP = 0, 1, 2, 3, 4
+TOUCH_DOWN, TOUCH_UP, TOUCH_MOVE = 0, 1, 2
 
 
 class UibcServer:
@@ -26,17 +26,12 @@ class UibcServer:
         self.pen = None
         self.reports = 0
         self.port = port
-        self.scale = (1.0, 1.0)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(("0.0.0.0", port))
         self.sock.listen(1)
         self.down = set()
         threading.Thread(target=self._serve, daemon=True).start()
-
-    def set_scale(self, negotiated, stream):
-        """Coordinates arrive in the negotiated (M4) size; map them to the stream."""
-        self.scale = (stream[0] / negotiated[0], stream[1] / negotiated[1])
 
     def _serve(self):
         while True:
@@ -93,8 +88,8 @@ class UibcServer:
             if ie_id in (TOUCH_DOWN, TOUCH_UP, TOUCH_MOVE) and desc:
                 count = desc[0]
                 for i in range(count):
+                    # Coordinates are in the negotiated mode, i.e. the monitor's.
                     pid, x, y = struct.unpack(">BHH", desc[1 + 5 * i:6 + 5 * i])
-                    x, y = x * self.scale[0], y * self.scale[1]
                     if ie_id == TOUCH_DOWN:
                         self.down.add(pid)
                         self.injector.touch_down(pid, x, y)

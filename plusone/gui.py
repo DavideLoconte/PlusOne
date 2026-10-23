@@ -12,7 +12,7 @@ gi.require_version("Gst", "1.0")
 gi.require_version("NM", "1.0")
 from gi.repository import Adw, GLib, Gst, Gtk  # noqa: E402
 
-from . import add_log_handler, i18n  # noqa: E402
+from . import add_log_handler, i18n, once  # noqa: E402
 from .engine import Controller, Settings, State  # noqa: E402
 from .i18n import _  # noqa: E402
 from .rtsp import MODES  # noqa: E402
@@ -83,9 +83,11 @@ class Window(Adw.ApplicationWindow):
         page.add(header)
 
         self.display_group = Adw.PreferencesGroup()
-        self.mode_row = Adw.ComboRow(model=Gtk.StringList.new([mode_label(m) for m in MODE_LIST]))
+        # Entry 0 is "Automatic" (from the tablet's EDID); the rest follow MODE_LIST.
+        self.mode_row = Adw.ComboRow()
         current = (self.settings.width, self.settings.height, self.settings.fps)
-        self.mode_row.set_selected(MODE_LIST.index(current) if current in MODE_LIST else 0)
+        self._mode_selected = 0 if self.settings.auto_mode or current not in MODE_LIST \
+            else 1 + MODE_LIST.index(current)
         self.bitrate_row = Adw.SpinRow.new_with_range(5, 60, 1)
         self.bitrate_row.set_value(self.settings.bitrate / 1000)
         self.display_group.add(self.mode_row)
@@ -133,6 +135,10 @@ class Window(Adw.ApplicationWindow):
         self.adb_row.set_subtitle(_("Uses adb: needs wireless debugging on the tablet"))
         self.language_row.set_title(_("Language"))
         self.log_expander.set_label(_("Log"))
+        selected = self.mode_row.get_selected() if self.mode_row.get_model() else self._mode_selected
+        self.mode_row.set_model(Gtk.StringList.new(
+            [_("Automatic")] + [mode_label(m) for m in MODE_LIST]))
+        self.mode_row.set_selected(selected)
         # Only "System" needs translating; rebuild the model without re-firing.
         with self.language_row.handler_block(self._language_handler):
             selected = self.language_row.get_selected()
@@ -147,13 +153,15 @@ class Window(Adw.ApplicationWindow):
         i18n.set_language(self.settings.language)
         save_settings(self.settings)
         # Not from inside this notify emission: _translate swaps the row's model.
-        GLib.idle_add(lambda: self._translate() and False)
+        GLib.idle_add(once(self._translate))
 
     # -- controller ------------------------------------------------------------
     def _apply_settings(self):
-        w, h, f = MODE_LIST[self.mode_row.get_selected()]
         s = self.settings
-        s.width, s.height, s.fps = w, h, f
+        selected = self.mode_row.get_selected()
+        s.auto_mode = selected == 0
+        if not s.auto_mode:
+            s.width, s.height, s.fps = MODE_LIST[selected - 1]
         s.bitrate = int(self.bitrate_row.get_value() * 1000)
         s.touch = self.touch_row.get_active()
         s.stay_ready = self.ready_row.get_active()
@@ -161,7 +169,7 @@ class Window(Adw.ApplicationWindow):
         save_settings(s)
 
     def _toggle(self, _button):
-        if self.controller._running:
+        if self.controller.running:
             self.controller.stop()
         else:
             self._apply_settings()
@@ -176,7 +184,7 @@ class Window(Adw.ApplicationWindow):
         else:
             detail = _(IDLE_HINT) if state == State.IDLE else ""
         self.status_detail.set_label(detail)
-        running = self.controller._running
+        running = self.controller.running
         self.button.set_label(_("Stop") if running else _("Start"))
         self.button.set_css_classes(["pill", "destructive-action" if running else "suggested-action"])
         for row in self.setting_rows:

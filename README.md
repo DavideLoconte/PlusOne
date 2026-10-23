@@ -22,8 +22,8 @@ No app to install on the tablet: it talks to the <b>Second Screen</b> feature Sa
 - **Wireless, no setup.** Wi-Fi Direct between PC and tablet, no router needed,
   no developer options on the tablet. Reconnects by itself when you reopen
   Second Screen.
-- **Correct aspect ratio.** 16:10 modes (1920×1200 by default) that fill the
-  tablet screen.
+- **Correct aspect ratio, automatically.** The tablet's preferred mode is read
+  from its EDID (1920×1200 on a Tab S10 FE+), so the picture fills the screen.
 - **Simple GNOME app**, in English and Italian.
 
 ## Requirements
@@ -96,7 +96,7 @@ If the tablet is connected over adb (see below) Plus One writes this file for yo
 
 | Setting | |
 |---|---|
-| Resolution | 1920×1200 (16:10, default), 1680×1050, 1440×900, 1280×800, 1920×1080, 1280×720. |
+| Resolution | *Automatic* (default) reads the tablet's preferred mode from its EDID (1920×1200 on a Tab S10 FE+), or pick 1920×1200, 1680×1050, 1440×900, 1280×800 (16:10), 1920×1080, 1280×720 (16:9). |
 | Quality | Video bitrate in Mbit/s. 20 is a good default; raise it for crisper text. |
 | Touch and S Pen | Forward finger touches and the pen from the tablet. |
 | Stay ready | After the tablet disconnects, wait for it to come back. |
@@ -118,8 +118,8 @@ pointer, tip clicks, side button right-clicks).
 ### Command line
 
 ```bash
-plus-one --cli                       # same engine, no window
-plus-one --cli --size 1680x1050      # another mode
+plus-one --cli                       # same engine, no window; mode from the tablet
+plus-one --cli --size 1680x1050      # a fixed mode
 plus-one --cli --test                # test pattern + local preview window
 plus-one --help
 ```
@@ -159,8 +159,8 @@ remote desktop  ◀──── touch ───── UIBC server ◀───�
   M1–M7, keep-alives, IDR requests).
 - **Tuning for Samsung's sink** (found by reverse engineering the tablet side):
   the source identifies as a Windows Miracast source, which selects the sink's
-  PC profile and its 16:10 EDID; the exact VESA mode is negotiated so the
-  picture fills the screen; the stream is video-only, so frames are shown on
+  PC profile and makes it share its EDID; the EDID's preferred mode is
+  negotiated exactly (a VESA mode for 16:10) so the picture fills the screen; the stream is video-only, so frames are shown on
   arrival instead of being synchronised to an audio clock.
 - **Input**: UIBC generic events become Mutter remote-desktop touches; the pen
   arrives as an HID device whose descriptor and reports are replayed into
@@ -174,7 +174,7 @@ Details, evidence and the tools used are in [docs/FINDINGS.md](docs/FINDINGS.md)
 plusone/          the app (engine.py ties display, p2p, rtsp, media, uibc, pen together)
 tests/            unit and protocol tests (a scripted fake tablet, no hardware needed)
 packaging/        build-deb.sh and maintainer scripts
-tools/            CI scripts and the reverse-engineering / measurement helpers
+tools/            CI scripts; tools/re/ has the reverse-engineering and measurement helpers
 docs/FINDINGS.md  protocol and reverse-engineering notes
 ```
 

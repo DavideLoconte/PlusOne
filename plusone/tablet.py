@@ -64,10 +64,7 @@ def prepare(serial, restart=True):
 
 
 def _foreground_is_second_screen(serial):
-    out = _adb("-s", serial, "shell", "dumpsys", "activity", "activities").stdout
-    top = next((line for line in out.splitlines() if "topResumedActivity" in line), "")
-    return PACKAGE in top
+    # Filter on the tablet: the full dump is large and we poll it repeatedly.
+    out = _adb("-s", serial, "shell", "dumpsys activity activities | grep -m1 topResumedActivity").stdout
+    return PACKAGE in out
 
-
-def close(serial):
-    _adb("-s", serial, "shell", "am", "force-stop", PACKAGE)

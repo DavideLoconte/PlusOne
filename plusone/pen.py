@@ -10,8 +10,9 @@ drives the pointer through Mutter's remote desktop session.
 """
 import os
 import struct
-import subprocess
 import threading
+
+from gi.repository import Gio
 
 from . import log
 
@@ -99,10 +100,12 @@ class PointerPen:
 
 def map_to_monitor(edid):
     """Tell Mutter to map our tablet onto the monitor with this (vendor, product, serial)."""
+    if not Gio.SettingsSchemaSource.get_default().lookup(TABLET_SCHEMA, True):
+        log("pen: no tablet settings schema, cannot map the pen to the monitor")
+        return
     path = f"/org/gnome/desktop/peripherals/tablets/{VENDOR:04x}:{PRODUCT:04x}/"
-    value = "[" + ", ".join(f"'{part}'" for part in edid) + "]"
-    subprocess.run(["gsettings", "set", f"{TABLET_SCHEMA}:{path}", "output", value],
-                   capture_output=True)
-    subprocess.run(["gsettings", "set", f"{TABLET_SCHEMA}:{path}", "keep-aspect", "false"],
-                   capture_output=True)
+    settings = Gio.Settings.new_with_path(TABLET_SCHEMA, path)
+    settings.set_strv("output", list(edid))
+    settings.set_boolean("keep-aspect", False)
+    Gio.Settings.sync()
     log("pen: mapped to monitor", edid)

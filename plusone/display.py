@@ -98,6 +98,3 @@ class VirtualMonitor:
 
     def pointer_button(self, button, pressed):
         self._notify("NotifyPointerButton", GLib.Variant("(ib)", (button, pressed)))
-
-    def key(self, keycode, pressed):
-        self._notify("NotifyKeyboardKeycode", GLib.Variant("(ub)", (keycode, pressed)))

@@ -28,17 +28,15 @@ def is_wfd_sink(peer):
 
 
 class P2PLink:
-    def __init__(self, match=None, on_found=None, on_failed=None, max_attempts=None,
-                 on_hint=None):
+    def __init__(self, match=None, on_found=None, on_hint=None):
         """match: peer MAC or substring of its name; None picks the first WFD sink.
 
-        on_found(name) fires when the tablet shows up; on_failed() fires after
-        max_attempts failed attempts (None: keep trying until stopped).
+        on_found(name) fires when the tablet shows up; on_hint() after repeated
+        failed attempts, to ask the user to reopen Second Screen. Attempts go
+        on until stop().
         """
         self.on_found = on_found or (lambda name: None)
-        self.on_failed = on_failed or (lambda: None)
-        self.on_hint = on_hint or (lambda: None)  # repeated failures: ask the user to reopen
-        self.max_attempts = max_attempts
+        self.on_hint = on_hint or (lambda: None)
         self.stopped = False
         self._handler = None
         self.client = NM.Client.new(None)
@@ -51,8 +49,8 @@ class P2PLink:
 
     def _matches(self, peer):
         if self.match:
-            return self.match in ((peer.get_hw_address() or "").lower(), ) or \
-                self.match in (peer.get_name() or "").lower()
+            return (self.match == (peer.get_hw_address() or "").lower()
+                    or self.match in (peer.get_name() or "").lower())
         return is_wfd_sink(peer)
 
     def start(self):
@@ -120,10 +118,6 @@ class P2PLink:
     def _retry(self):
         if self.attempt >= 2:
             self.on_hint()
-        if self.max_attempts and self.attempt >= self.max_attempts:
-            log("Wi-Fi Direct: giving up")
-            self.on_failed()
-            return
         GLib.timeout_add_seconds(1, self._activate)
 
     def _activated(self, client, res):

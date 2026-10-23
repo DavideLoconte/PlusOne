@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from gi.repository import GLib
 
-from . import log, media, pen, tablet
+from . import log, media, once, pen, tablet
 from .display import VirtualMonitor, virtual_monitor_edid
 from .p2p import P2PLink
 from .rtsp import MODES, WfdSession
@@ -23,7 +23,8 @@ UIBC_PORT = 50000
 
 @dataclass
 class Settings:
-    width: int = 1920
+    auto_mode: bool = True  # take the resolution from the tablet's EDID
+    width: int = 1920       # used when auto_mode is off
     height: int = 1200
     fps: int = 60
     bitrate: int = 20000  # kbit/s
@@ -63,8 +64,12 @@ class Controller:
         self.uibc = None
         self.srv = None
         self.encoder = None
-        self.serial = None
+        self.mode = None  # (width, height, fps) of the current session
         self._running = False
+
+    @property
+    def running(self):
+        return self._running
 
     # -- state ---------------------------------------------------------------
     def _set_state(self, state, template="", **args):
@@ -74,14 +79,14 @@ class Controller:
         self.on_state(state, template, args)
 
     def _from_thread(self, fn, *args):
-        GLib.idle_add(lambda: fn(*args) and False)
+        GLib.idle_add(once(fn, *args))
 
     # -- public --------------------------------------------------------------
     def start(self):
         if self._running:
             return
         s = self.settings
-        if (s.width, s.height, s.fps) not in MODES:
+        if not s.auto_mode and (s.width, s.height, s.fps) not in MODES:
             self._set_state(State.ERROR, "Mode {mode} is not supported", mode=f"{s.width}x{s.height}@{s.fps}")
             return
         others = conflicting_apps()
@@ -133,7 +138,6 @@ class Controller:
     def _adb_open(self):
         serial = tablet.device()
         if serial:
-            self.serial = serial
             tablet.prepare(serial, restart=False)
         else:
             log("adb: no tablet attached, open Second Screen by hand")
@@ -143,8 +147,7 @@ class Controller:
         if not self._running:
             return
         self._set_state(State.WAITING, "Tap “Second screen” on the tablet")
-        self.link = P2PLink(self.settings.peer, on_found=self._on_found,
-                            on_failed=self._on_link_failed, on_hint=self._on_link_hint)
+        self.link = P2PLink(self.settings.peer, on_found=self._on_found, on_hint=self._on_link_hint)
         self.link.start()
 
     def _on_found(self, name):
@@ -152,13 +155,6 @@ class Controller:
 
     def _on_link_hint(self):
         self._set_state(State.CONNECTING, "The tablet is not answering: close and reopen Second Screen")
-
-    def _on_link_failed(self):
-        self._set_state(State.ERROR, "The tablet is not answering: reopen Second Screen")
-        if self.link:
-            self.link.stop()
-            self.link = None
-        GLib.timeout_add_seconds(5, lambda: self._wait_for_tablet() and False)
 
     def _accept_loop(self):
         while self._running:
@@ -172,7 +168,7 @@ class Controller:
             s = self.settings
             self.session = WfdSession(conn, self._on_play, self._on_idr,
                                       on_close=lambda: self._from_thread(self._on_session_closed),
-                                      mode=(s.width, s.height, s.fps),
+                                      mode=None if s.auto_mode else (s.width, s.height, s.fps),
                                       uibc_port=UIBC_PORT if self.uibc else None)
             self.session.run()
 
@@ -184,9 +180,12 @@ class Controller:
             if edid:
                 pen.map_to_monitor(edid)
             return device
-        return pen.PointerPen(self.monitor, (self.settings.width, self.settings.height))
+        return pen.PointerPen(self.monitor, self.mode[:2])
 
     def _on_play(self, session):
+        # The session settled the mode in M3/M4 (from the EDID in auto mode).
+        self.mode = session.mode
+
         def go():
             if self.monitor:
                 self.monitor.start()
@@ -195,13 +194,13 @@ class Controller:
         self._from_thread(go)
 
     def _start_stream(self, source):
-        s = self.settings
-        self.streamer = media.Streamer(source, self.session.sink_ip, s.width, s.height,
-                                       s.fps, s.bitrate, self.encoder)
+        width, height, fps = self.mode
+        self.streamer = media.Streamer(source, self.session.sink_ip, width, height, fps,
+                                       self.settings.bitrate, self.encoder)
         self.streamer.start()
         name = self.link.peer.get_name() if self.link and self.link.peer else "tablet"
         self._set_state(State.STREAMING, "{name} · {width}×{height} @ {fps} Hz",
-                        name=name, width=s.width, height=s.height, fps=s.fps)
+                        name=name, width=width, height=height, fps=fps)
 
     def _on_idr(self):
         if self.streamer:
@@ -225,6 +224,6 @@ class Controller:
         self._end_session()
         if self._running and self.settings.stay_ready:
             # Give the tablet a moment to tear its group down before searching again.
-            GLib.timeout_add_seconds(3, lambda: self._wait_for_tablet() and False)
+            GLib.timeout_add_seconds(3, once(self._wait_for_tablet))
         elif self._running:
             self.stop()

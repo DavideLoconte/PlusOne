@@ -52,7 +52,7 @@ def serve():
     log("sink connected via adb reverse from", addr)
 
     def on_play(session):
-        st["streamer"] = media.Streamer("test", tablet_ip, 1920, 1200, 60, 15000, "nvenc")
+        st["streamer"] = media.Streamer("test", tablet_ip, *session.mode, 15000, media.pick_encoder())
         st["streamer"].start()
 
     sess = WfdSession(conn, on_play, lambda: st.get("streamer") and st["streamer"].force_keyframe(),

@@ -29,9 +29,8 @@ install -m 644 "$top/data/$app_id.desktop" "$root/usr/share/applications/"
 install -m 644 "$top/data/$app_id.svg" "$root/usr/share/icons/hicolor/scalable/apps/"
 install -m 644 "$top/data/$app_id.metainfo.xml" "$root/usr/share/metainfo/"
 # S Pen as a real tablet: let the desktop user create virtual HID devices.
-echo 'KERNEL=="uhid", SUBSYSTEM=="misc", TAG+="uaccess"' > "$root/usr/lib/udev/rules.d/70-$pkg-uhid.rules"
-echo uhid > "$root/usr/lib/modules-load.d/$pkg-uhid.conf"
-chmod 644 "$root/usr/lib/udev/rules.d/70-$pkg-uhid.rules" "$root/usr/lib/modules-load.d/$pkg-uhid.conf"
+install -m 644 "$top/data/70-$pkg-uhid.rules" "$root/usr/lib/udev/rules.d/"
+install -m 644 "$top/data/$pkg-uhid.conf" "$root/usr/lib/modules-load.d/"
 
 install -m 644 "$top/README.md" "$root/usr/share/doc/$pkg/README.md"
 {

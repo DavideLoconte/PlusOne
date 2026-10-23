@@ -7,22 +7,24 @@ from gi.repository import Gst
 
 from . import log
 
+# name -> (GStreamer element, settings, raw format it takes), in preference order.
 ENCODERS = {
-    "nvenc": ("nvh264enc name=enc preset=low-latency-hq zerolatency=true bframes=0 "
-              "rc-mode=cbr bitrate={bitrate} gop-size={gop} aud=false"),
-    "vaapi": ("vaapih264enc name=enc rate-control=cbr bitrate={bitrate} keyframe-period={gop} "
-              "max-bframes=0 tune=low-power"),
-    "x264": ("x264enc name=enc tune=zerolatency speed-preset=ultrafast bitrate={bitrate} "
-             "key-int-max={gop} bframes=0"),
+    "nvenc": ("nvh264enc", "preset=low-latency-hq zerolatency=true bframes=0 rc-mode=cbr "
+              "bitrate={bitrate} gop-size={gop} aud=false", "BGRA"),
+    "vaapi": ("vaapih264enc", "rate-control=cbr bitrate={bitrate} keyframe-period={gop} "
+              "max-bframes=0 tune=low-power", "NV12"),
+    "x264": ("x264enc", "tune=zerolatency speed-preset=ultrafast bitrate={bitrate} "
+             "key-int-max={gop} bframes=0", "I420"),
 }
-ENCODER_INPUT = {"nvenc": "BGRA", "vaapi": "NV12", "x264": "I420"}
+# Mutter hands out BGRA as readily as BGRx; asking for it makes the colour
+# conversion a no-op for NVENC (it cost ~2.3 ms of CPU per 1920x1200 frame).
+CAPTURE_FORMAT = "BGRA"
 
 
 def pick_encoder(preferred="auto"):
     names = list(ENCODERS) if preferred == "auto" else [preferred]
-    factories = {"nvenc": "nvh264enc", "vaapi": "vaapih264enc", "x264": "x264enc"}
     for name in names:
-        if Gst.ElementFactory.find(factories[name]):
+        if Gst.ElementFactory.find(ENCODERS[name][0]):
             return name
     raise RuntimeError("no H.264 encoder available")
 
@@ -33,7 +35,8 @@ class Streamer:
         """source: a PipeWire node id, or "test" for a moving test pattern."""
         if source == "test":
             video = (f"videotestsrc is-live=true pattern=ball ! "
-                     f"video/x-raw,width={width},height={height},framerate={fps}/1 ! "
+                     f"video/x-raw,format={CAPTURE_FORMAT},width={width},height={height},"
+                     f"framerate={fps}/1 ! "
                      f"timeoverlay font-desc=\"Sans 90\" valignment=center halignment=center")
             if preview:
                 # Same picture in a local window: photograph both screens to
@@ -44,13 +47,15 @@ class Streamer:
             # Mutter only sends frames on damage; keepalive repeats the last
             # one so the sink keeps receiving data on a static screen.
             video = (f"pipewiresrc path={source} do-timestamp=true always-copy=false keepalive-time=100 ! "
-                     f"video/x-raw,width={width},height={height},max-framerate={fps}/1")
-        enc = ENCODERS[encoder].format(bitrate=bitrate, gop=fps * 2)
+                     f"video/x-raw,format={CAPTURE_FORMAT},width={width},height={height},"
+                     f"max-framerate={fps}/1")
+        element, options, raw_format = ENCODERS[encoder]
+        enc = f"{element} name=enc " + options.format(bitrate=bitrate, gop=fps * 2)
         self.pipeline = Gst.parse_launch(
             f"{video} ! queue max-size-buffers=1 leaky=downstream ! "
-            f"videoconvert n-threads=4 ! video/x-raw,format={ENCODER_INPUT[encoder]} ! "
+            f"videoconvert n-threads=4 ! video/x-raw,format={raw_format} ! "
             f"{enc} ! video/x-h264,profile=high ! h264parse config-interval=-1 ! "
-            f"queue max-size-buffers=2 ! mpegtsmux name=mux alignment=7 ! "
+            f"queue max-size-buffers=2 ! mpegtsmux alignment=7 ! "
             f"rtpmp2tpay pt=33 mtu=1400 ! "
             f"udpsink host={host} port={port} bind-port={bind_port} sync=false async=false")
         self.pipeline.get_bus().add_signal_watch()

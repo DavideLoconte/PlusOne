@@ -21,6 +21,52 @@ MODES = {
 }
 
 
+DEFAULT_MODE = (1920, 1080, 60)
+
+
+def parse_edid(value):
+    """(width, height, refresh) of the preferred timing in a wfd_display_edid value.
+
+    The value is "<block count, 4 hex digits> <EDID bytes in hex>", or "none".
+    """
+    parts = value.split()
+    if len(parts) != 2 or parts[0] == "none":
+        return None
+    try:
+        edid = bytes.fromhex(parts[1])
+    except ValueError:
+        return None
+    if len(edid) < 72 or edid[:8] != b"\x00\xff\xff\xff\xff\xff\xff\x00":
+        return None
+    dtd = edid[54:72]  # first detailed timing descriptor = preferred mode
+    clock_khz = int.from_bytes(dtd[0:2], "little") * 10
+    if not clock_khz:
+        return None
+    width = dtd[2] | (dtd[4] & 0xF0) << 4
+    height = dtd[5] | (dtd[7] & 0xF0) << 4
+    total = (width + (dtd[3] | (dtd[4] & 0x0F) << 8)) * (height + (dtd[6] | (dtd[7] & 0x0F) << 8))
+    return width, height, round(clock_khz * 1000 / total)
+
+
+def advertised_modes(value):
+    """Our MODES that the sink lists in its wfd_video_formats bitmaps."""
+    fields = value.split(",")[0].split()
+    if len(fields) < 6:
+        return []
+    bitmaps = {"CEA": int(fields[4], 16), "VESA": int(fields[5], 16)}
+    return [mode for mode, (table, bit) in MODES.items() if bitmaps[table] >> bit & 1]
+
+
+def choose_mode(caps):
+    """The sink's preferred EDID timing when we support it (Samsung only shares
+    its EDID with Windows sources), else the largest mode it advertises."""
+    preferred = parse_edid(caps.get("wfd_display_edid", "none"))
+    if preferred in MODES:
+        return preferred
+    advertised = advertised_modes(caps.get("wfd_video_formats", "none"))
+    return max(advertised, key=lambda m: (m[0] * m[1], m[2])) if advertised else DEFAULT_MODE
+
+
 def video_formats(width, height, fps):
     table, bit = MODES[(width, height, fps)]
     cea = 1 << bit if table == "CEA" else 0
@@ -92,8 +138,9 @@ def parse_params(body):
 class WfdSession:
     """Runs one sink connection; callbacks fire on the session thread."""
 
-    def __init__(self, conn, on_play, on_idr, on_close, mode=(1920, 1200, 60), uibc_port=None,
+    def __init__(self, conn, on_play, on_idr, on_close, mode=None, uibc_port=None,
                  sink_ip=None, rtcp_port=19001):
+        """mode: (width, height, fps), or None to pick it from the sink's caps."""
         self.conn = conn
         self.rtsp = Rtsp(conn)
         self.on_play = on_play
@@ -159,7 +206,7 @@ class WfdSession:
         rtsp = self.rtsp
         self.pending = {rtsp.request("OPTIONS", "*", extra={"Require": "org.wfa.wfd1.0"}): "M1"}
         m3_query = ("wfd_video_formats\r\nwfd_audio_codecs\r\nwfd_client_rtp_ports\r\n"
-                    "wfd_uibc_capability\r\nwfd_display_edid\r\nwfd_sec_sink_resolution\r\n")
+                    "wfd_uibc_capability\r\nwfd_display_edid\r\n")
         state = {"m1": False, "m2": False}
 
         def send_m3():
@@ -178,6 +225,9 @@ class WfdSession:
                             send_m3()
                     elif step == "M3":
                         self.caps = parse_params(body)
+                        if self.mode is None:
+                            self.mode = choose_mode(self.caps)
+                            log("mode from the tablet: {}x{}@{}".format(*self.mode))
                         self.pending[rtsp.request("SET_PARAMETER", "rtsp://localhost/wfd1.0",
                                                   self._m4())] = "M4"
                     elif step == "M4":
@@ -193,7 +243,8 @@ class WfdSession:
                     reply["Server"] = SERVER
                     rtsp.send("RTSP/1.0 200 OK", reply)
                     # Query capabilities only after the sink has seen our Server
-                    # header: it withholds its EDID from non-Windows sources.
+                    # header: it withholds its EDID (used by choose_mode) from
+                    # non-Windows sources.
                     state["m2"] = True
                     if state["m1"]:
                         send_m3()

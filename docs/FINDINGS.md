@@ -3,7 +3,7 @@
 Device: Galaxy Tab S10 FE+ (SM-X620), One UI 8.5 / Android 16, Second Screen
 `com.samsung.android.secondscreen` 1.0.17.9. Sink engine:
 `/system/lib64/libremotedisplay_wfd.so`. Analysed with REA (JADX) for the APK
-and `aarch64-linux-gnu-objdump` + `tools/arm64_strrefs.py` for the library.
+and `aarch64-linux-gnu-objdump` + `tools/re/arm64_strrefs.py` for the library.
 Prior art for the Windows side: paulorochagodoi/segunda-tela-linux.
 
 ## Protocol
