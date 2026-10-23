@@ -29,6 +29,7 @@ _IT = {
     "Reconnects when you reopen Second Screen": "Si ricollega quando riapri Second Screen",
     "Open Second Screen from here": "Apri Second Screen da qui",
     "Uses adb: needs wireless debugging on the tablet": "Usa adb: serve il debug wireless sul tablet",
+    "adb is not available": "adb non è disponibile",
     "Language": "Lingua",
     "System": "Sistema",
     "Log": "Registro",

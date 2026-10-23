@@ -89,3 +89,13 @@ def test_pen_report_without_descriptor_is_dropped(server):
     sink.sendall(packet(0, touch(TOUCH_DOWN, (0, 1, 1))))
     assert wait_for(lambda: injector.calls)
     assert pens == []
+
+
+def test_close_frees_the_port():
+    # A thread blocked in accept() used to keep the port listening after
+    # close(), so Stop then Start in the same window lost touch input.
+    srv = UibcServer(Recorder(), port=0)
+    port = srv.sock.getsockname()[1]
+    srv.close()
+    again = UibcServer(Recorder(), port=port)
+    again.close()

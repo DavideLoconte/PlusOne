@@ -1,6 +1,7 @@
 """GTK4 / libadwaita front end: one button, a status, a few settings."""
 import json
 import os
+import shutil
 import sys
 from dataclasses import asdict
 
@@ -97,7 +98,9 @@ class Window(Adw.ApplicationWindow):
         self.options_group = Adw.PreferencesGroup()
         self.touch_row = Adw.SwitchRow(active=self.settings.touch)
         self.ready_row = Adw.SwitchRow(active=self.settings.stay_ready)
-        self.adb_row = Adw.SwitchRow(active=self.settings.use_adb)
+        self.has_adb = shutil.which("adb") is not None
+        self.adb_row = Adw.SwitchRow(active=self.settings.use_adb and self.has_adb,
+                                     sensitive=self.has_adb)
         self.language_row = Adw.ComboRow(model=Gtk.StringList.new(
             [i18n.LANGUAGE_NAMES[code] for code in i18n.LANGUAGES]))
         language = self.settings.language if self.settings.language in i18n.LANGUAGES else "auto"
@@ -106,7 +109,9 @@ class Window(Adw.ApplicationWindow):
         for row in (self.touch_row, self.ready_row, self.adb_row, self.language_row):
             self.options_group.add(row)
         page.add(self.options_group)
-        self.setting_rows = [self.mode_row, self.bitrate_row, self.touch_row, self.adb_row]
+        self.setting_rows = [self.mode_row, self.bitrate_row, self.touch_row]
+        if self.has_adb:
+            self.setting_rows.append(self.adb_row)
 
         log_group = Adw.PreferencesGroup()
         self.log_expander = Gtk.Expander()
@@ -132,7 +137,8 @@ class Window(Adw.ApplicationWindow):
         self.ready_row.set_title(_("Stay ready"))
         self.ready_row.set_subtitle(_("Reconnects when you reopen Second Screen"))
         self.adb_row.set_title(_("Open Second Screen from here"))
-        self.adb_row.set_subtitle(_("Uses adb: needs wireless debugging on the tablet"))
+        self.adb_row.set_subtitle(_("Uses adb: needs wireless debugging on the tablet")
+                                  if self.has_adb else _("adb is not available"))
         self.language_row.set_title(_("Language"))
         self.log_expander.set_label(_("Log"))
         selected = self.mode_row.get_selected() if self.mode_row.get_model() else self._mode_selected

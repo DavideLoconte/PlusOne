@@ -9,6 +9,13 @@ gi.require_version("Gst", "1.0")
 gi.require_version("NM", "1.0")
 from gi.repository import GLib, Gst  # noqa: E402
 
+try:  # GLib >= 2.80 moved it; the old name warns in newer PyGObject
+    gi.require_version("GLibUnix", "2.0")
+    from gi.repository import GLibUnix  # noqa: E402
+    signal_add = GLibUnix.signal_add
+except (ValueError, ImportError, AttributeError):
+    signal_add = GLib.unix_signal_add
+
 from . import media, once  # noqa: E402
 from .engine import Controller, Settings, State  # noqa: E402
 from .rtsp import MODES  # noqa: E402
@@ -61,8 +68,8 @@ def main():
         GLib.timeout_add_seconds(2, loop.quit)
         return False
 
-    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, shutdown)
-    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, shutdown)
+    signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, shutdown)
+    signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, shutdown)
     GLib.idle_add(once(controller.start))
     loop.run()
 

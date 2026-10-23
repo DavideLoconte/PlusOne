@@ -11,6 +11,8 @@ from . import log
 ENCODERS = {
     "nvenc": ("nvh264enc", "preset=low-latency-hq zerolatency=true bframes=0 rc-mode=cbr "
               "bitrate={bitrate} gop-size={gop} aud=false", "BGRA"),
+    "va": ("vah264enc", "rate-control=cbr bitrate={bitrate} key-int-max={gop} b-frames=0 "
+           "target-usage=7", "NV12"),
     "vaapi": ("vaapih264enc", "rate-control=cbr bitrate={bitrate} keyframe-period={gop} "
               "max-bframes=0 tune=low-power", "NV12"),
     "x264": ("x264enc", "tune=zerolatency speed-preset=ultrafast bitrate={bitrate} "

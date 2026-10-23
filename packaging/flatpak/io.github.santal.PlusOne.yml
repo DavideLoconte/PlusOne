@@ -1,0 +1,104 @@
+app-id: io.github.santal.PlusOne
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+command: plus-one
+
+finish-args:
+  - --share=network                 # RTSP, RTP and UIBC sockets
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  # /dev/uhid turns the S Pen into a real tablet; also the NVIDIA encoder devices.
+  - --device=all
+  - --filesystem=xdg-run/pipewire-0 # capture of the virtual monitor
+  - --talk-name=org.gnome.Mutter.ScreenCast
+  - --talk-name=org.gnome.Mutter.RemoteDesktop
+  - --talk-name=org.gnome.Mutter.DisplayConfig
+  - --talk-name=org.gnome.NetworkDisplays  # to warn when it holds the Wi-Fi Direct device
+  - --system-talk-name=org.freedesktop.NetworkManager
+  # Map the pen onto the tablet's monitor in the host's GNOME settings (dconf).
+  - --filesystem=xdg-run/dconf
+  - --filesystem=~/.config/dconf:ro
+  - --talk-name=ca.desrt.dconf
+  - --env=DCONF_USER_CONFIG_DIR=.config/dconf
+  - --env=GSETTINGS_BACKEND=dconf
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/gir-1.0
+  - /share/man
+
+modules:
+  # libnm and its GObject introspection data (Wi-Fi Direct through NetworkManager);
+  # same recipe as GNOME Network Displays, plus introspection for Python.
+  - name: NetworkManager
+    buildsystem: meson
+    build-options:
+      cflags: -ltinfo
+      cxxflags: -ltinfo
+    config-opts:
+      - -Dsystemdsystemunitdir=no
+      - -Ddbus_conf_dir=/app/etc/dbus-1/system.d
+      - -Diptables=/usr/bin/true
+      - -Ddnsmasq=/usr/bin/true
+      - -Dsession_tracking=no
+      - -Dselinux=false
+      - -Dsystemd_journal=false
+      - -Dlibaudit=no
+      - -Dwext=false
+      - -Dwifi=true
+      - -Dppp=false
+      - -Dmodem_manager=false
+      - -Dovs=false
+      - -Dnmcli=false
+      - -Dnmtui=false
+      - -Dintrospection=true
+      - -Dvapi=false
+      - -Ddocs=false
+      - -Dtests=no
+      - -Dfirewalld_zone=false
+      - -Dlibpsl=false
+      - -Dqt=false
+      - -Dnm_cloud_setup=false
+    cleanup:
+      - /bin
+      - /etc
+      - /libexec
+      - /sbin
+      - /var
+      - /lib/NetworkManager
+    sources:
+      - type: git
+        url: https://gitlab.freedesktop.org/NetworkManager/NetworkManager.git
+        tag: 1.52.0
+        commit: 995a28fa1ccc54ad22e794294c3c6783cc3f30ed
+    modules:
+      - name: libndp
+        buildsystem: autotools
+        cleanup:
+          - /bin
+        sources:
+          - type: archive
+            url: https://github.com/jpirko/libndp/archive/v1.9.tar.gz
+            sha256: e564f5914a6b1b799c3afa64c258824a801c1b79a29e2fe6525b682249c65261
+
+  - name: plus-one
+    buildsystem: simple
+    build-commands:
+      - install -d /app/lib/plus-one/plusone
+      - install -m 644 plusone/*.py /app/lib/plus-one/plusone/
+      - install -Dm 755 packaging/flatpak/plus-one.sh /app/bin/plus-one
+      - install -Dm 644 data/io.github.santal.PlusOne.desktop -t /app/share/applications
+      - install -Dm 644 data/io.github.santal.PlusOne.svg -t /app/share/icons/hicolor/scalable/apps
+      - install -Dm 644 data/io.github.santal.PlusOne.metainfo.xml -t /app/share/metainfo
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - build
+          - dist
+          - .flatpak-builder
+          - flatpak-build

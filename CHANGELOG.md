@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Flatpak bundle (GNOME 50 runtime) built in CI and attached to releases.
+- Encoder `vah264enc` (GStreamer va plugin) for Intel/AMD where gstreamer-vaapi is gone.
+- Touch kept working after Stop then Start in the same window (the input
+  port stayed busy).
+- Survives the Wi-Fi device being reset by the driver (seen with Intel
+  firmware crashes) instead of hanging in "Connecting…".
+- GNOME Network Displays detected over D-Bus, which also works in a sandbox.
+
 ## 0.1.0
 
 First release.

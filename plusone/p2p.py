@@ -39,6 +39,7 @@ class P2PLink:
         self.on_hint = on_hint or (lambda: None)
         self.stopped = False
         self._handler = None
+        self._client_handlers = []
         self.client = NM.Client.new(None)
         self.device = next(d for d in self.client.get_devices() if isinstance(d, NM.DeviceWifiP2P))
         self.match = match.lower() if match else None
@@ -54,12 +55,32 @@ class P2PLink:
         return is_wfd_sink(peer)
 
     def start(self):
-        self._handler = self.device.connect("state-changed", self._state_changed)
-        self.device.start_find(None, None, None, None)
+        # An Intel firmware crash makes NetworkManager drop the P2P device and
+        # create a new one a second later; follow it instead of hanging.
+        self._client_handlers = [self.client.connect("device-removed", self._device_removed),
+                                 self.client.connect("device-added", self._device_added)]
+        self._watch(self.device)
+
+    def _watch(self, device):
+        self.device = device
+        self._handler = device.connect("state-changed", self._state_changed)
+        device.start_find(None, None, None, None)
         GLib.timeout_add(500, self._poll_peers)
 
+    def _device_removed(self, client, device):
+        if self.device is not None and device.get_path() == self.device.get_path():
+            log("Wi-Fi Direct: the Wi-Fi device went away (driver reset?), waiting for it")
+            self.device.handler_disconnect(self._handler)
+            self._handler = None
+            self.device = self.peer = self.ac = None
+
+    def _device_added(self, client, device):
+        if self.device is None and not self.stopped and isinstance(device, NM.DeviceWifiP2P):
+            log("Wi-Fi Direct: the Wi-Fi device is back, looking for the tablet again")
+            self._watch(device)
+
     def _poll_peers(self):
-        if self.peer or self.stopped:
+        if self.peer or self.stopped or self.device is None:
             return False
         for peer in self.device.get_peers():
             if self._matches(peer):
@@ -71,7 +92,7 @@ class P2PLink:
         return True
 
     def _activate(self):
-        if self.stopped or self.connected:
+        if self.stopped or self.connected or self.device is None or self.peer is None:
             return False
         self.attempt += 1
         con = NM.SimpleConnection.new()
@@ -101,7 +122,7 @@ class P2PLink:
         return False
 
     def _deadline(self, attempt):
-        if attempt != self.attempt or self.connected or self.stopped:
+        if attempt != self.attempt or self.connected or self.stopped or self.device is None:
             return False
         if self.device.get_state() in (NM.DeviceState.PREPARE, NM.DeviceState.CONFIG,
                                        NM.DeviceState.NEED_AUTH):
@@ -110,7 +131,7 @@ class P2PLink:
         return False
 
     def _rtsp_deadline(self, attempt):
-        if attempt == self.attempt and not self.connected and not self.stopped:
+        if attempt == self.attempt and not self.connected and not self.stopped and self.device:
             log("Wi-Fi Direct: group up but Second Screen did not start a session, retrying")
             self.device.disconnect_async(None, lambda *a: self._retry())
         return False
@@ -127,7 +148,10 @@ class P2PLink:
             log("Wi-Fi Direct activation failed:", e.message)
 
     def _state_changed(self, dev, new, old, reason):
-        if new == NM.DeviceState.ACTIVATED:
+        if new == NM.DeviceState.DISCONNECTED and self.peer is None and not self.stopped:
+            # A recreated device becomes usable here: search again.
+            dev.start_find(None, None, None, None)
+        elif new == NM.DeviceState.ACTIVATED:
             log("Wi-Fi Direct group up")
             GLib.timeout_add_seconds(RTSP_DEADLINE, self._rtsp_deadline, self.attempt)
         elif new == NM.DeviceState.FAILED and not self.connected and self.peer and not self.stopped:
@@ -136,10 +160,14 @@ class P2PLink:
 
     def stop(self, done=None):
         self.stopped = True
-        if self._handler is not None:
-            self.device.handler_disconnect(self._handler)
-            self._handler = None
-        self.device.stop_find(None, None, None)
+        for handler in self._client_handlers:
+            self.client.disconnect(handler)
+        self._client_handlers = []
+        if self.device is not None:
+            if self._handler is not None:
+                self.device.handler_disconnect(self._handler)
+                self._handler = None
+            self.device.stop_find(None, None, None)
         if self.ac is not None:
             self.client.deactivate_connection_async(self.ac, None,
                                                     lambda *a: done and done())

@@ -132,4 +132,10 @@ class UibcServer:
 
     def close(self):
         self._close_pen()
+        # shutdown() wakes the thread blocked in accept(); close() alone leaves
+        # the port listening until the process exits.
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
         self.sock.close()

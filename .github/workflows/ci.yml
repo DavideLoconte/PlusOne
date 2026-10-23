@@ -20,3 +20,17 @@ jobs:
         with:
           name: deb
           path: dist/*.deb
+
+  flatpak:
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6.8
+        with:
+          bundle: plus-one.flatpak
+          manifest-path: packaging/flatpak/io.github.santal.PlusOne.yml
+          # libnm only rebuilds when the manifest changes.
+          cache-key: flatpak-builder-${{ hashFiles('packaging/flatpak/*.yml') }}

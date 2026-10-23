@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 build/
 dist/
+.flatpak-builder/
+flatpak-build/
+flatpak-repo/
+*.flatpak

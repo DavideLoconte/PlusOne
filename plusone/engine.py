@@ -5,11 +5,10 @@ the GTK application for the GUI). Blocking work (adb, the RTSP session)
 happens on helper threads and reports back through GLib.idle_add.
 """
 import socket
-import subprocess
 import threading
 from dataclasses import dataclass
 
-from gi.repository import GLib
+from gi.repository import Gio, GLib
 
 from . import log, media, once, pen, tablet
 from .display import VirtualMonitor, virtual_monitor_edid
@@ -45,10 +44,21 @@ class State:
     ERROR = "error"
 
 
+# Programs known to fight over the Wi-Fi Direct device, by D-Bus name: unlike
+# the process list, the session bus is visible from inside a Flatpak sandbox.
+CONFLICTING_APPS = {"org.gnome.NetworkDisplays": "GNOME Network Displays"}
+
+
 def conflicting_apps():
-    """Programs known to fight over the Wi-Fi Direct device."""
-    out = subprocess.run(["pgrep", "-x", "gnome-network-d"], capture_output=True, text=True).stdout
-    return ["GNOME Network Displays"] if out.strip() else []
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    running = []
+    for name, label in CONFLICTING_APPS.items():
+        owned = bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+                              "NameHasOwner", GLib.Variant("(s)", (name,)), None,
+                              Gio.DBusCallFlags.NONE, -1, None).unpack()[0]
+        if owned:
+            running.append(label)
+    return running
 
 
 class Controller:

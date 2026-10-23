@@ -58,6 +58,29 @@ tablet with pressure; any program you run gets the same ability.
 
 Uninstall with `sudo apt remove plus-one`.
 
+### Flatpak (any distribution with GNOME)
+
+Download `plus-one_<version>_x86_64.flatpak` from the [Releases](../../releases)
+page, then:
+
+```bash
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install --user ./plus-one_v0.2.0_x86_64.flatpak
+```
+
+The GNOME runtime it needs comes from Flathub. Differences from the `.deb`:
+
+- A sandbox cannot install udev rules, so for S Pen pressure and tilt run once
+  on the host (without it the pen works as a mouse):
+
+  ```bash
+  sudo sh -c 'echo "KERNEL==\"uhid\", SUBSYSTEM==\"misc\", TAG+=\"uaccess\"" > /etc/udev/rules.d/70-plus-one-uhid.rules
+              echo uhid > /etc/modules-load.d/plus-one-uhid.conf
+              modprobe uhid && udevadm control --reload
+              udevadm trigger --action=change --subsystem-match=misc --sysname-match=uhid'
+  ```
+- No *Open Second Screen from here* (adb is not in the sandbox).
+
 ### From source
 
 ```bash
@@ -195,7 +218,15 @@ tools/ci-docker.sh               # everything CI runs, in an Ubuntu 24.04 contai
 
 `tools/ci-docker.sh` builds `Dockerfile.ci`, runs the tests, builds the `.deb`
 into `dist/` and checks it with lintian. GitHub Actions runs the same container
-on every push and pull request.
+on every push and pull request, and also builds the Flatpak.
+
+Flatpak, locally:
+
+```bash
+flatpak install --user flathub org.flatpak.Builder org.gnome.Sdk//50
+flatpak run org.flatpak.Builder --user --install --force-clean flatpak-build \
+    packaging/flatpak/io.github.santal.PlusOne.yml
+```
 
 ### Releasing
 
@@ -203,8 +234,8 @@ on every push and pull request.
    `CHANGELOG.md`.
 2. Commit, then tag and push: `git tag v0.2.0 && git push origin main v0.2.0`.
 3. The *Release* workflow checks that the tag matches the version, runs the
-   tests, builds the `.deb` and publishes a GitHub release with it and the
-   changelog section as notes. No tests, no release.
+   tests, builds the `.deb` and the Flatpak bundle and publishes a GitHub
+   release with both and the changelog section as notes. No tests, no release.
 
 ## Acknowledgements
 
