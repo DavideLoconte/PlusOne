@@ -46,6 +46,10 @@ def prepare(serial, restart=True):
     if restart:
         # A fresh Second Screen instance negotiates Wi-Fi Direct reliably.
         _adb("-s", serial, "shell", "am", "force-stop", PACKAGE)
+    elif _foreground_is_second_screen(serial):
+        # The tile is a toggle: clicking it now would close the receiver.
+        log("tablet: Second Screen already open")
+        return True
     # Right after a force-stop the tile service is still rebinding and may
     # swallow the click, so check that the receiver actually came up.
     for _ in range(3):
