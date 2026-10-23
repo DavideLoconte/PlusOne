@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
 - Flatpak bundle (GNOME 50 runtime) built in CI and attached to releases.
 - Encoder `vah264enc` (GStreamer va plugin) for Intel/AMD where gstreamer-vaapi is gone.
@@ -9,6 +9,10 @@
 - Survives the Wi-Fi device being reset by the driver (seen with Intel
   firmware crashes) instead of hanging in "Connecting…".
 - GNOME Network Displays detected over D-Bus, which also works in a sandbox.
+
+Install: `sudo apt install ./plus-one_0.2.0_all.deb` (Ubuntu 24.04), or
+`flatpak install --user ./plus-one_v0.2.0_x86_64.flatpak` (any distribution
+with GNOME on Wayland; see the README for S Pen pressure in the Flatpak).
 
 ## 0.1.0
 

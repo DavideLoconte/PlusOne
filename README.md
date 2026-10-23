@@ -48,7 +48,7 @@ Download `plus-one_<version>_all.deb` from the
 [Releases](../../releases) page, then:
 
 ```bash
-sudo apt install ./plus-one_0.1.0_all.deb
+sudo apt install ./plus-one_0.2.0_all.deb
 ```
 
 The package pulls in GTK 4, libadwaita, GStreamer and NetworkManager bindings
