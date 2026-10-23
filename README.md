@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="data/io.github.santal.PlusOne.svg" width="128" alt="Plus One icon">
+  <img src="data/io.github.gabrielesantangelo.PlusOne.svg" width="128" alt="Plus One icon">
 </p>
 
 <h1 align="center">Plus One</h1>
@@ -25,9 +25,11 @@ No app to install on the tablet: it talks to the <b>Second Screen</b> feature Sa
   H.264 (NVENC, VA-API) or x264.
 - **Touch and S Pen.** Fingers drive the desktop; the S Pen becomes a real Linux
   drawing tablet with pressure (4096 levels), tilt and hover.
+- **One click.** A *Tablet* toggle in GNOME's Quick Settings, a notification
+  with *Disconnect*, and Plus One ready in the background from login.
 - **Wireless, no setup.** Wi-Fi Direct between PC and tablet, no router needed,
   no developer options on the tablet. Reconnects by itself when you reopen
-  Second Screen.
+  Second Screen soon after closing it.
 - **Correct aspect ratio, automatically.** The tablet's preferred mode is read
   from its EDID (1920×1200 on a Tab S10 FE+), so the picture fills the screen.
 - **Simple GNOME app**, in English and Italian.
@@ -48,13 +50,16 @@ Download `plus-one_<version>_all.deb` from the
 [Releases](../../releases) page, then:
 
 ```bash
-sudo apt install ./plus-one_0.2.0_all.deb
+sudo apt install ./plus-one_0.3.0_all.deb
 ```
 
 The package pulls in GTK 4, libadwaita, GStreamer and NetworkManager bindings
 from your distribution. It also installs a udev rule that lets the logged-in
 user create virtual HID devices (`/dev/uhid`), which is how the S Pen becomes a
 tablet with pressure; any program you run gets the same ability.
+
+The *Tablet* Quick Settings toggle is included and switches itself on the
+first time Plus One runs after you log in again.
 
 Uninstall with `sudo apt remove plus-one`.
 
@@ -65,7 +70,7 @@ page, then:
 
 ```bash
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-flatpak install --user ./plus-one_v0.2.0_x86_64.flatpak
+flatpak install --user ./plus-one_v0.3.0_x86_64.flatpak
 ```
 
 The GNOME runtime it needs comes from Flathub. Differences from the `.deb`:
@@ -80,12 +85,19 @@ The GNOME runtime it needs comes from Flathub. Differences from the `.deb`:
               udevadm trigger --action=change --subsystem-match=misc --sysname-match=uhid'
   ```
 - No *Open Second Screen from here* (adb is not in the sandbox).
+- The Quick Settings toggle is a GNOME Shell extension, which a Flatpak cannot
+  install. Get `plus-one@gabrielesantangelo.github.io.shell-extension.zip` from
+  the same release, then run
+  `gnome-extensions install plus-one@gabrielesantangelo.github.io.shell-extension.zip`,
+  log out and back in, and enable it in *Extensions*.
+- Upgrading from 0.2: the app ID changed, so remove the old one with
+  `flatpak uninstall io.github.santal.PlusOne`.
 
 ### From source
 
 ```bash
 git clone https://github.com/GabrieleSantangelo/PlusOne.git plus-one && cd plus-one
-./install.sh               # menu entry + icon for your user, no root
+./install.sh               # menu entry, icon, Quick Settings toggle for your user, no root
 sudo ./enable-pen.sh       # optional: S Pen pressure and tilt (uhid access)
 ```
 
@@ -99,13 +111,29 @@ sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gstreamer-1.0 gir
 
 ## Usage
 
-1. Open **Plus One** and press **Start**.
+1. Click **Tablet** in GNOME's Quick Settings (top-right corner), or press
+   **Connect** in the Plus One window.
 2. On the tablet, swipe down for quick settings and tap **Second screen**.
 3. A few seconds later the tablet shows a new monitor, to the right of your
    other screens. Arrange it in *Settings → Displays*.
 
-To stop, press **Stop**, or close Second Screen on the tablet. With
-*Stay ready* on, the app waits and reconnects as soon as you reopen the tile.
+The order does not matter: you can tap the tablet first. To stop, click the
+toggle again, use *Disconnect* in the notification, or close Second Screen on
+the tablet; reopening it within a minute and a half reconnects by itself.
+
+Plus One runs in the background from login (*Ready in the background*), so the
+toggle answers at once; idle, it uses no radio and no CPU. It only searches for
+the tablet after you ask, and gives up after two minutes without an answer:
+while it searches, the Wi-Fi card also scans for Wi-Fi Direct devices and
+other traffic sees occasional delays of about 100 ms.
+
+To connect from a keyboard shortcut, bind this command in *Settings → Keyboard
+→ Custom Shortcuts* (`Disconnect` works the same way):
+
+```bash
+gdbus call --session -d io.github.gabrielesantangelo.PlusOne -o /io/github/gabrielesantangelo/PlusOne \
+    -m io.github.gabrielesantangelo.PlusOne1.Connect
+```
 
 ### Recommended once: tablet low-latency mode
 
@@ -128,7 +156,7 @@ If the tablet is connected over adb (see below) Plus One writes this file for yo
 | Resolution | *Automatic* (default) reads the tablet's preferred mode from its EDID (1920×1200 on a Tab S10 FE+), or pick 1920×1200, 1680×1050, 1440×900, 1280×800 (16:10), 1920×1080, 1280×720 (16:9). |
 | Quality | Video bitrate in Mbit/s. 20 is a good default; raise it for crisper text. |
 | Touch and S Pen | Forward finger touches and the pen from the tablet. |
-| Stay ready | After the tablet disconnects, wait for it to come back. |
+| Ready in the background | Start at login and keep running after the window closes, so the Quick Settings toggle connects at once. Costs nothing while idle. |
 | Open Second Screen from here | Uses `adb` to open the tile for you. Needs *USB debugging* or *Wireless debugging* on the tablet; off by default. |
 | Language | System, English or Italiano. |
 
@@ -167,7 +195,8 @@ latency.
 | Picture squashed or with black bars | Use one of the listed modes; the tablet lays out the picture by the negotiated mode. |
 | Stutter / artefacts | Lower *Quality*, move closer, avoid 2.4 GHz congestion. Packet loss shows in the log. |
 | Pen not in GIMP | See the S Pen section (restart GIMP, enable *xwayland-tablet stylus*). |
-| App icon missing after install | Log out and back in; GNOME Shell caches icons. |
+| App icon or Quick Settings toggle missing after install | Log out and back in; GNOME Shell only looks for new icons and extensions at login. |
+| Wi-Fi slower for a moment | Expected while Plus One searches for the tablet (up to two minutes after you click *Tablet*); it stops once connected or after giving up. |
 
 ## How it works
 
@@ -194,6 +223,11 @@ remote desktop  ◀──── touch ───── UIBC server ◀───�
 - **Input**: UIBC generic events become Mutter remote-desktop touches; the pen
   arrives as an HID device whose descriptor and reports are replayed into
   `/dev/uhid`.
+- **Application**: one GApplication process holds the connection and offers it
+  over D-Bus (`io.github.gabrielesantangelo.PlusOne1`: `Connect`, `Disconnect`,
+  `ShowWindow`, properties `State`, `Active`, `Title`, `Detail`, `Background`).
+  The window, the notifications and the Quick Settings extension are front
+  ends; D-Bus activation starts the process when one of them needs it.
 
 Details, evidence and the tools used are in [docs/FINDINGS.md](docs/FINDINGS.md).
 
@@ -203,7 +237,9 @@ What comes next, and the convenience rules every feature follows, is in
 ## Development
 
 ```
-plusone/          the app (engine.py ties display, p2p, rtsp, media, uibc, pen together)
+plusone/          the app: app.py (background app, D-Bus, notifications), gui.py (window),
+                  engine.py (ties display, p2p, rtsp, media, uibc, pen together)
+data/gnome-shell/ the Quick Settings extension
 tests/            unit and protocol tests (a scripted fake tablet, no hardware needed)
 packaging/        build-deb.sh and maintainer scripts
 tools/            CI scripts; tools/re/ has the reverse-engineering and measurement helpers
@@ -228,17 +264,18 @@ Flatpak, locally:
 ```bash
 flatpak install --user flathub org.flatpak.Builder org.gnome.Sdk//50
 flatpak run org.flatpak.Builder --user --install --force-clean flatpak-build \
-    packaging/flatpak/io.github.santal.PlusOne.yml
+    packaging/flatpak/io.github.gabrielesantangelo.PlusOne.yml
 ```
 
 ### Releasing
 
 1. Bump `__version__` in `plusone/__init__.py` and add a section to
    `CHANGELOG.md`.
-2. Commit, then tag and push: `git tag v0.2.0 && git push origin main v0.2.0`.
+2. Commit, then tag and push: `git tag v0.3.0 && git push origin main v0.3.0`.
 3. The *Release* workflow checks that the tag matches the version, runs the
    tests, builds the `.deb` and the Flatpak bundle and publishes a GitHub
-   release with both and the changelog section as notes. No tests, no release.
+   release with both, the Quick Settings extension zip and the changelog
+   section as notes. No tests, no release.
 
 ## Acknowledgements
 

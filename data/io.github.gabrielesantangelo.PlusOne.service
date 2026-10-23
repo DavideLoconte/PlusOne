@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=io.github.gabrielesantangelo.PlusOne
+Exec=/usr/bin/plus-one --gapplication-service

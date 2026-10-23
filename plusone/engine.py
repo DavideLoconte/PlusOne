@@ -18,6 +18,9 @@ from .uibc import UibcServer
 
 RTSP_PORT = 7236
 UIBC_PORT = 50000
+# Searching for the tablet keeps the Wi-Fi radio busy, so it is time-boxed:
+CONNECT_WINDOW = 120    # after the user asks to connect
+RECONNECT_WINDOW = 90   # after the tablet closes Second Screen, to catch a reopen
 
 
 @dataclass
@@ -32,8 +35,12 @@ class Settings:
     touch: bool = True
     test_pattern: bool = False
     peer: str | None = None
-    stay_ready: bool = True  # go back to waiting after the tablet disconnects
+    reconnect: bool = True  # look for the tablet again for a while after it disconnects
+    # The app (not the engine): keep running without a window and start at
+    # login, so the Quick Settings toggle connects at once.
+    background: bool = True
     language: str = "auto"
+    extension_enabled_once: bool = False  # see app.enable_shell_extension
 
 
 class State:
@@ -115,26 +122,19 @@ class Controller:
         self._running = True
         if not s.test_pattern:
             self.monitor = VirtualMonitor(on_ready=self._start_stream)
-            if s.touch:
-                try:
-                    self.uibc = UibcServer(self.monitor, UIBC_PORT, pen_factory=self._make_pen)
-                except OSError as e:
-                    log("touch disabled:", e)
         threading.Thread(target=self._accept_loop, daemon=True).start()
         if s.use_adb:
             self._set_state(State.WAITING, "Opening Second Screen on the tablet…")
             threading.Thread(target=self._adb_open, daemon=True).start()
         else:
-            self._wait_for_tablet()
+            self._wait_for_tablet(CONNECT_WINDOW)
 
-    def stop(self):
+    def stop(self, reason=""):
+        """reason: English template shown with the idle state (see i18n)."""
         if not self._running:
             return
         self._running = False
         self._end_session()
-        if self.uibc:
-            self.uibc.close()
-            self.uibc = None
         if self.srv:
             try:
                 self.srv.shutdown(socket.SHUT_RDWR)
@@ -142,7 +142,7 @@ class Controller:
                 pass
             self.srv.close()
             self.srv = None
-        self._set_state(State.IDLE)
+        self._set_state(State.IDLE, reason)
 
     # -- internals -----------------------------------------------------------
     def _adb_open(self):
@@ -151,14 +151,18 @@ class Controller:
             tablet.prepare(serial, restart=False)
         else:
             log("adb: no tablet attached, open Second Screen by hand")
-        self._from_thread(self._wait_for_tablet)
+        self._from_thread(self._wait_for_tablet, CONNECT_WINDOW)
 
-    def _wait_for_tablet(self):
-        if not self._running:
+    def _wait_for_tablet(self, window):
+        if not self._running or self.link is not None or self.session is not None:
             return
         self._set_state(State.WAITING, "Tap “Second screen” on the tablet")
-        self.link = P2PLink(self.settings.peer, on_found=self._on_found, on_hint=self._on_link_hint)
+        self.link = P2PLink(self.settings.peer, on_found=self._on_found, on_hint=self._on_link_hint,
+                            give_up_after=window, on_give_up=self._on_give_up)
         self.link.start()
+
+    def _on_give_up(self):
+        self.stop("The tablet did not answer: open Second Screen on it and connect again")
 
     def _on_found(self, name):
         self._set_state(State.CONNECTING, "Connecting to {name}…", name=name)
@@ -176,6 +180,11 @@ class Controller:
                 self.link.connected = True
             log("sink connected from", addr[0])
             s = self.settings
+            if s.touch and self.monitor:
+                try:
+                    self.uibc = UibcServer(self.monitor, UIBC_PORT, pen_factory=self._make_pen)
+                except OSError as e:
+                    log("touch disabled:", e)
             self.session = WfdSession(conn, self._on_play, self._on_idr,
                                       on_close=lambda: self._from_thread(self._on_session_closed),
                                       mode=None if s.auto_mode else (s.width, s.height, s.fps),
@@ -223,6 +232,9 @@ class Controller:
         if self.streamer:
             self.streamer.stop()
             self.streamer = None
+        if self.uibc:
+            self.uibc.close()
+            self.uibc = None
         if self.monitor:
             self.monitor.stop()
         if self.link:
@@ -232,8 +244,10 @@ class Controller:
     def _on_session_closed(self):
         log("tablet disconnected")
         self._end_session()
-        if self._running and self.settings.stay_ready:
-            # Give the tablet a moment to tear its group down before searching again.
-            GLib.timeout_add_seconds(3, once(self._wait_for_tablet))
+        if self._running and self.settings.reconnect:
+            # Reopening Second Screen soon reconnects. Give the tablet a moment
+            # to tear its group down before searching again.
+            self._set_state(State.WAITING, "Tap “Second screen” on the tablet")
+            GLib.timeout_add_seconds(3, once(self._wait_for_tablet, RECONNECT_WINDOW))
         elif self._running:
             self.stop()

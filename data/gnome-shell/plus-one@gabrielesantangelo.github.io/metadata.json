@@ -1,0 +1,7 @@
+{
+  "uuid": "plus-one@gabrielesantangelo.github.io",
+  "name": "Plus One",
+  "description": "Quick Settings toggle for Plus One: use a Samsung Galaxy Tab as a second screen with one click.",
+  "shell-version": ["45", "46", "47", "48", "49"],
+  "url": "https://github.com/GabrieleSantangelo/PlusOne"
+}

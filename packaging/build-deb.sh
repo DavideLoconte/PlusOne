@@ -5,7 +5,7 @@ umask 022
 here="$(dirname "$(readlink -f "$0")")"
 top="$(dirname "$here")"
 version="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$top/plusone/__init__.py")"
-app_id=io.github.santal.PlusOne
+app_id=io.github.gabrielesantangelo.PlusOne
 pkg=plus-one
 maintainer="santal1210 <sant.nino02@gmail.com>"
 root="$top/build/deb/${pkg}_${version}_all"
@@ -13,7 +13,7 @@ root="$top/build/deb/${pkg}_${version}_all"
 rm -rf "$root"
 install -d "$root/DEBIAN" "$root/usr/bin" "$root/usr/lib/$pkg" \
     "$root/usr/share/applications" "$root/usr/share/icons/hicolor/scalable/apps" \
-    "$root/usr/share/metainfo" "$root/usr/share/doc/$pkg" \
+    "$root/usr/share/metainfo" "$root/usr/share/doc/$pkg" "$root/usr/share/dbus-1/services" \
     "$root/usr/lib/udev/rules.d" "$root/usr/lib/modules-load.d"
 
 cp -r "$top/plusone" "$root/usr/lib/$pkg/"
@@ -28,6 +28,11 @@ chmod 755 "$root/usr/bin/$pkg"
 install -m 644 "$top/data/$app_id.desktop" "$root/usr/share/applications/"
 install -m 644 "$top/data/$app_id.svg" "$root/usr/share/icons/hicolor/scalable/apps/"
 install -m 644 "$top/data/$app_id.metainfo.xml" "$root/usr/share/metainfo/"
+install -m 644 "$top/data/$app_id.service" "$root/usr/share/dbus-1/services/"
+# Quick Settings toggle; Plus One enables it the first time it runs.
+install -d "$root/usr/share/gnome-shell/extensions"
+cp -r "$top/data/gnome-shell/." "$root/usr/share/gnome-shell/extensions/"
+chmod -R u=rwX,go=rX "$root/usr/share/gnome-shell"
 # S Pen as a real tablet: let the desktop user create virtual HID devices.
 install -m 644 "$top/data/70-$pkg-uhid.rules" "$root/usr/lib/udev/rules.d/"
 install -m 644 "$top/data/$pkg-uhid.conf" "$root/usr/lib/modules-load.d/"
@@ -62,7 +67,7 @@ Architecture: all
 Maintainer: $maintainer
 Installed-Size: $size
 Depends: python3 (>= 3.10), python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1 (>= 1.4), gir1.2-gstreamer-1.0, gir1.2-nm-1.0, gstreamer1.0-pipewire, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, network-manager, kmod, udev
-Recommends: gstreamer1.0-vaapi, gstreamer1.0-plugins-ugly, gstreamer1.0-x
+Recommends: gstreamer1.0-vaapi, gstreamer1.0-plugins-ugly, gstreamer1.0-x, gnome-shell (>= 45)
 Suggests: adb
 Homepage: https://github.com/GabrieleSantangelo/PlusOne
 Description: use a Samsung Galaxy Tab as a second monitor via Second Screen

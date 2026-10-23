@@ -1,16 +1,24 @@
 #!/bin/sh
-# Per-user install: menu entry + icon pointing at this checkout. No root needed.
+# Per-user install: menu entry, icon, D-Bus activation and the Quick Settings
+# toggle, all pointing at this checkout. No root needed.
 set -e
 here="$(dirname "$(readlink -f "$0")")"
-app_id=io.github.santal.PlusOne
-apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-icons="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/apps"
-mkdir -p "$apps" "$icons" "$HOME/.local/bin"
+app_id=io.github.gabrielesantangelo.PlusOne
+data="${XDG_DATA_HOME:-$HOME/.local/share}"
+apps="$data/applications"
+icons="$data/icons/hicolor/scalable/apps"
+services="$data/dbus-1/services"
+extensions="$data/gnome-shell/extensions"
+mkdir -p "$apps" "$icons" "$services" "$extensions" "$HOME/.local/bin"
 cp "$here/data/$app_id.svg" "$icons/$app_id.svg"
 ln -sf "$here/bin/plus-one" "$HOME/.local/bin/plus-one"
 # Same entry as the package, but launching this checkout.
 sed "s|^Exec=.*|Exec=$here/bin/plus-one|" "$here/data/$app_id.desktop" > "$apps/$app_id.desktop"
+sed "s|^Exec=[^ ]*|Exec=$here/bin/plus-one|" "$here/data/$app_id.service" > "$services/$app_id.service"
+ext=plus-one@gabrielesantangelo.github.io
+ln -sfn "$here/data/gnome-shell/$ext" "$extensions/$ext"
 update-desktop-database "$apps" 2>/dev/null || true
 # -f -t: the per-user hicolor dir has no index.theme, and a stale cache hides new icons.
 gtk-update-icon-cache -q -f -t "${icons%/scalable/apps}" 2>/dev/null || true
 echo "Installed: look for «Plus One» in your apps (or run plus-one)."
+echo "The Quick Settings toggle appears after you log out and back in."

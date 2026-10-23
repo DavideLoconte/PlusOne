@@ -24,11 +24,11 @@ def strings_in(filename):
     return found
 
 
-def gui_constants():
+def app_constants():
     from_module = set()
-    tree = ast.parse(open(os.path.join(ROOT, "gui.py")).read())
+    tree = ast.parse(open(os.path.join(ROOT, "app.py")).read())
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") in ("STATUS", "IDLE_HINT"):
+        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") in ("TITLES", "IDLE_HINT"):
             for const in ast.walk(node.value):
                 if isinstance(const, ast.Constant) and isinstance(const.value, str) \
                         and not const.value.endswith("-symbolic"):
@@ -37,7 +37,8 @@ def gui_constants():
 
 
 @pytest.mark.parametrize("text", sorted(
-    (strings_in("gui.py") | strings_in("engine.py") | gui_constants()) - i18n.NEUTRAL))
+    (strings_in("gui.py") | strings_in("app.py") | strings_in("engine.py") | app_constants())
+    - i18n.NEUTRAL))
 def test_has_italian(text):
     assert text in i18n._IT, f"missing Italian translation for {text!r}"
 
@@ -53,9 +54,9 @@ def test_language_selection(monkeypatch):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("LANG", "it_IT.UTF-8")
     i18n.set_language("auto")
-    assert i18n._("Start") == "Avvia"
+    assert i18n._("Connect") == "Collega"
     i18n.set_language("en")
-    assert i18n._("Start") == "Start"
+    assert i18n._("Connect") == "Connect"
     monkeypatch.setenv("LANG", "de_DE.UTF-8")
     i18n.set_language("auto")
-    assert i18n._("Start") == "Start"
+    assert i18n._("Connect") == "Connect"

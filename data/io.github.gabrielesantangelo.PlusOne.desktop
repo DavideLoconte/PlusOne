@@ -3,7 +3,14 @@ Type=Application
 Name=Plus One
 Comment=Use your Samsung Galaxy Tab as a second monitor via Second Screen
 Exec=plus-one
-Icon=io.github.santal.PlusOne
+Icon=io.github.gabrielesantangelo.PlusOne
 Categories=Utility;GTK;
 Keywords=tablet;monitor;second screen;miracast;display;galaxy;
 StartupNotify=true
+DBusActivatable=true
+Actions=connect;
+
+[Desktop Action connect]
+Name=Connect the tablet
+Name[it]=Collega il tablet
+Exec=plus-one

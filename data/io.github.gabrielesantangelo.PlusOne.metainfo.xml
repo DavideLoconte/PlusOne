@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.santal.PlusOne</id>
+  <id>io.github.gabrielesantangelo.PlusOne</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
   <name>Plus One</name>
-  <developer id="io.github.santal">
+  <developer id="io.github.gabrielesantangelo">
     <name>santal1210</name>
   </developer>
   <content_rating type="oars-1.1"/>
@@ -16,8 +16,12 @@
     Second Screen app already on the tablet: virtual monitor, Wi-Fi Direct,
     low-latency H.264 video, touch and S Pen with pressure and tilt.</p>
   </description>
-  <launchable type="desktop-id">io.github.santal.PlusOne.desktop</launchable>
+  <launchable type="desktop-id">io.github.gabrielesantangelo.PlusOne.desktop</launchable>
+  <replaces>
+    <id>io.github.santal.PlusOne</id>
+  </replaces>
   <releases>
+    <release version="0.3.0" date="2026-10-23"/>
     <release version="0.2.0" date="2026-10-23"/>
     <release version="0.1.0" date="2026-10-23"/>
   </releases>

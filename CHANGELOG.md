@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.0
+
+Always ready, one click away.
+
+- *Tablet* toggle in GNOME's Quick Settings (GNOME Shell 45–49): connect and
+  disconnect with one click, state as subtitle, icon in the top bar while
+  connected. Shipped in the `.deb` and switched on automatically once; a zip
+  for Flatpak users is attached to the release.
+- Plus One runs in the background from login (*Ready in the background*, on by
+  default): no window needed, nothing running on the radio while idle.
+  D-Bus interface `io.github.gabrielesantangelo.PlusOne1` for the toggle,
+  scripts and keyboard shortcuts; D-Bus activation starts the app on demand.
+- Notifications: connected (with *Disconnect*), tablet not found, problems.
+- Searching for the tablet is time-boxed (2 minutes after a click, 90 seconds
+  after Second Screen closes) because Wi-Fi Direct scanning delays other Wi-Fi
+  traffic (measured: 20% of packets over 30 ms while searching).
+- Touch, resolution and quality settings apply from the next connection
+  without restarting anything.
+- New app ID `io.github.gabrielesantangelo.PlusOne` (needed for Flathub).
+  Flatpak users: `flatpak uninstall io.github.santal.PlusOne` after
+  installing this version.
+
 ## 0.2.0
 
 - Flatpak bundle (GNOME 50 runtime) built in CI and attached to releases.

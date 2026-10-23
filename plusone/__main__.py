@@ -29,9 +29,11 @@ def parse_size(text):
 
 
 def main():
-    if len(sys.argv) == 1 or sys.argv[1:] == ["--gui"]:
-        from .gui import main as gui_main
-        return gui_main()
+    if sys.argv[1:] in ([], ["--gui"], ["--gapplication-service"]):
+        # The application: window, background service, D-Bus interface.
+        from .app import main as app_main
+        service = sys.argv[1:] == ["--gapplication-service"]
+        return app_main(sys.argv if service else sys.argv[:1])
 
     ap = argparse.ArgumentParser(prog="plus-one", description=__doc__)
     ap.add_argument("--cli", action="store_true", help="run without the window")
@@ -55,7 +57,7 @@ def main():
     settings = Settings(auto_mode=args.size is None, width=width, height=height, fps=args.fps,
                         bitrate=args.bitrate, encoder=args.encoder, use_adb=not args.no_adb,
                         touch=not args.no_input, test_pattern=args.test, peer=args.peer,
-                        stay_ready=not args.once)
+                        reconnect=not args.once)
 
     def on_state(state, template, args):
         if state == State.IDLE or (state == State.ERROR and not controller.running):

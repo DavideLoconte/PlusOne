@@ -1,7 +1,7 @@
 """Use a Samsung Galaxy Tab's built-in Second Screen app as a Linux monitor."""
 import time
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 _handlers = []
 
@@ -24,3 +24,7 @@ def once(fn, *args):
 def add_log_handler(handler):
     """handler(line) is called from whichever thread logged; marshal as needed."""
     _handlers.append(handler)
+
+
+def remove_log_handler(handler):
+    _handlers.remove(handler)

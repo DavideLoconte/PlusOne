@@ -38,7 +38,7 @@ jobs:
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6.8
         with:
           bundle: plus-one_${{ github.ref_name }}_x86_64.flatpak
-          manifest-path: packaging/flatpak/io.github.santal.PlusOne.yml
+          manifest-path: packaging/flatpak/io.github.gabrielesantangelo.PlusOne.yml
           cache-key: flatpak-builder-${{ hashFiles('packaging/flatpak/*.yml') }}
           upload-artifact: false
       - uses: actions/upload-artifact@v4
@@ -60,9 +60,13 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           awk -v v="$version" '/^## /{p = ($2 == v)} p' CHANGELOG.md | tail -n +2 > notes.md
           test -s notes.md || echo "Plus One $GITHUB_REF_NAME" > notes.md
+      - name: Quick Settings extension (for the Flatpak; the .deb ships it)
+        run: |
+          ext=plus-one@gabrielesantangelo.github.io
+          (cd "data/gnome-shell/$ext" && zip -qr "$GITHUB_WORKSPACE/dist/$ext.shell-extension.zip" .)
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.deb dist/*.flatpak \
+          gh release create "$GITHUB_REF_NAME" dist/*.deb dist/*.flatpak dist/*.zip \
             --title "Plus One $GITHUB_REF_NAME" --notes-file notes.md

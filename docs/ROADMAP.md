@@ -44,24 +44,28 @@ can call. Plus One becomes a small session service plus thin front ends:
 - **D-Bus API** (`io.github.<id>.PlusOne1`): `Extend()`, `Mirror(connector)`,
   `TabletMode(connector)`, `Stop()`, `SignDocument(path) → path`,
   `SendFiles(paths)`; properties `State`, `Mode`, `Tablet`; change signals.
-- **D-Bus activation and autostart** (systemd user unit for the .deb, XDG
-  autostart plus the background portal for the Flatpak). Idle cost: a sleeping
-  process; Wi-Fi Direct is only touched when a task needs it.
+- **D-Bus activation and autostart** (XDG autostart for the .deb, the
+  Background portal for the Flatpak). Idle cost: a sleeping process; Wi-Fi
+  Direct is only touched when a task needs it, because searching for peers
+  delays other Wi-Fi traffic (measured during a find: median unchanged, p90
+  8 → 66 ms, p99 12 → 136 ms, 20% of packets over 30 ms).
 - **Leases on the link**: every task holds one; the link closes when the last
   lease goes, unless the user pinned *Extend*.
 - The current window becomes the settings and status page of the service.
 
 ## Milestones
 
-### 0.3 — Always ready
+### 0.3 — Always ready (done)
 
-- Service, D-Bus API, activation, autostart; the window talks to the service.
-- **GNOME Shell Quick Settings tile "Tablet"**: on/off for *Extend*, menu with
-  *Mirror*, *Graphics tablet*, *Disconnect*; subtitle shows the state.
-- Notifications: "Tap Second screen on the tablet", "Connected", errors with
-  a hint.
-- App ID moved to `io.github.gabrielesantangelo.PlusOne` before more people
-  install it (needed for Flathub; settings migrated).
+- Background application, D-Bus API, activation, autostart; the window is a
+  front end like the others.
+- **GNOME Shell Quick Settings toggle "Tablet"**: connect/disconnect, state as
+  subtitle, menu with *Ready in the background* and *Settings*. *Mirror* and
+  *Graphics tablet* join the menu in 0.5.
+- Notifications: "Connected" with *Disconnect*, "tablet not found", errors.
+- Searching is time-boxed (see the measurement above); reopening Second Screen
+  within 90 s of closing it reconnects without a click.
+- App ID moved to `io.github.gabrielesantangelo.PlusOne`.
 
 Acceptance: from a fresh login, tablet as a monitor = 1 click + 1 tap.
 
@@ -160,6 +164,11 @@ video, nothing else to start.
 
 ### Research track (in parallel)
 
+- **Connect without touching the PC**: notice that Second Screen was opened
+  without scanning Wi-Fi Direct all the time (its cost is above). Candidates:
+  a change in the tablet's Samsung BLE advertisements (Bluetooth scanning does
+  not disturb Wi-Fi), mDNS on the home network. Then opening the tile on the
+  tablet would be the only step.
 - **Open Second Screen without touching the tablet**: Windows wakes it over
   Bluetooth through Samsung MCF; reverse engineer the start intent
   (`com.samsung.android.mcfserver`, the Windows MCF library). This would remove

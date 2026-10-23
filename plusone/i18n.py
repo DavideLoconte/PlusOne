@@ -14,10 +14,10 @@ _IT = {
     "Connecting…": "Collegamento…",
     "Connected": "Connesso",
     "Problem": "Problema",
-    "Press Start, then tap “Second screen” in the tablet's quick settings":
-        "Premi Avvia, poi tocca «Second screen» nel pannello rapido del tablet",
-    "Start": "Avvia",
-    "Stop": "Ferma",
+    "Press Connect, then tap “Second screen” in the tablet's quick settings":
+        "Premi Collega, poi tocca «Second screen» nel pannello rapido del tablet",
+    "Connect": "Collega",
+    "Disconnect": "Scollega",
     "Display": "Schermo",
     "Resolution": "Risoluzione",
     "Automatic": "Automatica",
@@ -25,19 +25,26 @@ _IT = {
     "Mbit/s: higher is sharper but uses more bandwidth": "Mbit/s: più alto = più nitido, più banda",
     "Options": "Opzioni",
     "Touch and S Pen": "Touch e S Pen",
-    "Stay ready": "Resta pronto",
-    "Reconnects when you reopen Second Screen": "Si ricollega quando riapri Second Screen",
+    "Ready in the background": "Pronto in background",
+    "Starts at login and stays ready after you close this window":
+        "Parte all'accesso e resta pronto anche dopo aver chiuso questa finestra",
     "Open Second Screen from here": "Apri Second Screen da qui",
     "Uses adb: needs wireless debugging on the tablet": "Usa adb: serve il debug wireless sul tablet",
     "adb is not available": "adb non è disponibile",
     "Language": "Lingua",
     "System": "Sistema",
     "Log": "Registro",
+    # Notifications and background
+    "Tablet connected": "Tablet collegato",
+    "Keeps the Quick Settings toggle ready to connect the tablet":
+        "Tiene pronto l'interruttore nelle impostazioni rapide per collegare il tablet",
     # Engine states
     "Mode {mode} is not supported": "La modalità {mode} non è supportata",
     "Close {apps}: it also uses Wi-Fi Direct": "Chiudi {apps}: usa anche lui il Wi-Fi Direct",
     "Opening Second Screen on the tablet…": "Apro Second Screen sul tablet…",
     "Tap “Second screen” on the tablet": "Tocca «Second screen» sul tablet",
+    "The tablet did not answer: open Second Screen on it and connect again":
+        "Il tablet non ha risposto: apri Second Screen e collega di nuovo",
     "Connecting to {name}…": "Collegamento a {name}…",
     "The tablet is not answering: close and reopen Second Screen":
         "Il tablet non risponde: chiudi e riapri Second Screen",

@@ -28,15 +28,19 @@ def is_wfd_sink(peer):
 
 
 class P2PLink:
-    def __init__(self, match=None, on_found=None, on_hint=None):
+    def __init__(self, match=None, on_found=None, on_hint=None, give_up_after=None, on_give_up=None):
         """match: peer MAC or substring of its name; None picks the first WFD sink.
 
         on_found(name) fires when the tablet shows up; on_hint() after repeated
         failed attempts, to ask the user to reopen Second Screen. Attempts go
-        on until stop().
+        on until stop(), or until give_up_after seconds have passed without a
+        connection: then on_give_up() fires. Searching keeps the Wi-Fi radio
+        busy (other traffic sees ~100 ms spikes), so it should not run forever.
         """
         self.on_found = on_found or (lambda name: None)
         self.on_hint = on_hint or (lambda: None)
+        self.on_give_up = on_give_up or (lambda: None)
+        self.give_up_after = give_up_after
         self.stopped = False
         self._handler = None
         self._client_handlers = []
@@ -60,6 +64,19 @@ class P2PLink:
         self._client_handlers = [self.client.connect("device-removed", self._device_removed),
                                  self.client.connect("device-added", self._device_added)]
         self._watch(self.device)
+        if self.give_up_after:
+            GLib.timeout_add_seconds(self.give_up_after, self._give_up)
+
+    def _give_up(self):
+        if self.stopped or self.connected:
+            return False
+        if self.device is not None and self.device.get_state() in (
+                NM.DeviceState.PREPARE, NM.DeviceState.CONFIG, NM.DeviceState.NEED_AUTH,
+                NM.DeviceState.IP_CONFIG, NM.DeviceState.IP_CHECK, NM.DeviceState.ACTIVATED):
+            return True  # never cut an attempt short; look again in a while
+        log("Wi-Fi Direct: no tablet, giving up")
+        self.on_give_up()
+        return False
 
     def _watch(self, device):
         self.device = device
