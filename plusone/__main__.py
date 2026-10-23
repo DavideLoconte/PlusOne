@@ -29,11 +29,11 @@ def parse_size(text):
 
 
 def main():
-    if sys.argv[1:] in ([], ["--gui"], ["--gapplication-service"]):
-        # The application: window, background service, D-Bus interface.
+    if sys.argv[1:] in ([], ["--gui"], ["--gapplication-service"]) or sys.argv[1:2] == ["--sign"]:
+        # The application: window, background service, D-Bus interface,
+        # and `--sign [FILE...]` to sign PDFs on the tablet.
         from .app import main as app_main
-        service = sys.argv[1:] == ["--gapplication-service"]
-        return app_main(sys.argv if service else sys.argv[:1])
+        return app_main(sys.argv[:1] if sys.argv[1:] == ["--gui"] else sys.argv)
 
     ap = argparse.ArgumentParser(prog="plus-one", description=__doc__)
     ap.add_argument("--cli", action="store_true", help="run without the window")

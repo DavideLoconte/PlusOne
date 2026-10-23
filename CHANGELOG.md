@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.0
+
+Sign on the tablet.
+
+- **Sign on Tablet**: right-click a PDF in Files (or *Open With*, or the
+  *Sign on Tablet* launcher). Plus One connects the tablet if needed and opens
+  the document full screen on it; the S Pen signs with pressure, fingers never
+  draw (palm rejection) and pinch to zoom. *Done* saves `name-signed.pdf`
+  next to the original, untouched, and the tablet disconnects again if it was
+  connected for this.
+- Saved signature (draw once, place with one tap), date and text fields, undo,
+  page navigation.
+- The signature is stamped onto the original pages (pypdf), so text, forms and
+  metadata are kept; rotated pages are handled.
+- Falls back to signing on the PC when the tablet does not connect, and to a
+  save dialog when the folder is not writable (Flatpak).
+- D-Bus method `SignDocument(path)`.
+- New dependencies: `gir1.2-poppler-0.18`, `python3-pypdf` (`.deb`); the
+  Flatpak builds poppler 25.12 and pypdf.
+
 ## 0.3.0
 
 Always ready, one click away.

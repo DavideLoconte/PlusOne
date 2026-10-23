@@ -69,7 +69,7 @@ can call. Plus One becomes a small session service plus thin front ends:
 
 Acceptance: from a fresh login, tablet as a monitor = 1 click + 1 tap.
 
-### 0.4 — Sign on the tablet
+### 0.4 — Sign on the tablet (done)
 
 - **Entry points**: Nautilus *Sign on tablet* (nautilus-python, .deb),
   *Open With → Sign on tablet* (both packages), `SignDocument` over D-Bus.

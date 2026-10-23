@@ -14,6 +14,9 @@ cp "$here/data/$app_id.svg" "$icons/$app_id.svg"
 ln -sf "$here/bin/plus-one" "$HOME/.local/bin/plus-one"
 # Same entry as the package, but launching this checkout.
 sed "s|^Exec=.*|Exec=$here/bin/plus-one|" "$here/data/$app_id.desktop" > "$apps/$app_id.desktop"
+sed "s|^Exec=plus-one|Exec=$here/bin/plus-one|" "$here/data/$app_id.Sign.desktop" > "$apps/$app_id.Sign.desktop"
+mkdir -p "$data/nautilus-python/extensions"
+ln -sf "$here/data/nautilus/plus-one-sign.py" "$data/nautilus-python/extensions/plus-one-sign.py"
 sed "s|^Exec=[^ ]*|Exec=$here/bin/plus-one|" "$here/data/$app_id.service" > "$services/$app_id.service"
 ext=plus-one@gabrielesantangelo.github.io
 ln -sfn "$here/data/gnome-shell/$ext" "$extensions/$ext"

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Sign on Tablet
+Name[it]=Firma sul tablet
+Comment=Sign a PDF with the S Pen on your Galaxy Tab
+Comment[it]=Firma un PDF con la S Pen sul tuo Galaxy Tab
+Exec=plus-one --sign %F
+Icon=io.github.gabrielesantangelo.PlusOne
+MimeType=application/pdf;
+Categories=Office;GTK;
+Keywords=sign;signature;pdf;pen;tablet;firma;
+StartupNotify=false

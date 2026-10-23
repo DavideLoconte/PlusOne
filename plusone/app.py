@@ -25,6 +25,7 @@ from gi.repository import Adw, Gio, GLib, Gst  # noqa: E402
 from . import add_log_handler, i18n, log, once  # noqa: E402
 from .engine import Controller, Settings, State  # noqa: E402
 from .i18n import _  # noqa: E402
+from .signing import Signing  # noqa: E402
 
 APP_ID = "io.github.gabrielesantangelo.PlusOne"
 INTERFACE = APP_ID + "1"
@@ -34,6 +35,9 @@ INTERFACE_XML = f"""
     <method name="Connect"/>
     <method name="Disconnect"/>
     <method name="ShowWindow"/>
+    <method name="SignDocument">
+      <arg type="s" name="path" direction="in"/>
+    </method>
     <property name="State" type="s" access="read"/>
     <property name="Active" type="b" access="read"/>
     <property name="Title" type="s" access="read"/>
@@ -138,7 +142,10 @@ def set_shell_extension(enabled, callback=None):
 
 class PlusOneApp(Adw.Application):
     def __init__(self):
-        super().__init__(application_id=APP_ID)
+        # Command line: `--sign [FILE...]`; D-Bus Open: files to sign.
+        super().__init__(application_id=APP_ID,
+                         flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE
+                         | Gio.ApplicationFlags.HANDLES_OPEN)
         # Started by D-Bus activation (Quick Settings): stay long enough to
         # take the call that woke us up.
         self.set_inactivity_timeout(10000)
@@ -157,6 +164,7 @@ class PlusOneApp(Adw.Application):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", callback)
             self.add_action(action)
+        self.signing = Signing(self)
 
     # -- GApplication ------------------------------------------------------
     def do_startup(self):
@@ -170,6 +178,42 @@ class PlusOneApp(Adw.Application):
         from .gui import Window
         window = self.get_active_window() or Window(self)
         window.present()
+
+    def do_command_line(self, cmdline):
+        args = cmdline.get_arguments()[1:]
+        if args[:1] == ["--sign"]:
+            paths = [cmdline.create_file_for_arg(arg).get_path() for arg in args[1:]]
+            for path in filter(None, paths):
+                self.signing.request(path)
+            if not args[1:]:
+                self._choose_and_sign()
+        else:
+            self.activate()
+        return 0
+
+    def do_open(self, files, n_files, hint):
+        for file in files:
+            if file.get_path():
+                self.signing.request(file.get_path())
+
+    def _choose_and_sign(self):
+        from gi.repository import Gtk
+        pdfs = Gtk.FileFilter(name="PDF")
+        pdfs.add_mime_type("application/pdf")
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(pdfs)
+        dialog = Gtk.FileDialog(title=_("Choose the PDF to sign"), filters=filters)
+        self.hold()  # the portal dialog is not one of our windows
+
+        def chosen(dialog, result):
+            self.release()
+            try:
+                file = dialog.open_finish(result)
+            except GLib.Error:
+                return  # cancelled
+            if file and file.get_path():
+                self.signing.request(file.get_path())
+        dialog.open(None, None, chosen)
 
     def do_dbus_register(self, connection, object_path):
         Adw.Application.do_dbus_register(self, connection, object_path)
@@ -211,7 +255,8 @@ class PlusOneApp(Adw.Application):
 
     def _on_state(self, state, template, args):
         self._update_hold()
-        self._notify(state, template)
+        if not self.signing.on_state(state):
+            self._notify(state, template)
         self._emit_properties()
         for listener in list(self.listeners):
             listener()
@@ -273,6 +318,8 @@ class PlusOneApp(Adw.Application):
             self.controller.stop()
         elif method == "ShowWindow":
             self.activate()
+        elif method == "SignDocument":
+            self.signing.request(params.unpack()[0])
         invocation.return_value(None)
 
     def _dbus_get(self, connection, sender, path, interface, prop):

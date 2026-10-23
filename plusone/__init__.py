@@ -1,7 +1,7 @@
 """Use a Samsung Galaxy Tab's built-in Second Screen app as a Linux monitor."""
 import time
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 _handlers = []
 

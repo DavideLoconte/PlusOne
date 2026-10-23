@@ -25,6 +25,9 @@ No app to install on the tablet: it talks to the <b>Second Screen</b> feature Sa
   H.264 (NVENC, VA-API) or x264.
 - **Touch and S Pen.** Fingers drive the desktop; the S Pen becomes a real Linux
   drawing tablet with pressure (4096 levels), tilt and hover.
+- **Sign PDFs on the tablet.** Right-click a PDF → *Sign on Tablet*: the page
+  opens full screen on the tablet, you sign with the pen, a signed copy
+  appears next to the original.
 - **One click.** A *Tablet* toggle in GNOME's Quick Settings, a notification
   with *Disconnect*, and Plus One ready in the background from login.
 - **Wireless, no setup.** Wi-Fi Direct between PC and tablet, no router needed,
@@ -50,7 +53,7 @@ Download `plus-one_<version>_all.deb` from the
 [Releases](../../releases) page, then:
 
 ```bash
-sudo apt install ./plus-one_0.3.0_all.deb
+sudo apt install ./plus-one_0.4.0_all.deb
 ```
 
 The package pulls in GTK 4, libadwaita, GStreamer and NetworkManager bindings
@@ -72,7 +75,7 @@ page, then:
 
 ```bash
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-flatpak install --user ./plus-one_v0.3.0_x86_64.flatpak
+flatpak install --user ./plus-one_v0.4.0_x86_64.flatpak
 ```
 
 The GNOME runtime it needs comes from Flathub. Differences from the `.deb`:
@@ -136,6 +139,31 @@ To connect from a keyboard shortcut, bind this command in *Settings → Keyboard
 gdbus call --session -d io.github.gabrielesantangelo.PlusOne -o /io/github/gabrielesantangelo/PlusOne \
     -m io.github.gabrielesantangelo.PlusOne1.Connect
 ```
+
+### Sign a PDF on the tablet
+
+Right-click a PDF in Files → **Sign on Tablet** (or *Open With → Sign on
+Tablet*, or launch *Sign on Tablet* from the app grid and pick a file).
+
+1. If the tablet is not connected yet, Plus One connects it: tap **Second
+   screen** on the tablet.
+2. The document opens full screen on the tablet. Sign with the S Pen: it
+   draws with pressure; fingers never draw, so resting your hand is fine.
+   Pinch with two fingers to zoom and move.
+3. Tap **Done**. `name-signed.pdf` is saved next to the original (which is
+   left untouched) and a notification offers *Open* and *Show in folder*. If
+   the connection was opened for signing, the tablet disconnects again.
+
+Also in the window: **Keep as my signature** (draw it once), then **My
+signature** places it with one tap; **Date** and **Text** add a date or a few
+words where you tap; **Undo**, **Clear page**, page arrows and **Fit**.
+If the tablet does not connect, the notification offers *Sign on this PC*
+(mouse or a pen tablet). The signature is drawn into the page (a simple
+electronic signature), not a cryptographic digital signature.
+
+The Files menu entry needs `python3-nautilus` (installed with the `.deb` by
+default) and appears after Files restarts (`nautilus -q`). In the Flatpak,
+use *Open With*; if the folder cannot be written, Plus One asks where to save.
 
 ### Recommended once: tablet low-latency mode
 
@@ -228,7 +256,7 @@ remote desktop  ◀──── touch ───── UIBC server ◀───�
   `/dev/uhid`.
 - **Application**: one GApplication process holds the connection and offers it
   over D-Bus (`io.github.gabrielesantangelo.PlusOne1`: `Connect`, `Disconnect`,
-  `ShowWindow`, properties `State`, `Active`, `Title`, `Detail`, `Background`).
+  `ShowWindow`, `SignDocument(path)`, properties `State`, `Active`, `Title`, `Detail`, `Background`).
   The window, the notifications and the Quick Settings extension are front
   ends; D-Bus activation starts the process when one of them needs it.
 
@@ -241,8 +269,10 @@ What comes next, and the convenience rules every feature follows, is in
 
 ```
 plusone/          the app: app.py (background app, D-Bus, notifications), gui.py (window),
-                  engine.py (ties display, p2p, rtsp, media, uibc, pen together)
+                  engine.py (ties display, p2p, rtsp, media, uibc, pen together),
+                  signing.py + sign.py + pdf.py + ink.py (Sign on Tablet)
 data/gnome-shell/ the Quick Settings extension
+data/nautilus/    the Files context-menu entry
 tests/            unit and protocol tests (a scripted fake tablet, no hardware needed)
 packaging/        build-deb.sh and maintainer scripts
 tools/            CI scripts; tools/re/ has the reverse-engineering and measurement helpers
@@ -274,7 +304,7 @@ flatpak run org.flatpak.Builder --user --install --force-clean flatpak-build \
 
 1. Bump `__version__` in `plusone/__init__.py` and add a section to
    `CHANGELOG.md`.
-2. Commit, then tag and push: `git tag v0.3.0 && git push origin main v0.3.0`.
+2. Commit, then tag and push: `git tag v0.4.0 && git push origin main v0.4.0`.
 3. The *Release* workflow checks that the tag matches the version, runs the
    tests, builds the `.deb` and the Flatpak bundle and publishes a GitHub
    release with both, the Quick Settings extension zip and the changelog

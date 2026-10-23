@@ -84,6 +84,45 @@ modules:
             url: https://github.com/jpirko/libndp/archive/v1.9.tar.gz
             sha256: e564f5914a6b1b799c3afa64c258824a801c1b79a29e2fe6525b682249c65261
 
+  # PDF rendering for "Sign on Tablet" (GObject introspection, cairo backend).
+  - name: poppler
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DENABLE_GLIB=ON
+      - -DENABLE_GOBJECT_INTROSPECTION=ON
+      - -DENABLE_UTILS=OFF
+      - -DENABLE_CPP=OFF
+      - -DENABLE_QT5=OFF
+      - -DENABLE_QT6=OFF
+      - -DENABLE_BOOST=OFF
+      - -DENABLE_LIBOPENJPEG=none
+      - -DENABLE_NSS3=OFF
+      - -DENABLE_GPGME=OFF
+      - -DENABLE_LIBCURL=OFF
+      - -DENABLE_LIBTIFF=OFF
+      - -DBUILD_GTK_TESTS=OFF
+      - -DBUILD_CPP_TESTS=OFF
+      - -DBUILD_MANUAL_TESTS=OFF
+    cleanup:
+      - /include
+      - /lib/pkgconfig
+      - /share/gir-1.0
+    sources:
+      - type: archive
+        url: https://poppler.freedesktop.org/poppler-25.12.0.tar.xz
+        sha256: c18b40eb36b1a0c5b86e29ca054bf0770304583da4f2cdd42fe86eca6a20de48
+
+  # Stamping signatures onto the original PDF.
+  - name: python3-pypdf
+    buildsystem: simple
+    build-commands:
+      - pip3 install --no-index --no-deps --find-links="file://${PWD}" --prefix=${FLATPAK_DEST} pypdf
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/3c/60/eccdd92dd4af3e4bea6d6a342f7588c618a15b9bec4b968af581e498bcc4/pypdf-4.3.1-py3-none-any.whl
+        sha256: 64b31da97eda0771ef22edb1bfecd5deee4b72c3d1736b7df2689805076d6418
+
   - name: plus-one
     buildsystem: simple
     build-commands:
@@ -91,6 +130,7 @@ modules:
       - install -m 644 plusone/*.py /app/lib/plus-one/plusone/
       - install -Dm 755 packaging/flatpak/plus-one.sh /app/bin/plus-one
       - install -Dm 644 data/io.github.gabrielesantangelo.PlusOne.desktop -t /app/share/applications
+      - install -Dm 644 data/io.github.gabrielesantangelo.PlusOne.Sign.desktop -t /app/share/applications
       - install -Dm 644 data/io.github.gabrielesantangelo.PlusOne.svg -t /app/share/icons/hicolor/scalable/apps
       - install -Dm 644 data/io.github.gabrielesantangelo.PlusOne.metainfo.xml -t /app/share/metainfo
       # D-Bus activation (Flatpak exports it and wraps Exec in "flatpak run").
