@@ -33,6 +33,7 @@ class Settings:
     test_pattern: bool = False
     peer: str | None = None
     stay_ready: bool = True  # go back to waiting after the tablet disconnects
+    language: str = "auto"
 
 
 class State:
@@ -52,9 +53,9 @@ def conflicting_apps():
 class Controller:
     def __init__(self, settings, on_state=None):
         self.settings = settings
-        self.on_state = on_state or (lambda state, detail: None)
+        self.on_state = on_state or (lambda state, template, args: None)
         self.state = State.IDLE
-        self.detail = ""
+        self.detail = ("", {})
         self.link = None
         self.session = None
         self.streamer = None
@@ -66,10 +67,11 @@ class Controller:
         self._running = False
 
     # -- state ---------------------------------------------------------------
-    def _set_state(self, state, detail=""):
-        self.state, self.detail = state, detail
-        log(f"[{state}] {detail}")
-        self.on_state(state, detail)
+    def _set_state(self, state, template="", **args):
+        """template is an English message (see i18n) formatted with args."""
+        self.state, self.detail = state, (template, args)
+        log(f"[{state}] {template.format(**args)}")
+        self.on_state(state, template, args)
 
     def _from_thread(self, fn, *args):
         GLib.idle_add(lambda: fn(*args) and False)
@@ -80,11 +82,11 @@ class Controller:
             return
         s = self.settings
         if (s.width, s.height, s.fps) not in MODES:
-            self._set_state(State.ERROR, f"modalità {s.width}x{s.height}@{s.fps} non supportata")
+            self._set_state(State.ERROR, "Mode {mode} is not supported", mode=f"{s.width}x{s.height}@{s.fps}")
             return
         others = conflicting_apps()
         if others:
-            self._set_state(State.ERROR, f"chiudi {', '.join(others)}: usa anche lui il Wi-Fi Direct")
+            self._set_state(State.ERROR, "Close {apps}: it also uses Wi-Fi Direct", apps=", ".join(others))
             return
         try:
             self.encoder = media.pick_encoder(s.encoder)
@@ -93,7 +95,7 @@ class Controller:
             self.srv.bind(("0.0.0.0", RTSP_PORT))
             self.srv.listen(1)
         except (OSError, RuntimeError) as e:
-            self._set_state(State.ERROR, str(e))
+            self._set_state(State.ERROR, "{error}", error=str(e))
             return
         self._running = True
         if not s.test_pattern:
@@ -105,7 +107,7 @@ class Controller:
                     log("touch disabled:", e)
         threading.Thread(target=self._accept_loop, daemon=True).start()
         if s.use_adb:
-            self._set_state(State.WAITING, "apro Second Screen sul tablet…")
+            self._set_state(State.WAITING, "Opening Second Screen on the tablet…")
             threading.Thread(target=self._adb_open, daemon=True).start()
         else:
             self._wait_for_tablet()
@@ -134,25 +136,25 @@ class Controller:
             self.serial = serial
             tablet.prepare(serial, restart=False)
         else:
-            log("adb: nessun tablet collegato, apri Second Screen a mano")
+            log("adb: no tablet attached, open Second Screen by hand")
         self._from_thread(self._wait_for_tablet)
 
     def _wait_for_tablet(self):
         if not self._running:
             return
-        self._set_state(State.WAITING, "tocca «Second screen» sul tablet")
+        self._set_state(State.WAITING, "Tap “Second screen” on the tablet")
         self.link = P2PLink(self.settings.peer, on_found=self._on_found,
                             on_failed=self._on_link_failed, on_hint=self._on_link_hint)
         self.link.start()
 
     def _on_found(self, name):
-        self._set_state(State.CONNECTING, f"collegamento a {name}…")
+        self._set_state(State.CONNECTING, "Connecting to {name}…", name=name)
 
     def _on_link_hint(self):
-        self._set_state(State.CONNECTING, "il tablet non risponde: chiudi e riapri Second Screen")
+        self._set_state(State.CONNECTING, "The tablet is not answering: close and reopen Second Screen")
 
     def _on_link_failed(self):
-        self._set_state(State.ERROR, "il tablet non risponde: riapri Second Screen")
+        self._set_state(State.ERROR, "The tablet is not answering: reopen Second Screen")
         if self.link:
             self.link.stop()
             self.link = None
@@ -198,7 +200,8 @@ class Controller:
                                        s.fps, s.bitrate, self.encoder)
         self.streamer.start()
         name = self.link.peer.get_name() if self.link and self.link.peer else "tablet"
-        self._set_state(State.STREAMING, f"{name} · {s.width}×{s.height} @ {s.fps} Hz")
+        self._set_state(State.STREAMING, "{name} · {width}×{height} @ {fps} Hz",
+                        name=name, width=s.width, height=s.height, fps=s.fps)
 
     def _on_idr(self):
         if self.streamer:

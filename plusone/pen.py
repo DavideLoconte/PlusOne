@@ -19,7 +19,7 @@ UHID_PATH = "/dev/uhid"
 UHID_DESTROY, UHID_CREATE2, UHID_INPUT2 = 1, 11, 12
 BUS_VIRTUAL = 0x06
 VENDOR, PRODUCT = 0x04E8, 0x5350  # Samsung vendor id, "SP"
-DEVICE_NAME = "Schermo Tablet S Pen"
+DEVICE_NAME = "Plus One S Pen"
 TABLET_SCHEMA = "org.gnome.desktop.peripherals.tablet"
 BTN_LEFT, BTN_RIGHT = 0x110, 0x111
 TIP, BARREL, IN_RANGE = 0x01, 0x02, 0x10
@@ -34,7 +34,7 @@ class UhidPen:
     def __init__(self, descriptor):
         self.fd = os.open(UHID_PATH, os.O_RDWR | os.O_CLOEXEC)
         req = struct.pack("<I128s64s64sHHIIII", UHID_CREATE2, DEVICE_NAME.encode(),
-                          b"schermo-tablet", b"", len(descriptor), BUS_VIRTUAL,
+                          b"plus-one", b"", len(descriptor), BUS_VIRTUAL,
                           VENDOR, PRODUCT, 1, 0) + descriptor
         os.write(self.fd, req)
         # The kernel queues start/open notifications; drain them so the queue

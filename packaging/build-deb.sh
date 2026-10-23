@@ -1,12 +1,12 @@
 #!/bin/sh
-# Build dist/schermo-tablet_<version>_all.deb from this checkout (no root needed).
+# Build dist/plus-one_<version>_all.deb from this checkout (no root needed).
 set -e
 umask 022
 here="$(dirname "$(readlink -f "$0")")"
 top="$(dirname "$here")"
-version="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$top/secondscreen/__init__.py")"
-app_id=io.github.santal.SchermoTablet
-pkg=schermo-tablet
+version="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$top/plusone/__init__.py")"
+app_id=io.github.santal.PlusOne
+pkg=plus-one
 root="$top/build/deb/${pkg}_${version}_all"
 
 rm -rf "$root"
@@ -15,12 +15,12 @@ install -d "$root/DEBIAN" "$root/usr/bin" "$root/usr/lib/$pkg" \
     "$root/usr/share/metainfo" "$root/usr/share/doc/$pkg" \
     "$root/usr/lib/udev/rules.d" "$root/usr/lib/modules-load.d"
 
-cp -r "$top/secondscreen" "$root/usr/lib/$pkg/"
+cp -r "$top/plusone" "$root/usr/lib/$pkg/"
 find "$root/usr/lib/$pkg" -name __pycache__ -prune -exec rm -rf {} +
 chmod -R u=rwX,go=rX "$root/usr/lib/$pkg"
 cat > "$root/usr/bin/$pkg" <<LAUNCHER
 #!/bin/sh
-PYTHONPATH="/usr/lib/$pkg\${PYTHONPATH:+:\$PYTHONPATH}" exec python3 -m secondscreen "\$@"
+PYTHONPATH="/usr/lib/$pkg\${PYTHONPATH:+:\$PYTHONPATH}" exec python3 -m plusone "\$@"
 LAUNCHER
 chmod 755 "$root/usr/bin/$pkg"
 

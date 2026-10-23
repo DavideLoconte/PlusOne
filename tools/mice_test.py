@@ -16,8 +16,8 @@ import gi
 gi.require_version("Gst", "1.0")
 from gi.repository import GLib, Gst  # noqa: E402
 
-from secondscreen import log, media  # noqa: E402
-from secondscreen.rtsp import WfdSession  # noqa: E402
+from plusone import log, media  # noqa: E402
+from plusone.rtsp import WfdSession  # noqa: E402
 
 serial, tablet_ip = sys.argv[1], sys.argv[2]
 seconds = int(sys.argv[3]) if len(sys.argv) > 3 else 60

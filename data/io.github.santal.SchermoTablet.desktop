@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Schermo Tablet
-Comment=Usa il tablet Samsung come secondo monitor con Second Screen
-Exec=schermo-tablet
-Icon=io.github.santal.SchermoTablet
-Categories=Utility;GTK;
-Keywords=tablet;monitor;second screen;miracast;display;galaxy;
-StartupNotify=true

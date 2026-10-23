@@ -14,8 +14,8 @@ import gi
 gi.require_version("NM", "1.0")
 from gi.repository import GLib  # noqa: E402
 
-from secondscreen import log, tablet  # noqa: E402
-from secondscreen.p2p import P2PLink  # noqa: E402
+from plusone import log, tablet  # noqa: E402
+from plusone.p2p import P2PLink  # noqa: E402
 
 trials = int(sys.argv[1]) if len(sys.argv) > 1 else 5
 RESTART = "--restart" in sys.argv

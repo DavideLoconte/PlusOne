@@ -1,7 +1,8 @@
-# secondscreen-linux
+# Plus One
 
-Use a Samsung Galaxy Tab as a wireless extended monitor for GNOME on Linux,
-through the tablet's built-in **Second Screen** app (the one Samsung ships for
+Your Samsung Galaxy Tab as a second monitor for GNOME on Linux.
+
+It uses the tablet's built-in **Second Screen** app (the one Samsung ships for
 Windows PCs). No app to install on the tablet.
 
 Status: working prototype, tested with a Galaxy Tab S10 FE+ (One UI 8.5) and
@@ -27,8 +28,8 @@ and the stream carries no audio so frames are shown without A/V sync.
 Debian/Ubuntu package (recommended):
 
 ```bash
-packaging/build-deb.sh                                # -> dist/schermo-tablet_<version>_all.deb
-sudo apt install ./dist/schermo-tablet_0.1.0_all.deb
+packaging/build-deb.sh                                # -> dist/plus-one_<version>_all.deb
+sudo apt install ./dist/plus-one_0.1.0_all.deb
 ```
 
 The package also installs a udev rule giving the logged-in user access to
@@ -40,16 +41,19 @@ run `sudo ./enable-pen.sh` once for pen pressure).
 
 ## Usage
 
-Open **Schermo Tablet**, press **Avvia**, then tap **Second screen** in the
+Open **Plus One**, press **Start**, then tap **Second screen** in the
 tablet's quick settings. The tablet becomes a third monitor within a few
 seconds (arrange it in Settings → Displays). Closing Second Screen on the
 tablet puts the app back in waiting mode; reopen the tile to reconnect.
 
+The window is in English or Italian (follows the system, or pick it under
+Options → Language).
+
 Command line:
 
 ```bash
-bin/schermo-tablet --cli              # same engine, no window
-bin/schermo-tablet --cli --test       # test pattern + local preview (latency photos)
+bin/plus-one --cli              # same engine, no window
+bin/plus-one --cli --test       # test pattern + local preview (latency photos)
 ```
 
 Close GNOME Network Displays first: it competes for the Wi-Fi Direct device.

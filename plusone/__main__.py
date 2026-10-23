@@ -1,4 +1,4 @@
-"""secondscreen: extend the GNOME desktop onto a Galaxy Tab running Second Screen."""
+"""plus-one: extend the GNOME desktop onto a Galaxy Tab running Second Screen."""
 import argparse
 import signal
 import sys
@@ -24,7 +24,7 @@ def main():
         from .gui import main as gui_main
         return gui_main()
 
-    ap = argparse.ArgumentParser(prog="secondscreen", description=__doc__)
+    ap = argparse.ArgumentParser(prog="plus-one", description=__doc__)
     ap.add_argument("--cli", action="store_true", help="run without the window")
     ap.add_argument("--peer", help="tablet Wi-Fi Direct MAC or name (default: first WFD sink)")
     ap.add_argument("--size", type=parse_size, default=(1920, 1200), help="virtual monitor size")
@@ -46,7 +46,7 @@ def main():
                         touch=not args.no_input, test_pattern=args.test, peer=args.peer,
                         stay_ready=not args.once)
 
-    def on_state(state, detail):
+    def on_state(state, template, args):
         if state == State.IDLE or (state == State.ERROR and controller.state != State.WAITING
                                    and not controller._running):
             loop.quit()
