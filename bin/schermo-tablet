@@ -1,0 +1,4 @@
+#!/bin/sh
+# Launch the app from the repository checkout this script lives in.
+here="$(dirname "$(readlink -f "$0")")"
+PYTHONPATH="$here/..${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m secondscreen "$@"

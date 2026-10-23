@@ -25,11 +25,22 @@ and the stream carries no audio so frames are shown without A/V sync.
 ## Usage
 
 ```bash
-python3 -m secondscreen            # opens Second Screen over adb if available
-python3 -m secondscreen --test     # test pattern instead of a virtual monitor
+./install.sh          # once: adds "Schermo Tablet" to the app grid
 ```
 
-Without adb, open the **Second screen** tile on the tablet first.
+Open **Schermo Tablet**, press **Avvia**, then tap **Second screen** in the
+tablet's quick settings. The tablet becomes a third monitor within a few
+seconds (arrange it in Settings → Displays). Closing Second Screen on the
+tablet puts the app back in waiting mode; reopen the tile to reconnect.
+
+Command line:
+
+```bash
+bin/schermo-tablet --cli              # same engine, no window
+bin/schermo-tablet --cli --test       # test pattern + local preview (latency photos)
+```
+
+Close GNOME Network Displays first: it competes for the Wi-Fi Direct device.
 
 Requirements: GNOME (Mutter) on Wayland, NetworkManager with Wi-Fi P2P,
 GStreamer 1.24 with `pipewiresrc`, `mpegtsmux`, `rtpmp2tpay` and an H.264

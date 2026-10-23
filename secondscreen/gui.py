@@ -59,12 +59,22 @@ class Window(Adw.ApplicationWindow):
         page = Adw.PreferencesPage()
         toolbar.set_content(page)
 
-        self.status = Adw.StatusPage(vexpand=False)
-        self.button = Gtk.Button(halign=Gtk.Align.CENTER, css_classes=["pill"])
+        # A hand-made status block: Adw.StatusPage scrolls on its own and gets
+        # clipped inside a PreferencesPage.
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12,
+                      margin_top=12, margin_bottom=12)
+        self.status_icon = Gtk.Image(pixel_size=96, css_classes=["dim-label"])
+        self.status_title = Gtk.Label(css_classes=["title-1"], wrap=True,
+                                      justify=Gtk.Justification.CENTER)
+        self.status_detail = Gtk.Label(css_classes=["dim-label"], wrap=True,
+                                       justify=Gtk.Justification.CENTER)
+        self.button = Gtk.Button(halign=Gtk.Align.CENTER, css_classes=["pill"],
+                                 margin_top=12)
         self.button.connect("clicked", self._toggle)
-        self.status.set_child(self.button)
+        for widget in (self.status_icon, self.status_title, self.status_detail, self.button):
+            box.append(widget)
         header = Adw.PreferencesGroup()
-        header.add(self.status)
+        header.add(box)
         page.add(header)
 
         screen = Adw.PreferencesGroup(title="Schermo")
@@ -110,7 +120,7 @@ class Window(Adw.ApplicationWindow):
     def _mode_label(mode):
         w, h, f = mode
         ratio = "16:10" if w * 10 == h * 16 else "16:9" if w * 9 == h * 16 else ""
-        return f"{w} × {h} · {f} Hz {ratio}".strip()
+        return f"{w} × {h} ({ratio})" if ratio else f"{w} × {h}"
 
     def _apply_settings(self):
         w, h, f = MODE_LIST[self.mode_row.get_selected()]
@@ -132,9 +142,9 @@ class Window(Adw.ApplicationWindow):
 
     def _on_state(self, state, detail):
         icon, title, default = STATUS[state]
-        self.status.set_icon_name(icon)
-        self.status.set_title(title)
-        self.status.set_description(GLib.markup_escape_text(detail or default or ""))
+        self.status_icon.set_from_icon_name(icon)
+        self.status_title.set_label(title)
+        self.status_detail.set_label(detail or default or "")
         running = self.controller._running
         self.button.set_label("Ferma" if running else "Avvia")
         self.button.set_css_classes(["pill", "destructive-action" if running else "suggested-action"])

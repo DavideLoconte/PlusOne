@@ -28,7 +28,7 @@ class Settings:
     fps: int = 60
     bitrate: int = 20000  # kbit/s
     encoder: str = "auto"
-    use_adb: bool = True
+    use_adb: bool = False
     touch: bool = True
     test_pattern: bool = False
     peer: str | None = None
