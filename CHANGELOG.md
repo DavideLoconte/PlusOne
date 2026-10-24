@@ -82,8 +82,8 @@ Sign on the tablet.
 - No more needles and bumps in pen strokes: GTK also reports the pen as a
   mouse drag (from a device that calls itself a mouse), and those late
   positions, with a fixed pressure, were mixed into the stroke.
-- Ink like a note app's: strokes go through a stroke model (the one Google's
-  ink-stroke-modeler describes): the pen's jitter is
+- Ink like a note app's: strokes go through a stroke model (the one
+  Google's ink-stroke-modeler describes): the pen's jitter is
   smoothed, curves come out round and the stroke still ends exactly where
   the pen lifted. A *Stabilization* setting (0-10) sets how
   much; while drawing, the line runs ahead to where the pen is predicted to
