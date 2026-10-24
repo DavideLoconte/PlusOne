@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="ink_hint">Scrivi con la S Pen · tieni premuto il tasto per cancellare · tocca con un dito per pulire</string>
+    <string name="cancel">Annulla</string>
+    <string name="done">Fatto</string>
+    <string name="eraser">Gomma</string>
+    <string name="clear_page">Pulisci</string>
+    <string name="fit">Adatta</string>
+    <string name="cannot_open">Impossibile aprire il PDF: %1$s</string>
+    <string name="saved_test">Firma tenuta (prova)</string>
 </resources>

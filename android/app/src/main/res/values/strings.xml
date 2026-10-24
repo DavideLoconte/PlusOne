@@ -2,4 +2,12 @@
 <resources>
     <string name="app_name">Plus One</string>
     <string name="ink_hint">Write with the S Pen · hold its button to erase · tap with a finger to clear</string>
+    <string name="cancel">Cancel</string>
+    <string name="done">Done</string>
+    <string name="eraser">Eraser</string>
+    <string name="clear_page">Clear</string>
+    <string name="fit">Fit</string>
+    <string name="page_of">%1$d / %2$d</string>
+    <string name="cannot_open">Cannot open the PDF: %1$s</string>
+    <string name="saved_test">Signature kept (test)</string>
 </resources>

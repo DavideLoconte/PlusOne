@@ -12,6 +12,12 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // adb shell am start -n …/.MainActivity --es path /sdcard/Android/data/…/files/x.pdf
+        // opens the signing screen on a PDF (for trying it out).
+        intent.getStringExtra(SignActivity.EXTRA_PATH)?.let { path ->
+            startActivity(android.content.Intent(this, SignActivity::class.java)
+                .putExtra(SignActivity.EXTRA_PATH, path))
+        }
         ink = InkSurface(this)
         val hint = TextView(this).apply {
             setText(R.string.ink_hint)

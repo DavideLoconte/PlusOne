@@ -1,0 +1,440 @@
+package io.github.gabrielesantangelo.plusone
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.pdf.PdfRenderer
+import android.os.ParcelFileDescriptor
+import android.os.SystemClock
+import android.util.SizeF
+import android.view.GestureDetector
+import android.view.MotionEvent
+import android.view.ScaleGestureDetector
+import android.view.SurfaceView
+import androidx.graphics.lowlatency.CanvasFrontBufferedRenderer
+import java.io.Closeable
+import java.io.File
+import java.util.concurrent.Executors
+import kotlin.math.max
+import kotlin.math.min
+
+/** A PDF opened with Android's own renderer; pages render one at a time. */
+class Pdf(file: File) : Closeable {
+    private val fd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+    private val renderer = PdfRenderer(fd)
+
+    /** Page sizes in points, as shown (the renderer applies crop box and rotation). */
+    val sizes: List<SizeF> = (0 until renderer.pageCount).map { i ->
+        renderer.openPage(i).use { SizeF(it.width.toFloat(), it.height.toFloat()) }
+    }
+
+    /** Draws page index into bitmap, page points mapped by matrix. */
+    @Synchronized
+    fun render(index: Int, bitmap: Bitmap, matrix: Matrix) {
+        renderer.openPage(index).use { it.render(bitmap, null, matrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY) }
+    }
+
+    @Synchronized
+    override fun close() {
+        renderer.close()
+        fd.close()
+    }
+}
+
+/**
+ * One page of a PDF to sign. The pen draws: each sample goes straight into
+ * the front buffer (ink under the nib), and the finished stroke is kept in
+ * page points. Its side button (or an eraser end) erases whole strokes.
+ * Fingers never draw: they pan, pinch to zoom, and a double tap zooms in
+ * where it lands or back to the whole page. The page itself is rendered in
+ * the background for the current zoom; meanwhile the last rendering is
+ * scaled, so moving around never waits for it.
+ */
+@SuppressLint("ViewConstructor")
+class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
+
+    /** Called after anything the toolbar shows may have changed. */
+    var onChange: () -> Unit = {}
+    /** The eraser button in the toolbar, for pens without a side button. */
+    var eraserMode = false
+
+    var index = 0
+        private set
+    val pageCount get() = pdf.sizes.size
+    val marks = HashMap<Int, MutableList<Stroke>>()
+    private val history = ArrayDeque<Pair<Int, List<Stroke>>>()
+    val canUndo get() = history.isNotEmpty()
+    val isEmpty get() = marks.values.all { it.isEmpty() }
+
+    // screen = page * zoom + (ox, oy)
+    private var zoom = 1f
+    private var ox = 0f
+    private var oy = 0f
+    private var fitZoom = 1f
+    /** Space kept free at the top (title bar) and bottom (toolbar), in pixels. */
+    var topInset = 0f
+    var bottomInset = 0f
+
+    private class Picture(val index: Int, val bitmap: Bitmap, val zoom: Float, val ox: Float, val oy: Float)
+    @Volatile private var picture: Picture? = null
+    private val pageRenderer = Executors.newSingleThreadExecutor()
+    private var renderSerial = 0
+
+    /** What the render thread draws: a snapshot, as the UI thread moves on. */
+    private class Scene(
+        val index: Int, val size: SizeF, val zoom: Float, val ox: Float, val oy: Float,
+        val picture: Picture?, val strokes: List<Stroke>, val eraser: FloatArray?,
+    )
+    @Volatile private var scene: Scene? = null
+
+    /** A piece of the stroke being drawn, in screen pixels. */
+    class Segment(
+        val x0: Float, val y0: Float, val p0: Float,
+        val x1: Float, val y1: Float, val p1: Float, val width: Float,
+    )
+
+    private val ink = Paint().apply {
+        isAntiAlias = true
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+        color = Ink.COLOR
+    }
+    private val white = Paint().apply { color = Color.WHITE }
+    private val shadow = Paint().apply { color = Color.argb(40, 0, 0, 0) }
+    private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private val eraserPaint = Paint().apply {
+        isAntiAlias = true
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+        color = Color.argb(200, 80, 80, 80)
+    }
+
+    private val front = CanvasFrontBufferedRenderer(this, object : CanvasFrontBufferedRenderer.Callback<Segment> {
+        override fun onDrawFrontBufferedLayer(canvas: Canvas, bufferWidth: Int, bufferHeight: Int, param: Segment) {
+            ink.strokeWidth = Ink.width(param.width, (param.p0 + param.p1) / 2)
+            canvas.drawLine(param.x0, param.y0, param.x1, param.y1, ink)
+        }
+
+        override fun onDrawMultiBufferedLayer(
+            canvas: Canvas, bufferWidth: Int, bufferHeight: Int, params: Collection<Segment>,
+        ) = drawScene(canvas)
+    })
+
+    // -- view ----------------------------------------------------------------
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        fit()
+    }
+
+    fun fit() {
+        val size = pdf.sizes[index]
+        if (width == 0 || height == 0) return
+        val margin = 24f
+        val room = height - topInset - bottomInset
+        fitZoom = min((width - 2 * margin) / size.width, (room - 2 * margin) / size.height)
+        zoom = fitZoom
+        ox = (width - size.width * zoom) / 2
+        oy = topInset + (room - size.height * zoom) / 2
+        changed(render = true)
+    }
+
+    fun showPage(i: Int) {
+        if (i !in 0 until pageCount) return
+        index = i
+        picture = null
+        fit()
+        onChange()
+    }
+
+    private fun zoomAt(newZoom: Float, fx: Float, fy: Float) {
+        val z = max(fitZoom * 0.5f, min(fitZoom * 10f, newZoom))
+        ox = fx - (fx - ox) * z / zoom
+        oy = fy - (fy - oy) * z / zoom
+        zoom = z
+    }
+
+    /** The view or the marks changed: draw again (once a frame at most), and
+     * render the page anew if asked. */
+    private fun changed(render: Boolean = false, eraser: FloatArray? = null) {
+        scene = Scene(index, pdf.sizes[index], zoom, ox, oy, picture, marks[index]?.toList() ?: emptyList(), eraser)
+        if (!redrawPending) {
+            redrawPending = true
+            postOnAnimation {
+                redrawPending = false
+                front.renderMultiBufferedLayer(emptyList())
+            }
+        }
+        if (render) renderPage()
+    }
+
+    private var redrawPending = false
+
+    private fun renderPage() {
+        val serial = ++renderSerial
+        val i = index
+        val z = zoom
+        val x = ox
+        val y = oy
+        val w = width
+        val h = height
+        if (w == 0 || h == 0) return
+        pageRenderer.execute {
+            if (serial != renderSerial) return@execute
+            val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            bitmap.eraseColor(Color.WHITE)
+            pdf.render(i, bitmap, Matrix().apply { setScale(z, z); postTranslate(x, y) })
+            post {
+                if (serial == renderSerial) {
+                    picture = Picture(i, bitmap, z, x, y)
+                    changed()
+                }
+            }
+        }
+    }
+
+    private fun drawScene(canvas: Canvas) {
+        canvas.drawColor(BACKGROUND)
+        val s = scene ?: return
+        val left = s.ox
+        val top = s.oy
+        val right = s.ox + s.size.width * s.zoom
+        val bottom = s.oy + s.size.height * s.zoom
+        canvas.drawRect(left + 1, top + 4, right + 1, bottom + 4, shadow)
+        canvas.drawRect(left, top, right, bottom, white)
+        canvas.save()
+        canvas.clipRect(left, top, right, bottom)
+        s.picture?.takeIf { it.index == s.index }?.let { p ->
+            // Rendered for another zoom or position: scaled meanwhile.
+            val k = s.zoom / p.zoom
+            val m = Matrix().apply { setScale(k, k); postTranslate(s.ox - p.ox * k, s.oy - p.oy * k) }
+            canvas.drawBitmap(p.bitmap, m, bitmapPaint)
+        }
+        canvas.translate(s.ox, s.oy)
+        canvas.scale(s.zoom, s.zoom)
+        for (stroke in s.strokes) drawStroke(canvas, stroke)
+        canvas.restore()
+        s.eraser?.let { canvas.drawCircle(it[0], it[1], ERASER_RADIUS, eraserPaint) }
+    }
+
+    private fun drawStroke(canvas: Canvas, stroke: Stroke) {
+        val p = stroke.points
+        ink.color = stroke.color
+        if (p.size == 3) {
+            ink.strokeWidth = Ink.width(stroke.width, p[2])
+            canvas.drawPoint(p[0], p[1], ink)
+        }
+        for (i in 0 until p.size - 3 step 3) {
+            ink.strokeWidth = Ink.width(stroke.width, (p[i + 2] + p[i + 5]) / 2)
+            canvas.drawLine(p[i], p[i + 1], p[i + 3], p[i + 4], ink)
+        }
+        ink.color = Ink.COLOR
+    }
+
+    // -- the pen -------------------------------------------------------------
+
+    private var stroke: FloatArrayBuilder? = null
+    private var erasing = false
+    private var erasedThisStroke = false
+    private var lastX = 0f
+    private var lastY = 0f
+    private var lastP = 0f
+    private var penSeen = 0L  // when the pen was last near the screen
+
+    private fun isEraser(e: MotionEvent) = eraserMode ||
+        e.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER ||
+        e.isButtonPressed(MotionEvent.BUTTON_STYLUS_PRIMARY) ||
+        e.isButtonPressed(MotionEvent.BUTTON_STYLUS_SECONDARY)
+
+    private fun isPen(e: MotionEvent) = e.getToolType(0).let {
+        it == MotionEvent.TOOL_TYPE_STYLUS || it == MotionEvent.TOOL_TYPE_ERASER
+    }
+
+    override fun onHoverEvent(event: MotionEvent): Boolean {
+        if (isPen(event)) penSeen = SystemClock.uptimeMillis()
+        return super.onHoverEvent(event)
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (isPen(event)) {
+            penSeen = SystemClock.uptimeMillis()
+            pen(event)
+            return true
+        }
+        // A palm resting while the pen writes or hovers is no gesture.
+        if (SystemClock.uptimeMillis() - penSeen < PALM_WINDOW) return true
+        fingers(event)
+        return true
+    }
+
+    private fun pen(e: MotionEvent) {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                requestUnbufferedDispatch(e)  // every sample as it comes, not once a frame
+                lastX = e.x
+                lastY = e.y
+                lastP = e.pressure
+                erasing = isEraser(e)
+                erasedThisStroke = false
+                if (erasing) {
+                    eraseAlong(lastX, lastY, lastX, lastY)
+                } else {
+                    stroke = FloatArrayBuilder().apply { add(toPageX(lastX), toPageY(lastY), lastP) }
+                    front.renderFrontBufferedLayer(Segment(lastX, lastY, lastP, lastX, lastY, lastP, Ink.WIDTH * zoom))
+                }
+            }
+            MotionEvent.ACTION_MOVE -> {
+                for (i in 0 until e.historySize) {
+                    extend(e.getHistoricalX(i), e.getHistoricalY(i), e.getHistoricalPressure(i))
+                }
+                extend(e.x, e.y, e.pressure)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (e.actionMasked == MotionEvent.ACTION_UP) extend(e.x, e.y, e.pressure)
+                val done = stroke
+                stroke = null
+                if (erasing) {
+                    erasing = false
+                    changed()  // the eraser's ring goes
+                } else if (done != null) {
+                    addMark(Stroke(done.toArray()))
+                    front.commit()
+                }
+            }
+        }
+    }
+
+    private fun extend(x: Float, y: Float, p: Float) {
+        if (erasing) {
+            eraseAlong(lastX, lastY, x, y)
+        } else {
+            stroke?.add(toPageX(x), toPageY(y), p)
+            front.renderFrontBufferedLayer(Segment(lastX, lastY, lastP, x, y, p, Ink.WIDTH * zoom))
+        }
+        lastX = x
+        lastY = y
+        lastP = p
+    }
+
+    private fun toPageX(x: Float) = (x - ox) / zoom
+    private fun toPageY(y: Float) = (y - oy) / zoom
+
+    private fun addMark(mark: Stroke) {
+        val list = marks.getOrPut(index) { mutableListOf() }
+        history.addLast(index to list.toList())
+        list.add(mark)
+        scene = Scene(index, pdf.sizes[index], zoom, ox, oy, picture, list.toList(), null)
+        onChange()
+    }
+
+    /** Removes the strokes the eraser touches going from a to b (screen pixels). */
+    private fun eraseAlong(ax: Float, ay: Float, bx: Float, by: Float) {
+        val list = marks[index] ?: mutableListOf()
+        val radius = ERASER_RADIUS / zoom
+        val hit = list.filter { it.touches(toPageX(ax), toPageY(ay), toPageX(bx), toPageY(by), radius) }
+        if (hit.isNotEmpty()) {
+            // The first removal of a pass opens an undo step; the rest join it.
+            if (!erasedThisStroke) history.addLast(index to list.toList())
+            erasedThisStroke = true
+            list.removeAll(hit)
+            onChange()
+        }
+        changed(eraser = floatArrayOf(bx, by))
+    }
+
+    fun undo() {
+        val (page, before) = history.removeLastOrNull() ?: return
+        marks[page] = before.toMutableList()
+        if (page != index) showPage(page) else changed()
+        onChange()
+    }
+
+    fun clearPage() {
+        val list = marks[index] ?: return
+        if (list.isEmpty()) return
+        history.addLast(index to list.toList())
+        list.clear()
+        changed()
+        onChange()
+    }
+
+    // -- fingers -------------------------------------------------------------
+
+    private var lastFocusX = 0f
+    private var lastFocusY = 0f
+    private var fingersDown = 0
+
+    private val scaler = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScale(detector: ScaleGestureDetector): Boolean {
+            zoomAt(zoom * detector.scaleFactor, detector.focusX, detector.focusY)
+            changed()
+            return true
+        }
+    })
+
+    private val taps = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+        override fun onDoubleTap(e: MotionEvent): Boolean {
+            // In where the finger lands, or back to the whole page.
+            if (zoom < fitZoom * 1.5f) {
+                zoomAt(fitZoom * DOUBLE_TAP_ZOOM, e.x, e.y)
+                changed(render = true)
+            } else {
+                fit()
+            }
+            return true
+        }
+    })
+
+    private fun fingers(e: MotionEvent) {
+        taps.onTouchEvent(e)
+        scaler.onTouchEvent(e)
+        // Pan with the fingers' centre.
+        var fx = 0f
+        var fy = 0f
+        val up = e.actionMasked == MotionEvent.ACTION_POINTER_UP
+        val n = e.pointerCount - if (up) 1 else 0
+        for (i in 0 until e.pointerCount) {
+            if (up && i == e.actionIndex) continue
+            fx += e.getX(i)
+            fy += e.getY(i)
+        }
+        fx /= max(1, n)
+        fy /= max(1, n)
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_POINTER_UP -> {
+                fingersDown = n
+            }
+            MotionEvent.ACTION_MOVE -> if (fingersDown > 0) {
+                ox += fx - lastFocusX
+                oy += fy - lastFocusY
+                changed()
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                fingersDown = 0
+                changed(render = true)  // sharp again at the new zoom
+            }
+        }
+        lastFocusX = fx
+        lastFocusY = fy
+    }
+
+    // -- result --------------------------------------------------------------
+
+    fun release() {
+        front.release(true)
+        pageRenderer.shutdownNow()
+    }
+
+    companion object {
+        val BACKGROUND = Color.rgb(48, 48, 50)
+        const val ERASER_RADIUS = 24f      // pixels around the nib
+        const val PALM_WINDOW = 400L        // ms after the pen was seen during which touches are a palm
+        const val DOUBLE_TAP_ZOOM = 2.5f
+    }
+}
