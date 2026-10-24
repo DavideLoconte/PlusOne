@@ -66,6 +66,9 @@ input sets `UIBCDetected` and `DirectRenderer::setNonAVSyncMode(true)`.
   30). With `max-framerate=120/1` (a 120 Hz monitor) the same window arrived
   at 60 fps (gaps p50 16.8, p90 19). Capture to encoded frame with NVENC:
   6.5 ms. A token-bucket pacer back to 60 fps added 3-4 ms on average.
+  On the tablet, though, the 120 Hz monitor made the stream run at up to
+  88-90 fps: Second Screen (60 Hz) queued frames, the delay grew, and it lost
+  packets and asked for an IDR every 3-5 s. Back to 60 Hz.
 - `pipewiresrc` 1.0.7 cannot negotiate DMA-BUF caps, so Mutter copies each
   frame to shared memory; the VA-API encoder gets no zero-copy path.
 - From a window's change committed on the virtual monitor to its frame

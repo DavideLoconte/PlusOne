@@ -36,11 +36,11 @@ ENCODERS = {
 # conversion a no-op for NVENC (it cost ~2.3 ms of CPU per 1920x1200 frame).
 CAPTURE_FORMAT = "BGRA"
 # Mutter gives the virtual monitor the stream's max-framerate as its refresh
-# rate, and skips frames that come a little early for it: at 60 Hz, a window
-# drawing 60 frames a second reached the encoder at about 47 (frames 21 ms
-# apart, often 30). At 120 Hz it records them all, 6.5 ms from capture to
-# encoded; pacing them back to 60 here cost 3-4 ms more on average.
-CAPTURE_RATE_FACTOR = 2
+# rate. At 60 Hz it skips frames that come a little early (a window drawing
+# at 60 fps reached the encoder at about 47), but asking for 120 is worse:
+# the stream then ran at up to 90 fps, which Second Screen (showing 60) queued,
+# so the delay grew, and it lost packets and asked for keyframes every few
+# seconds. Keep the monitor at the stream's rate.
 TS_PER_RTP = 7  # 7 x 188 bytes of MPEG-TS per RTP packet, as WFD sinks expect
 RTP_MP2T = 33
 # Wi-Fi sends packets marked EF (DSCP 46) from its video queue (WMM AC_VI),
@@ -126,7 +126,7 @@ class Streamer:
             # one so the sink keeps receiving data on a static screen.
             video = (f"pipewiresrc path={source} do-timestamp=true always-copy=false keepalive-time=100 ! "
                      f"video/x-raw,format={CAPTURE_FORMAT},width={width},height={height},"
-                     f"max-framerate={fps * CAPTURE_RATE_FACTOR}/1")
+                     f"max-framerate={fps}/1")
         element, options, raw_format = ENCODERS[encoder]
         enc = f"{element} name=enc " + options.format(bitrate=bitrate, gop=fps * KEYFRAME_SECONDS)
         self.pipeline = Gst.parse_launch(

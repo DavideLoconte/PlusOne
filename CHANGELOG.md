@@ -60,9 +60,6 @@ Sign on the tablet.
     payloader held every frame's last packets until the next frame came
     (16 ms at 60 Hz, up to 100 ms for the last change on a still screen);
     Plus One now sends each frame whole as soon as it is encoded;
-  - the stream carries 60 frames a second where it carried about 47: the
-    virtual monitor runs at 120 Hz, because at 60 Hz Mutter skipped frames
-    that came a little early;
   - the signing window draws 60 frames a second while you write (it managed
     33-40): the page is a texture made once, and a frame only draws the
     newest bit of the stroke (3.5 ms a frame instead of 10);
