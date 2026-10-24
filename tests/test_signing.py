@@ -21,10 +21,13 @@ class FakeController:
 
 class FakeNearby:
     def __init__(self):
-        self.app_on = None  # (address, port, name) of the companion app, if any
+        self.app_on = None  # (address, port, name, app id) of the companion app, if any
 
-    def companion(self, paired=()):
+    def companion(self, paired=(), prefer=()):
         return self.app_on
+
+    def apps(self):
+        return [(a[3], a[0], a[1], a[2]) for a in [self.app_on] if a]
 
 
 class FakeApp:
@@ -41,6 +44,9 @@ class FakeApp:
         self.notes.append(id)
 
     def withdraw_notification(self, id):
+        pass
+
+    def save_settings(self):
         pass
 
 
@@ -123,7 +129,7 @@ def spin(until, timeout=5):
 
 def test_the_tablets_app_signs_when_it_is_on_the_network(monkeypatch, tmp_path):
     app, signing, _, _ = make(monkeypatch)
-    app.nearby.app_on = ("10.0.0.2", 40000, "Galaxy Tab")
+    app.nearby.app_on = ("10.0.0.2", 40000, "Galaxy Tab", "a1b2")
     marks = {"pages": [{"page": 1, "marks": [
         {"type": "stroke", "width": 1.2, "color": [0, 0, 0], "points": [10, 20, 0.5, 30, 40, 0.6]}]}]}
     asked, saved = [], []
@@ -134,6 +140,7 @@ def test_the_tablets_app_signs_when_it_is_on_the_network(monkeypatch, tmp_path):
     signing.request(path)
     assert spin(lambda: saved)
     assert asked == [(("10.0.0.2", 40000), path)] and app.controller.starts == 0  # no Second Screen
+    assert app.settings.last_tablet == "a1b2"  # "Automatic" picks it next time
     stroke = saved[0][1][0]
     assert stroke.points == [(10, 20, 0.5), (30, 40, 0.6)] and stroke.width == 1.2
     assert spin(lambda: path not in signing.in_app)
@@ -141,7 +148,7 @@ def test_the_tablets_app_signs_when_it_is_on_the_network(monkeypatch, tmp_path):
 
 def test_an_unreachable_app_falls_back_to_second_screen(monkeypatch, tmp_path):
     app, signing, _, notes = make(monkeypatch)
-    app.nearby.app_on = ("10.0.0.2", 40000, "Galaxy Tab")
+    app.nearby.app_on = ("10.0.0.2", 40000, "Galaxy Tab", "a1b2")
 
     def unreachable(*args, **kwargs):
         raise ConnectionRefusedError()
@@ -187,5 +194,30 @@ def test_a_paired_app_comes_first():
     from plusone.nearby import Nearby
     nearby = Nearby()
     nearby.companions = {"a": ("10.0.0.2", 1000, "Stranger", "aaaa"), "b": ("10.0.0.9", 2000, "Tab", "bbbb")}
-    assert nearby.companion() == ("10.0.0.2", 1000, "Stranger")
-    assert nearby.companion(["bbbb" + "0" * 60]) == ("10.0.0.9", 2000, "Tab")
+    assert nearby.companion() == ("10.0.0.2", 1000, "Stranger", "aaaa")
+    assert nearby.companion(["bbbb" + "0" * 60]) == ("10.0.0.9", 2000, "Tab", "bbbb")
+
+
+def test_the_tablet_chosen_signs():
+    # Asked for in Files, chosen in the window, the last one used: in that
+    # order, among those on the network.
+    from plusone.nearby import Nearby
+    nearby = Nearby()
+    nearby.companions = {"a": ("10.0.0.2", 1000, "Kitchen", "aaaa"), "b": ("10.0.0.9", 2000, "Office", "bbbb"),
+                         "b6": ("10.0.0.9", 2000, "Office", "bbbb")}  # the same app on two interfaces
+    assert [a[0] for a in nearby.apps()] == ["aaaa", "bbbb"]
+    paired = ["aaaa" + "0" * 60, "bbbb" + "0" * 60]
+    assert nearby.companion(paired, ["bbbb", "aaaa"])[3] == "bbbb"
+    assert nearby.companion(paired, ["cccc", "aaaa"])[3] == "aaaa"  # cccc is not around
+
+
+def test_a_dropped_link_finds_the_same_tablet_again(monkeypatch):
+    # Two tablets on the network: the PDF's comes back from its own, not
+    # from whichever would be picked for a new PDF.
+    from plusone.nearby import Nearby
+    app, signing, _, _ = make(monkeypatch)
+    app.nearby = Nearby()
+    app.nearby.companions = {"a": ("10.0.0.2", 1000, "Kitchen", "aaaa"), "b": ("10.0.0.9", 2001, "Office", "bbbb")}
+    app.settings.sign_tablet = "aaaa"
+    assert signing._locate_app("bbbb") == ("10.0.0.9", 2001)
+    assert signing._locate_app("cccc") is None

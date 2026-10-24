@@ -81,6 +81,10 @@ class Window(Adw.ApplicationWindow):
         self.has_adb = shutil.which("adb") is not None
         self.adb_row = Adw.SwitchRow(active=self.settings.use_adb and self.has_adb,
                                      sensitive=self.has_adb)
+        # Which tablet signs: shown once one is paired.
+        self.tablet_row = Adw.ComboRow(visible=False)
+        self._tablets = None  # the choices shown: [(app id or None, label)]
+        self._tablet_handler = self.tablet_row.connect("notify::selected", self._on_tablet)
         self.signatures_row = Adw.ActionRow(activatable=True)
         self.signatures_row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
         self.signatures_row.connect("activated", lambda r: self._show_signatures())
@@ -89,7 +93,7 @@ class Window(Adw.ApplicationWindow):
         language = self.settings.language if self.settings.language in i18n.LANGUAGES else "auto"
         self.language_row.set_selected(i18n.LANGUAGES.index(language))
         self._language_handler = self.language_row.connect("notify::selected", self._on_language)
-        for row in (self.touch_row, self.sign_row, self.signatures_row, self.background_row,
+        for row in (self.touch_row, self.sign_row, self.tablet_row, self.signatures_row, self.background_row,
                     self.extension_row, self.adb_row, self.language_row):
             self.options_group.add(row)
         page.add(self.options_group)
@@ -133,6 +137,9 @@ class Window(Adw.ApplicationWindow):
         self.options_group.set_title(_("Options"))
         self.touch_row.set_title(_("Touch and S Pen"))
         self.sign_row.set_title(_("Sign on Tablet"))
+        self.tablet_row.set_title(_("Tablet for signing"))
+        self.tablet_row.set_subtitle(_("With more than one on the network, Files asks too"))
+        self._tablets = None  # "Automatic" in the new language
         self.signatures_row.set_title(_("My signatures"))
         self.signatures_row.set_subtitle(_("Placed with one tap when signing, here and on the tablet"))
         self.background_row.set_title(_("Ready in the background"))
@@ -212,6 +219,32 @@ class Window(Adw.ApplicationWindow):
         if self.background_row.get_active() != self.settings.background:
             self.background_row.set_active(self.settings.background)
         self.sign_row.set_subtitle(self._sign_subtitle())
+        self._refresh_tablets()
+
+    def _refresh_tablets(self):
+        """The tablets to choose from: the paired ones, by name, after
+        "Automatic" (the last one used)."""
+        from .companion import Paired
+        try:
+            paired = Paired().all()
+        except OSError:
+            paired = {}
+        choices = [(None, _("Automatic: the last one used"))] + sorted(
+            ((fp[:16], str(name)) for fp, name in paired.items()), key=lambda c: c[1].lower())
+        chosen = self.settings.sign_tablet
+        if chosen and chosen not in [c[0] for c in choices]:
+            choices.append((chosen, _("A tablet no longer paired")))
+        self.tablet_row.set_visible(self.settings.sign_on_tablet and len(choices) > 1)
+        if choices == self._tablets:
+            return
+        self._tablets = choices
+        with self.tablet_row.handler_block(self._tablet_handler):
+            self.tablet_row.set_model(Gtk.StringList.new([label for _id, label in choices]))
+            self.tablet_row.set_selected([c[0] for c in choices].index(chosen))
+
+    def _on_tablet(self, row, _param):
+        if self._tablets and row.get_selected() < len(self._tablets):
+            self.app.set_sign_tablet(self._tablets[row.get_selected()][0])
 
     def _sign_subtitle(self):
         text = _("In Files, for PDFs, while a tablet is on the network")

@@ -22,13 +22,15 @@ def load(monkeypatch):
 
 
 class Proxy:
-    def __init__(self, owner, available):
-        self.owner, self.available = owner, available
+    def __init__(self, owner, available, tablets=None):
+        self.owner, self.available, self.tablets = owner, available, tablets
 
     def get_name_owner(self):
         return self.owner
 
     def get_cached_property(self, name):
+        if name == "SignTablets":
+            return None if self.tablets is None else GLib.Variant("a(ss)", self.tablets)
         assert name == "SignAvailable"
         return None if self.available is None else GLib.Variant("b", self.available)
 
@@ -53,3 +55,40 @@ def test_switched_off_in_the_settings(monkeypatch, tmp_path):
     assert module.PlusOneSign._offered(types.SimpleNamespace(_proxy=None)) is False
     settings.write_text("[]")
     assert module.PlusOneSign._offered(types.SimpleNamespace(_proxy=None)) is True
+
+
+def test_more_than_one_tablet_is_a_choice(monkeypatch, tmp_path):
+    module = load(monkeypatch)
+    monkeypatch.setattr(module, "SETTINGS", str(tmp_path / "missing.json"))
+
+    class Item:
+        def __init__(self, name, label):
+            self.name, self.label, self.submenu, self.handlers = name, label, None, []
+
+        def connect(self, signal, handler, *args):
+            self.handlers.append((handler, args))
+
+        def set_submenu(self, menu):
+            self.submenu = menu
+
+    class Menu:
+        def __init__(self):
+            self.items = []
+
+        def append_item(self, item):
+            self.items.append(item)
+
+    module.Nautilus.MenuItem, module.Nautilus.Menu = Item, Menu
+    pdf = types.SimpleNamespace(get_mime_type=lambda: "application/pdf",
+                                get_location=lambda: types.SimpleNamespace(get_path=lambda: "/x.pdf"))
+    def provider(tablets):
+        found = types.SimpleNamespace(_proxy=Proxy(":1.42", True, tablets))
+        for method in ("_tablets", "_offered", "_sign", "_sign_on"):
+            setattr(found, method, types.MethodType(getattr(module.PlusOneSign, method), found))
+        return found
+
+    [item] = module.PlusOneSign.get_file_items(provider([("aaaa", "Kitchen")]), [pdf])
+    assert item.submenu is None
+    [item] = module.PlusOneSign.get_file_items(provider([("aaaa", "Kitchen"), ("bbbb", "Office")]), [pdf])
+    assert [i.label for i in item.submenu.items] == ["Kitchen", "Office"]
+    assert item.submenu.items[1].handlers[0][1] == (["/x.pdf"], "bbbb")

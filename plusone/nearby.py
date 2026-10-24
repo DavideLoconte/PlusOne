@@ -61,7 +61,7 @@ class Nearby:
         self.known = False   # Avahi is there to ask
         self.services = set()  # (interface, protocol, name, type, domain) announced
         self.tablets = {}    # those on a tablet -> its name ("" if unknown)
-        self.companions = {}  # the app's services -> (address, port, name)
+        self.companions = {}  # the app's services -> (address, port, name, app id)
         self._browsers = []
         self._subscription = self._watch = self._timer = None
 
@@ -72,14 +72,31 @@ class Nearby:
     def names(self):
         return sorted({name for name in self.tablets.values() if name})
 
-    def companion(self, paired=()):
-        """(address, port, name) of the companion app on the network, or None:
-        one paired already (paired: certificate fingerprints; the app
-        advertises the start of its own) before any other."""
-        def known(found):
-            return bool(found[3]) and any(fp.startswith(found[3]) for fp in paired)
-        ranked = sorted(self.companions.values(), key=lambda found: (not known(found), found))
-        return ranked[0][:3] if ranked else None
+    def apps(self):
+        """The app on each tablet on the network, [(app id, address, port,
+        name)] by name: one per tablet, which may show up on two interfaces.
+        The id is the start of the app's certificate fingerprint."""
+        seen = {}
+        for address, port, name, app_id in sorted(self.companions.values()):
+            seen.setdefault(app_id or f"{address}:{port}", (app_id, address, port, name))
+        return sorted(seen.values(), key=lambda app: (app[3].lower(), app[0]))
+
+    def companion(self, paired=(), prefer=()):
+        """(address, port, name, app id) of the app to sign with, or None: the
+        first of prefer (app ids, the most wanted first) on the network, else
+        one paired already (paired: certificate fingerprints) before any other."""
+        apps = self.apps()
+        for wanted in prefer:
+            for app_id, address, port, name in apps:
+                if wanted and app_id == wanted:
+                    return address, port, name, app_id
+        def known(app):
+            return bool(app[0]) and any(fp.startswith(app[0]) for fp in paired)
+        ranked = sorted(apps, key=lambda app: (not known(app), app[1], app[2]))
+        if not ranked:
+            return None
+        app_id, address, port, name = ranked[0]
+        return address, port, name, app_id
 
     def start(self):
         if self.bus is not None:

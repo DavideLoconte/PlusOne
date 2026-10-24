@@ -44,6 +44,9 @@ class Settings:
     language: str = "auto"
     # "Sign on Tablet" in Files and Open With.
     sign_on_tablet: bool = True
+    # The tablet to sign on (its app's id, nearby.apps()); None: the last one used.
+    sign_tablet: str | None = None
+    last_tablet: str | None = None
 
 
 class State:

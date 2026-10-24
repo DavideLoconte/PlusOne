@@ -44,7 +44,9 @@ class Signing:
             action.connect("activate", callback)
             app.add_action(action)
 
-    def request(self, path):
+    def request(self, path, tablet=None):
+        """Sign the PDF at path: in the tablet's app if one is on the network
+        (tablet: the id of the one chosen in Files), else through Second Screen."""
         path = os.path.abspath(path)
         log("signing", path)
         if not (self.in_app or self.windows or self.queue or self.opening):
@@ -58,7 +60,7 @@ class Signing:
         if path in self.opening or path in self.in_app:
             return
         controller = self.app.controller
-        target = self._find_app() if self.app.settings.sign_on_tablet else None
+        target = self._find_app(tablet) if self.app.settings.sign_on_tablet else None
         if target and controller.state != State.STREAMING:
             self._sign_in_app(path, target)
             return
@@ -81,9 +83,12 @@ class Signing:
 
     # -- in the tablet's app ---------------------------------------------------
     def _sign_in_app(self, path, target):
-        address, port, tablet = target
+        address, port, tablet, app_id = target
         log(f"signing in the app on {tablet}: {path}")
         self.in_app.add(path)
+        if app_id and self.app.settings.last_tablet != app_id:
+            self.app.settings.last_tablet = app_id  # the one "Automatic" picks next time
+            self.app.save_settings()
         self._notify_in_app(path, _("Sending {name} to Plus One on {tablet}"), tablet)
 
         from .ink import load_pen
@@ -104,7 +109,8 @@ class Signing:
             result = error = None
             try:
                 result = companion.sign((address, port), path, self._ask_pairing, pen=pen, signatures=ours,
-                                        on_signatures=theirs, on_opened=opened, locate=self._locate_app,
+                                        on_signatures=theirs, on_opened=opened,
+                                        locate=lambda: self._locate_app(app_id),
                                         turn=turn)
             except companion.PairingRefused:
                 error = "refused"
@@ -119,18 +125,28 @@ class Signing:
                 GLib.idle_add(once(self._app_done, path, result, error))
         threading.Thread(target=work, daemon=True).start()
 
-    def _find_app(self):
-        """The app on the network, one already paired first."""
+    def _find_app(self, tablet=None):
+        """(address, port, name, app id) of the app to sign with: the tablet
+        asked for, else the one chosen in the window, else the last one used,
+        else one already paired."""
         try:
             paired = companion.Paired().all()
         except OSError:
             paired = {}
-        return self.app.nearby.companion(paired)
+        settings = self.app.settings
+        prefer = [tablet, settings.sign_tablet, settings.last_tablet]
+        return self.app.nearby.companion(paired, [p for p in prefer if p])
 
-    def _locate_app(self):
-        """Where the app is now (its port changes when it restarts)."""
-        found = self._find_app()
-        return found[:2] if found else None
+    def _locate_app(self, app_id):
+        """Where the app the PDF went to is now (its port changes when it
+        restarts): that tablet's, not another's."""
+        for found, address, port, _name in self.app.nearby.apps():
+            if found == app_id:
+                return address, port
+        if not app_id:  # an app that does not say which it is
+            found = self._find_app()
+            return found[:2] if found else None
+        return None
 
     def _app_done(self, path, result, error):
         if path not in self.in_app:

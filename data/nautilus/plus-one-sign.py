@@ -52,13 +52,32 @@ class PlusOneSign(GObject.GObject, Nautilus.MenuProvider):
         # whether a tablet is around, so only the switch counts.
         return _switched_on()
 
+    def _tablets(self):
+        """The tablets with Plus One's app on the network, [(id, name)], as
+        Plus One says (an older one does not)."""
+        if self._proxy is not None and self._proxy.get_name_owner():
+            found = self._proxy.get_cached_property("SignTablets")
+            if found is not None:
+                return found.unpack()
+        return []
+
     def get_file_items(self, files):
         paths = [f.get_location().get_path() for f in files
                  if f.get_mime_type() == "application/pdf" and f.get_location().get_path()]
         if not paths or len(paths) != len(files) or not self._offered():
             return []
         item = Nautilus.MenuItem(name="PlusOne::Sign", label=_label())
-        item.connect("activate", self._sign, paths)
+        tablets = self._tablets()
+        if len(tablets) > 1:
+            # More than one tablet: say which.
+            menu = Nautilus.Menu()
+            for tablet, name in tablets:
+                choice = Nautilus.MenuItem(name=f"PlusOne::Sign::{tablet}", label=name)
+                choice.connect("activate", self._sign_on, paths, tablet)
+                menu.append_item(choice)
+            item.set_submenu(menu)
+        else:
+            item.connect("activate", self._sign, paths)
         return [item]
 
     def _sign(self, _item, paths):
@@ -69,3 +88,12 @@ class PlusOneSign(GObject.GObject, Nautilus.MenuProvider):
         for path in paths:
             bus.call(BUS_NAME, OBJECT_PATH, INTERFACE, "SignDocument",
                      GLib.Variant("(s)", (path,)), None, Gio.DBusCallFlags.NONE, -1, None, None, None)
+
+    def _sign_on(self, _item, paths, tablet):
+        try:
+            bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        except GLib.Error:
+            return
+        for path in paths:
+            bus.call(BUS_NAME, OBJECT_PATH, INTERFACE, "SignDocumentOn",
+                     GLib.Variant("(ss)", (path, tablet)), None, Gio.DBusCallFlags.NONE, -1, None, None, None)

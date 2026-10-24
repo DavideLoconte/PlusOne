@@ -41,6 +41,10 @@ INTERFACE_XML = f"""
     <method name="SignDocument">
       <arg type="s" name="path" direction="in"/>
     </method>
+    <method name="SignDocumentOn">
+      <arg type="s" name="path" direction="in"/>
+      <arg type="s" name="tablet" direction="in"/>
+    </method>
     <property name="Version" type="s" access="read"/>
     <property name="State" type="s" access="read"/>
     <property name="Active" type="b" access="read"/>
@@ -48,6 +52,7 @@ INTERFACE_XML = f"""
     <property name="Detail" type="s" access="read"/>
     <property name="Background" type="b" access="readwrite"/>
     <property name="SignAvailable" type="b" access="read"/>
+    <property name="SignTablets" type="a(ss)" access="read"/>
   </interface>
 </node>"""
 CONFIG = os.path.join(GLib.get_user_config_dir(), "plus-one", "settings.json")
@@ -344,6 +349,12 @@ class PlusOneApp(Adw.Application):
         self._update_hold()
         self._emit_properties()
 
+    def set_sign_tablet(self, app_id):
+        """The tablet to sign on (its app's id), or None for the last one used."""
+        if app_id != self.settings.sign_tablet:
+            self.settings.sign_tablet = app_id
+            save_settings(self.settings)
+
     def set_sign_on_tablet(self, enabled):
         if enabled == self.settings.sign_on_tablet:
             return
@@ -376,7 +387,11 @@ class PlusOneApp(Adw.Application):
                 "Title": GLib.Variant("s", title),
                 "Detail": GLib.Variant("s", detail),
                 "Background": GLib.Variant("b", self.settings.background),
-                "SignAvailable": GLib.Variant("b", self.sign_available())}
+                "SignAvailable": GLib.Variant("b", self.sign_available()),
+                # The tablets with the app on the network, (id, name): Files
+                # offers a choice when there is more than one.
+                "SignTablets": GLib.Variant("a(ss)", [(app_id, name) for app_id, _a, _p, name
+                                                      in self.nearby.apps() if app_id])}
 
     def _emit_properties(self):
         if self._registration:
@@ -394,6 +409,9 @@ class PlusOneApp(Adw.Application):
                 self.activate()
             elif method == "SignDocument":
                 self.signing.request(params.unpack()[0])
+            elif method == "SignDocumentOn":
+                path, tablet = params.unpack()
+                self.signing.request(path, tablet or None)
         finally:
             invocation.return_value(None)  # the caller waits for it, whatever happened
 

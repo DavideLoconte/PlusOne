@@ -49,6 +49,11 @@ The companion app: ink under the nib.
   a modest resolution as soon as it comes into view (and the ones next to
   it ahead), then sharp tiles at the zoom, also while it still moves; both
   kept in memory, so going back shows them at once.
+- **More than one tablet**: Sign on Tablet in Files becomes a menu of the
+  tablets with the app on the network; the window's *Tablet for signing*
+  picks one for good, or *Automatic*: the last one used (before, the one
+  with the lowest address). A dropped link is picked up from the same
+  tablet, never another.
 - **Material 3 Expressive** look for the app, in the wallpaper's colours,
   light or dark as the system: grouped settings as in Android 16; signing
   under floating bars only (close and title, pages and queue, Done, the

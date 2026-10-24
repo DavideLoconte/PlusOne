@@ -123,6 +123,10 @@ _IT = {
     "Pair": "Abbina",
     "Sign {name} on {tablet}": "Firma {name} su {tablet}",
     "{count} PDFs to sign on {tablet}": "{count} PDF da firmare su {tablet}",
+    "Tablet for signing": "Tablet per firmare",
+    "With more than one on the network, Files asks too": "Con più di uno in rete, lo chiede anche File",
+    "Automatic: the last one used": "Automatico: l'ultimo usato",
+    "A tablet no longer paired": "Un tablet non più abbinato",
     "Signed {count} PDFs": "{count} PDF firmati",
     "Update Plus One": "Aggiorna Plus One",
     "The app on the tablet and Plus One on this PC are different versions: signing with Second Screen instead":

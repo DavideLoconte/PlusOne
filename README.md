@@ -208,6 +208,11 @@ quiet notification; **Ready in the background** in the app turns that off (it
 is then ready for 10 minutes after you open it). If the Wi-Fi drops while you
 sign, Plus One finds the app again and gets the signature when you are done.
 
+**More than one tablet.** With two or more tablets running the app on the
+network, *Sign on Tablet* in Files asks which; **Options → Tablet for
+signing** in the window picks one for good, or *Automatic*, the last one
+used.
+
 **Several pages.** The pages lie one under the other, as in a note app: a
 finger scrolls through them, and the pen signs on whichever page it touches.
 In the app, **Documents of several pages → Scroll through the pages** off
