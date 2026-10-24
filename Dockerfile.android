@@ -34,6 +34,8 @@ RUN curl -fsSL -o /tmp/gradle.zip "https://services.gradle.org/distributions/gra
     && ln -s "/opt/gradle-$GRADLE/bin/gradle" /usr/local/bin/gradle \
     && rm /tmp/gradle.zip
 
-# Gradle's caches live in a volume (see tools/android-docker.sh).
-ENV GRADLE_USER_HOME=/gradle
+# Gradle's caches live in a volume (see tools/android-docker.sh), and so
+# does the debug signing key: a new one at every build would make Android
+# refuse to update the installed app.
+ENV GRADLE_USER_HOME=/gradle ANDROID_USER_HOME=/gradle/android
 WORKDIR /src/android
