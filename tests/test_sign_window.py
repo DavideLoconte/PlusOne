@@ -221,7 +221,7 @@ def test_pen_colour_and_width(window):
     win._place_date()
     win.place_at(100, 700)
     assert win.marks[0][-1].color == (0.8, 0.1, 0.1)
-    assert load_pen(sign.PEN) == ((0.8, 0.1, 0.1), 4.0, 0)   # remembered for next time
+    assert spin(lambda: load_pen(sign.PEN) == ((0.8, 0.1, 0.1), 4.0, 0))   # remembered for next time
 
 
 class Drag:

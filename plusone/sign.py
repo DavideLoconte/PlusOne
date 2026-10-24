@@ -4,6 +4,7 @@ The S Pen draws (with pressure) and, with its side button held, erases;
 fingers never draw, so a palm resting on the screen leaves no marks. Two
 fingers zoom and move the page. A mouse also draws, for signing on the PC.
 """
+import collections
 import datetime
 import faulthandler
 import itertools
@@ -46,6 +47,10 @@ REPORT_INTERVAL = 1 / 285
 MIN_STEP = 1.0  # widget pixels a modelled point must move to be kept
 STALL = 3  # seconds without answering: GNOME is about to call the window frozen
 CHUNK = 24  # settled stroke segments turned into one texture while drawing
+# Past this the page is magnified rather than rendered bigger: an A4 page at
+# the 8x zoom is 32 million pixels, 128 MB plus a copy for the texture.
+MAX_PAGE_PIXELS = 16_000_000
+PEN_SAVE_DELAY = 500  # ms after the last change of colour, thickness or stabilization
 # cairo's 32-bit pixels are native-endian words: B, G, R, A bytes here.
 LITTLE = sys.byteorder == "little"
 OPAQUE = Gdk.MemoryFormat.B8G8R8X8 if LITTLE else Gdk.MemoryFormat.X8R8G8B8
@@ -131,7 +136,8 @@ class Lag:
 
     def __init__(self):
         self.waits, self.gaps = [], []      # this stroke
-        self.all_waits, self.all_gaps = [], []
+        # The window's: the last ten thousand or so.
+        self.all_waits, self.all_gaps = collections.deque(maxlen=20000), collections.deque(maxlen=5000)
         self.last_frame = None
 
     def waited(self, seconds):
@@ -146,8 +152,8 @@ class Lag:
     def stroke_done(self):
         if self.waits and sum(self.waits) / len(self.waits) > self.SLOW:
             log("pen: slow stroke: " + self._describe(self.waits, self.gaps))
-        self.all_waits += self.waits
-        self.all_gaps += self.gaps
+        self.all_waits.extend(self.waits)
+        self.all_gaps.extend(self.gaps)
         self.waits, self.gaps, self.last_frame = [], [], None
 
     def summary(self):
@@ -592,7 +598,8 @@ class PageArea(Gtk.Widget):
         page_rect = rect(v.ox, v.oy, w * v.zoom, h * v.zoom)
         # The page floats over the background on a soft shadow.
         snapshot.append_outset_shadow(Gsk.RoundedRect().init_from_rect(page_rect, 0), SHADOW, 0, 3, 0, 14)
-        scale, _surface, page = self._page_surface(v.zoom * self.get_scale_factor())
+        scale = min(v.zoom * self.get_scale_factor(), math.sqrt(MAX_PAGE_PIXELS / (w * h)))
+        scale, _surface, page = self._page_surface(scale)
         snapshot.append_texture(page, page_rect)
         snapshot.push_clip(page_rect)
         if self._stroke is not None:
@@ -604,8 +611,9 @@ class PageArea(Gtk.Widget):
                                                     surface.get_width() * k, surface.get_height() * k))
             # The rest of the stroke, up to where the pen is predicted to be by now.
             tail = [(*v.to_page(x, y), p) for x, y, p in self._model.predict()]
-            points = self._stroke.points + tail
-            segments = list(self._segments(points, self._inked)) if points else []
+            base = max(0, self._inked - 1)  # what the segments not in chunks need
+            points = self._stroke.points[base:] + tail
+            segments = list(self._segments(points, self._inked - base)) if points else []
             if segments:
                 # The curve stays within its control points.
                 cr = self._cairo(snapshot, [p for seg in segments for p in seg[:4]], self._stroke.width / 2)
@@ -666,6 +674,7 @@ class SignWindow(Adw.ApplicationWindow):
         self.result = None
         self.signature = load_signature(SIGNATURE)
         self.pen_color, self.pen_width, self.pen_smoothing = load_pen(PEN)
+        self._pen_save = None  # a pending write of the pen settings
 
         header = Adw.HeaderBar(show_end_title_buttons=False)
         self.cancel_button = Gtk.Button(label=_("Cancel"))
@@ -872,10 +881,23 @@ class SignWindow(Adw.ApplicationWindow):
         self.pen_color = color or self.pen_color
         self.pen_width = width or self.pen_width
         self.pen_smoothing = self.pen_smoothing if smoothing is None else smoothing
-        save_pen(PEN, self.pen_color, self.pen_width, self.pen_smoothing)
+        # Sliders change it many times a second: write once they settle.
+        if self._pen_save:
+            GLib.source_remove(self._pen_save)
+        self._pen_save = GLib.timeout_add(PEN_SAVE_DELAY, self._save_pen, True)
         self.pen_swatch.queue_draw()
         self.pen_preview.queue_draw()
         self.signature_thumb.queue_draw()
+
+    def _save_pen(self, from_timer=False):
+        """Write the pen settings if a change waits (when it is due, or at close)."""
+        if self._pen_save is None:
+            return GLib.SOURCE_REMOVE
+        if not from_timer:
+            GLib.source_remove(self._pen_save)
+        self._pen_save = None
+        save_pen(PEN, self.pen_color, self.pen_width, self.pen_smoothing)
+        return GLib.SOURCE_REMOVE
 
     def erasing(self):
         return self.eraser.get_active()
@@ -1079,6 +1101,7 @@ class SignWindow(Adw.ApplicationWindow):
             return True  # closing now would lose the result the file is being written for
         self._watching = False
         faulthandler.cancel_dump_traceback_later()
+        self._save_pen()
         pen_feed.unlisten(self.area.raw.reader)
         drawn, desktop = self.area.raw_counts
         if drawn:
