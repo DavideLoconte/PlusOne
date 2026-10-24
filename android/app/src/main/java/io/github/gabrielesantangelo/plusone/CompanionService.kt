@@ -110,6 +110,14 @@ class CompanionService : Service() {
                     val (message, payload) = wire.receive()
                     when (message.optString("type")) {
                         "sign" -> sign(wire, message, payload ?: ByteArray(0))
+                        "resume" -> {
+                            val job = message.optString("job")
+                            if (Jobs.resume(job) { answer(wire, job, it.result) }) {
+                                wire.send(JSONObject().put("type", "resumed").put("job", job))
+                            } else {
+                                wire.send(JSONObject().put("type", "unknown-job").put("job", job))
+                            }
+                        }
                         "ping" -> wire.send(JSONObject().put("type", "pong"))
                         "bye" -> return
                     }
@@ -125,31 +133,35 @@ class CompanionService : Service() {
         val job = message.getString("job")
         val file = File(File(cacheDir, "jobs").apply { mkdirs() }, "$job.pdf")
         file.writeBytes(pdf)
-        Jobs.expect(job) { result ->
-            connections.execute {
-                try {
-                    if (result != null) {
-                        wire.send(JSONObject().put("type", "signed").put("job", job).put("marks", result))
-                    } else {
-                        wire.send(JSONObject().put("type", "cancelled").put("job", job))
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "could not answer job $job: $e")
-                } finally {
-                    file.delete()
-                }
-            }
-        }
+        Jobs.start(job) { answer(wire, job, it.result) }
         val title = message.optString("title", file.name)
-        val open = Intent(this, SignActivity::class.java)
-            .putExtra(SignActivity.EXTRA_PATH, file.path)
-            .putExtra(SignActivity.EXTRA_JOB, job)
-            .putExtra(SignActivity.EXTRA_TITLE, title)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val open = Intent(this, SignActivity::class.java).apply {
+            putExtra(SignActivity.EXTRA_PATH, file.path)
+            putExtra(SignActivity.EXTRA_JOB, job)
+            putExtra(SignActivity.EXTRA_TITLE, title)
+            // The PC's pen and saved signature, so both sides sign alike.
+            message.optJSONObject("pen")?.let { putExtra(SignActivity.EXTRA_PEN, it.toString()) }
+            message.optJSONObject("signature")?.let { putExtra(SignActivity.EXTRA_SIGNATURE, it.toString()) }
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
         // Opening over whatever is on screen needs "Display over other apps";
         // without it, a notification to tap.
         if (Settings.canDrawOverlays(this)) startActivity(open) else Notifications.signJob(this, title, open)
         wire.send(JSONObject().put("type", "opened").put("job", job))
+    }
+
+    /** Sends a job's answer; false if the link is gone (the PC asks again). */
+    private fun answer(wire: Wire, job: String, result: JSONObject?): Boolean = try {
+        if (result != null) {
+            wire.send(JSONObject().put("type", "signed").put("job", job).put("marks", result))
+        } else {
+            wire.send(JSONObject().put("type", "cancelled").put("job", job))
+        }
+        File(File(cacheDir, "jobs"), "$job.pdf").delete()
+        true
+    } catch (e: Exception) {
+        Log.w(TAG, "could not answer job $job yet: $e")
+        false
     }
 
     companion object {

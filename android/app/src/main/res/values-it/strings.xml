@@ -24,4 +24,20 @@
     <string name="heading_paired">COMPUTER ABBINATI</string>
     <string name="paired_none">Ancora nessuno. Sul PC, clic destro su un PDF → Firma sul tablet, e conferma qui il codice.</string>
     <string name="forget">Dimentica</string>
+    <string name="ink_blue_ink">Inchiostro blu</string>
+    <string name="ink_black">Nero</string>
+    <string name="ink_blue">Blu</string>
+    <string name="ink_red">Rosso</string>
+    <string name="ink_green">Verde</string>
+    <string name="thickness">Spessore</string>
+    <string name="my_signature">Firma</string>
+    <string name="date">Data</string>
+    <string name="text">Testo</string>
+    <string name="keep_signature">Tieni come mia firma</string>
+    <string name="signature_kept">Tenuta: la prossima volta “Firma” la mette con un tocco (anche sul PC)</string>
+    <string name="tap_signature">Tocca dove va la firma</string>
+    <string name="tap_date">Tocca dove va la data</string>
+    <string name="tap_text">Tocca dove va il testo</string>
+    <string name="text_to_add">Testo da aggiungere</string>
+    <string name="place">Metti</string>
 </resources>

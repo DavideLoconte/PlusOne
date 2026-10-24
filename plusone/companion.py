@@ -16,6 +16,7 @@ import os
 import socket
 import ssl
 import struct
+import time
 import uuid
 
 from gi.repository import GLib
@@ -137,13 +138,19 @@ class PairingRefused(Exception):
     pass
 
 
-def sign(target, path, ask_pairing, paired=None, on_opened=None):
-    """Blocking (run it in a thread): send the PDF at path to the app at
-    target (host, port) and wait for the user to sign it there. Returns the
-    marks ({"pages": [...]}) or None if the user cancelled. ask_pairing(name,
-    code) -> bool asks this PC's user (from this thread) when pairing is
-    needed. Raises OSError, EOFError, ValueError or PairingRefused."""
-    paired = paired or Paired()
+class Lost(Exception):
+    """The link went while the user was signing on the tablet, and it did
+    not come back in time: what was signed there did not reach the PC."""
+
+
+RESUME_FOR = 600     # seconds to look for the tablet again after the link drops mid-job
+RESUME_EVERY = 5     # seconds between attempts
+
+
+def _connect(target, paired, ask_pairing):
+    """(socket, wire, tablet name) of a TLS link to the app at target, the
+    tablet paired (asking the user through ask_pairing if needed, or raising
+    PairingRefused if ask_pairing is None)."""
     cert, key, ours = identity()
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     # No CA vouches for either side: the app's certificate is checked
@@ -152,7 +159,12 @@ def sign(target, path, ask_pairing, paired=None, on_opened=None):
     context.verify_mode = ssl.CERT_NONE
     context.load_cert_chain(cert, key)
     raw = socket.create_connection(target, timeout=CONNECT_TIMEOUT)
-    with context.wrap_socket(raw) as sock:
+    try:
+        sock = context.wrap_socket(raw)
+    except Exception:
+        raw.close()
+        raise
+    try:
         theirs = sock.getpeercert(binary_form=True)
         fp = fingerprint(theirs)
         wire = Wire(sock)
@@ -161,6 +173,8 @@ def sign(target, path, ask_pairing, paired=None, on_opened=None):
         hello, _ = wire.receive()
         name = hello.get("name", "tablet")
         if not known or not hello.get("paired"):
+            if ask_pairing is None:
+                raise PairingRefused(name)
             code = pairing_code(ours, theirs)
             log(f"companion: pairing with {name}, code {code}")
             sock.settimeout(PAIRING_TIMEOUT + 10)
@@ -170,41 +184,100 @@ def sign(target, path, ask_pairing, paired=None, on_opened=None):
             if not accepted or answer.get("type") != "pair-ok":
                 raise PairingRefused(name)
             paired.add(fp, name)
+        return sock, wire, name
+    except Exception:
+        sock.close()
+        raise
+
+
+def _answer(wire, job, on_opened, name):
+    """Waits for the job's answer: the result, or None if cancelled."""
+    while True:
+        message, _ = wire.receive()
+        kind = message.get("type")
+        if kind == "opened" and on_opened:
+            on_opened(name)
+        elif kind == "unknown-job":
+            raise Lost("the tablet no longer has the job")
+        elif kind == "signed" and message.get("job") == job:
+            wire.send({"type": "bye"})
+            return message.get("marks") or {"pages": []}
+        elif kind == "cancelled" and message.get("job") == job:
+            wire.send({"type": "bye"})
+            return None
+
+
+def sign(target, path, ask_pairing, paired=None, on_opened=None, pen=None, signature=None,
+         locate=None, resume_for=RESUME_FOR):
+    """Blocking (run it in a thread): send the PDF at path to the app at
+    target (host, port) and wait for the user to sign it there. Returns the
+    result ({"pages": [...], "pen": ..., maybe "signature": ...}) or None if
+    the user cancelled. ask_pairing(name, code) -> bool asks this PC's user
+    (from this thread) when pairing is needed. pen ({"color", "width"}) and
+    signature (as ink.py saves it) go along, so the tablet signs like the PC.
+
+    Should the link drop once the PDF is on the tablet, the app keeps the
+    job: Plus One connects again (to locate()'s address, the app's port may
+    have changed) and asks for it, for resume_for seconds.
+
+    Raises OSError, EOFError, ValueError or PairingRefused before the PDF
+    reached the tablet, Lost after."""
+    paired = paired or Paired()
+    sock, wire, name = _connect(target, paired, ask_pairing)
+    job = uuid.uuid4().hex
+    with sock:
         with open(path, "rb") as f:
             pdf = f.read()
-        job = uuid.uuid4().hex
         sock.settimeout(CONNECT_TIMEOUT * 6)
-        wire.send({"type": "sign", "job": job, "title": os.path.basename(path)}, pdf)
-        # Signing takes as long as the user wants.
-        sock.settimeout(None)
-        while True:
-            message, _ = wire.receive()
-            kind = message.get("type")
-            if kind == "opened" and on_opened:
-                on_opened(name)
-            elif kind == "signed" and message.get("job") == job:
-                wire.send({"type": "bye"})
-                return message.get("marks") or {"pages": []}
-            elif kind == "cancelled" and message.get("job") == job:
-                wire.send({"type": "bye"})
-                return None
+        header = {"type": "sign", "job": job, "title": os.path.basename(path)}
+        if pen:
+            header["pen"] = pen
+        if signature:
+            header["signature"] = signature
+        wire.send(header, pdf)
+        sock.settimeout(None)  # signing takes as long as the user wants
+        try:
+            return _answer(wire, job, on_opened, name)
+        except (OSError, EOFError, ValueError) as e:
+            log("companion: lost the tablet while signing:", repr(e))
+    deadline = time.monotonic() + resume_for
+    while time.monotonic() < deadline:
+        time.sleep(RESUME_EVERY)
+        where = locate() if locate else target
+        if not where:
+            continue
+        try:
+            sock, wire, name = _connect(where, paired, None)
+        except (OSError, EOFError, ValueError, PairingRefused):
+            continue
+        with sock:
+            try:
+                wire.send({"type": "resume", "job": job})
+                sock.settimeout(None)
+                log("companion: back in touch with the tablet")
+                return _answer(wire, job, None, name)
+            except (OSError, EOFError, ValueError) as e:
+                log("companion: lost the tablet again:", repr(e))
+    raise Lost(name)
 
 
 def to_marks(result):
-    """The app's marks as plusone/pdf.py takes them: {page index: [Stroke]}."""
-    from .pdf import Stroke
+    """The app's marks as plusone/pdf.py takes them: {page index: [Stroke | Text]}."""
+    from .pdf import INK, PEN_WIDTH, Stroke, Text
 
     marks = {}
     for page in result.get("pages", []):
-        strokes = []
+        found = []
         for mark in page.get("marks", []):
-            if mark.get("type") != "stroke":
-                continue
-            p = mark.get("points", [])
-            points = [(p[i], p[i + 1], p[i + 2]) for i in range(0, len(p) - 2, 3)]
-            if points:
-                strokes.append(Stroke(points, width=float(mark.get("width", 1.6)),
-                                      color=tuple(mark.get("color", (0.05, 0.1, 0.35)))))
-        if strokes:
-            marks[int(page["page"])] = strokes
+            color = tuple(mark.get("color", INK))
+            if mark.get("type") == "stroke":
+                p = mark.get("points", [])
+                points = [(p[i], p[i + 1], p[i + 2]) for i in range(0, len(p) - 2, 3)]
+                if points:
+                    found.append(Stroke(points, width=float(mark.get("width", PEN_WIDTH)), color=color))
+            elif mark.get("type") == "text" and mark.get("text"):
+                found.append(Text(float(mark["x"]), float(mark["y"]), str(mark["text"]),
+                                  size=float(mark.get("size", 11.0)), color=color))
+        if found:
+            marks[int(page["page"])] = found
     return marks

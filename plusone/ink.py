@@ -225,8 +225,13 @@ def load_signature(path):
 
 
 def save_signature(path, strokes):
+    store_signature(path, normalize(strokes))
+
+
+def store_signature(path, signature):
+    """A normalized signature (see normalize), as kept on the tablet too."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".part"
     with open(tmp, "w") as f:
-        json.dump(normalize(strokes), f)
+        json.dump(signature, f)
     os.replace(tmp, path)

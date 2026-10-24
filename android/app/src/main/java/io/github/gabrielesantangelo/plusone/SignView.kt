@@ -62,12 +62,18 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
     var onChange: () -> Unit = {}
     /** The eraser button in the toolbar, for pens without a side button. */
     var eraserMode = false
+    /** The pen: its colour and width (points at full pressure). */
+    var penColor = Ink.COLOR
+    var penWidth = Ink.WIDTH
+    /** Marks waiting for a tap to say where they go (signature, date, text). */
+    var pending: ((Float, Float) -> List<Mark>)? = null
+    var onPlaced: () -> Unit = {}
 
     var index = 0
         private set
     val pageCount get() = pdf.sizes.size
-    val marks = HashMap<Int, MutableList<Stroke>>()
-    private val history = ArrayDeque<Pair<Int, List<Stroke>>>()
+    val marks = HashMap<Int, MutableList<Mark>>()
+    private val history = ArrayDeque<Pair<Int, List<Mark>>>()
     val canUndo get() = history.isNotEmpty()
     val isEmpty get() = marks.values.all { it.isEmpty() }
 
@@ -88,14 +94,14 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
     /** What the render thread draws: a snapshot, as the UI thread moves on. */
     private class Scene(
         val index: Int, val size: SizeF, val zoom: Float, val ox: Float, val oy: Float,
-        val picture: Picture?, val strokes: List<Stroke>, val eraser: FloatArray?,
+        val picture: Picture?, val marks: List<Mark>, val eraser: FloatArray?,
     )
     @Volatile private var scene: Scene? = null
 
     /** A piece of the stroke being drawn, in screen pixels. */
     class Segment(
         val x0: Float, val y0: Float, val p0: Float,
-        val x1: Float, val y1: Float, val p1: Float, val width: Float,
+        val x1: Float, val y1: Float, val p1: Float, val width: Float, val color: Int,
     )
 
     private val ink = Paint().apply {
@@ -106,6 +112,8 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
         color = Ink.COLOR
     }
     private val white = Paint().apply { color = Color.WHITE }
+    // pdf.py draws text in "Sans".
+    private val text = Paint().apply { isAntiAlias = true; typeface = android.graphics.Typeface.SANS_SERIF }
     private val shadow = Paint().apply { color = Color.argb(40, 0, 0, 0) }
     private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val eraserPaint = Paint().apply {
@@ -117,6 +125,7 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
 
     private val front = CanvasFrontBufferedRenderer(this, object : CanvasFrontBufferedRenderer.Callback<Segment> {
         override fun onDrawFrontBufferedLayer(canvas: Canvas, bufferWidth: Int, bufferHeight: Int, param: Segment) {
+            ink.color = param.color
             ink.strokeWidth = Ink.width(param.width, (param.p0 + param.p1) / 2)
             canvas.drawLine(param.x0, param.y0, param.x1, param.y1, ink)
         }
@@ -245,7 +254,16 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
         }
         canvas.translate(s.ox, s.oy)
         canvas.scale(s.zoom, s.zoom)
-        for (stroke in s.strokes) drawStroke(canvas, stroke)
+        for (mark in s.marks) {
+            when (mark) {
+                is Stroke -> drawStroke(canvas, mark)
+                is TextMark -> {
+                    text.color = mark.color
+                    text.textSize = mark.size
+                    canvas.drawText(mark.text, mark.x, mark.y, text)
+                }
+            }
+        }
         canvas.restore()
         s.eraser?.let { canvas.drawCircle(it[0], it[1], ERASER_RADIUS, eraserPaint) }
     }
@@ -261,7 +279,6 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
             ink.strokeWidth = Ink.width(stroke.width, (p[i + 2] + p[i + 5]) / 2)
             canvas.drawLine(p[i], p[i + 1], p[i + 3], p[i + 4], ink)
         }
-        ink.color = Ink.COLOR
     }
 
     // -- the pen -------------------------------------------------------------
@@ -310,20 +327,35 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
                 lastP = e.pressure
                 erasing = isEraser(e)
                 erasedThisStroke = false
+                val place = pending
+                if (place != null && !erasing) {
+                    // A tap says where the signature, date or text goes.
+                    placeAt(place, toPageX(lastX), toPageY(lastY))
+                    stroke = null
+                    placing = true
+                    return
+                }
+                placing = false
                 if (erasing) {
                     eraseAlong(lastX, lastY, lastX, lastY)
                 } else {
                     stroke = FloatArrayBuilder().apply { add(toPageX(lastX), toPageY(lastY), lastP) }
-                    front.renderFrontBufferedLayer(Segment(lastX, lastY, lastP, lastX, lastY, lastP, Ink.WIDTH * zoom))
+                    front.renderFrontBufferedLayer(Segment(lastX, lastY, lastP, lastX, lastY, lastP,
+                        penWidth * zoom, penColor))
                 }
             }
             MotionEvent.ACTION_MOVE -> {
+                if (placing) return
                 for (i in 0 until e.historySize) {
                     extend(e.getHistoricalX(i), e.getHistoricalY(i), e.getHistoricalPressure(i))
                 }
                 extend(e.x, e.y, e.pressure)
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (placing) {
+                    placing = false
+                    return
+                }
                 if (e.actionMasked == MotionEvent.ACTION_UP) extend(e.x, e.y, e.pressure)
                 val done = stroke
                 stroke = null
@@ -331,7 +363,7 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
                     erasing = false
                     changed()  // the eraser's ring goes
                 } else if (done != null) {
-                    addMark(Stroke(done.toArray()))
+                    addMarks(listOf(Stroke(done.toArray(), penWidth, penColor)))
                     sceneInFlight = true  // commit draws the multi-buffered layer too
                     sceneSent = SystemClock.uptimeMillis()
                     front.commit()
@@ -345,7 +377,7 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
             eraseAlong(lastX, lastY, x, y)
         } else {
             stroke?.add(toPageX(x), toPageY(y), p)
-            front.renderFrontBufferedLayer(Segment(lastX, lastY, lastP, x, y, p, Ink.WIDTH * zoom))
+            front.renderFrontBufferedLayer(Segment(lastX, lastY, lastP, x, y, p, penWidth * zoom, penColor))
         }
         lastX = x
         lastY = y
@@ -355,13 +387,25 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
     private fun toPageX(x: Float) = (x - ox) / zoom
     private fun toPageY(y: Float) = (y - oy) / zoom
 
-    private fun addMark(mark: Stroke) {
+    private fun addMarks(new: List<Mark>) {
         val list = marks.getOrPut(index) { mutableListOf() }
         history.addLast(index to list.toList())
-        list.add(mark)
+        list.addAll(new)
         scene = Scene(index, pdf.sizes[index], zoom, ox, oy, picture, list.toList(), null)
         onChange()
     }
+
+    private var placing = false
+
+    private fun placeAt(place: (Float, Float) -> List<Mark>, x: Float, y: Float) {
+        pending = null
+        addMarks(place(x, y))
+        changed()
+        onPlaced()
+    }
+
+    /** The strokes on the page shown (for keeping them as the signature). */
+    val pageStrokes get() = marks[index]?.filterIsInstance<Stroke>() ?: emptyList()
 
     /** Removes the strokes the eraser touches going from a to b (screen pixels). */
     private fun eraseAlong(ax: Float, ay: Float, bx: Float, by: Float) {
@@ -409,6 +453,12 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
     })
 
     private val taps = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+        override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+            val place = pending ?: return false
+            placeAt(place, toPageX(e.x), toPageY(e.y))
+            return true
+        }
+
         override fun onDoubleTap(e: MotionEvent): Boolean {
             // In where the finger lands, or back to the whole page.
             if (zoom < fitZoom * 1.5f) {

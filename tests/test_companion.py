@@ -55,3 +55,55 @@ def test_paired_tablets_are_remembered(tmp_path):
     assert companion.Paired(str(tmp_path)).all() == {"ab" * 32: "Galaxy Tab"}
     paired.forget("ab" * 32)
     assert paired.all() == {}
+
+
+def test_text_from_the_app():
+    marks = companion.to_marks({"pages": [{"page": 1, "marks": [
+        {"type": "text", "x": 100, "y": 700, "text": "24/10/2026", "size": 11, "color": [0, 0, 0]}]}]})
+    text = marks[1][0]
+    assert (text.x, text.y, text.text, text.size) == (100.0, 700.0, "24/10/2026", 11.0)
+
+
+def test_a_dropped_link_is_resumed(tmp_path, monkeypatch):
+    # The link drops once the PDF is on the tablet; Plus One connects again
+    # and gets the signature the user finished meanwhile.
+    import ssl
+    import threading
+    pytest.importorskip("cryptography")
+    monkeypatch.setattr(companion, "CONFIG", str(tmp_path / "pc"))
+    monkeypatch.setattr(companion, "RESUME_EVERY", 0.01)
+    app_cert, app_key, app_der = companion.identity(str(tmp_path / "app"))
+    paired = companion.Paired(str(tmp_path / "pc"))
+    paired.add(companion.fingerprint(app_der), "Tab")
+    server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_ctx.load_cert_chain(app_cert, app_key)
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(2)
+    marks = {"pages": [{"page": 0, "marks": []}]}
+    seen = []
+
+    def app():
+        for attempt in range(2):
+            raw, _ = listener.accept()
+            with server_ctx.wrap_socket(raw, server_side=True) as sock:
+                wire = companion.Wire(sock)
+                wire.receive()
+                wire.send({"type": "hello", "name": "Tab", "paired": True})
+                message, payload = wire.receive()
+                seen.append(message["type"])
+                if attempt == 0:
+                    wire.send({"type": "opened", "job": message["job"]})
+                    job = message["job"]
+                else:
+                    assert message == {"type": "resume", "job": job}
+                    wire.send({"type": "signed", "job": job, "marks": marks})
+                    wire.receive()  # bye
+
+    threading.Thread(target=app, daemon=True).start()
+    pdf = tmp_path / "doc.pdf"
+    pdf.write_bytes(b"%PDF-1.7")
+    target = listener.getsockname()
+    result = companion.sign(target, str(pdf), ask_pairing=None, paired=paired, locate=lambda: target)
+    assert result == marks and seen == ["sign", "resume"]
+    listener.close()

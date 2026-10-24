@@ -21,6 +21,9 @@ from .i18n import _
 MONITOR_WAIT = 5  # seconds for the tablet's monitor to appear once streaming
 NOTIFICATION = "sign"
 PAIRING = "pair"
+# Shared with the signing window (sign.py).
+SIGNATURE = os.path.join(GLib.get_user_data_dir(), "plus-one", "signature.json")
+PEN = os.path.join(GLib.get_user_config_dir(), "plus-one", "pen.json")
 
 
 class Signing:
@@ -81,16 +84,29 @@ class Signing:
         self._notify_waiting(path, _("Sending {name} to Plus One on {tablet}")
                              .format(name=os.path.basename(path), tablet=tablet))
 
+        from .ink import load_pen, load_signature
+        color, width, _smoothing = load_pen(PEN)
+        pen = {"color": list(color), "width": width}
+        signature = load_signature(SIGNATURE)
+
         def work():
             error = None
             try:
-                result = companion.sign((address, port), path, self._ask_pairing)
+                result = companion.sign((address, port), path, self._ask_pairing, pen=pen, signature=signature,
+                                        locate=self._locate_app)
             except companion.PairingRefused:
                 result, error = None, "refused"
+            except companion.Lost:
+                result, error = None, "lost"
             except (OSError, EOFError, ValueError, ssl.SSLError) as e:
                 result, error = None, e
             GLib.idle_add(once(self._app_done, path, result, error))
         threading.Thread(target=work, daemon=True).start()
+
+    def _locate_app(self):
+        """Where the app is now (its port changes when it restarts)."""
+        found = self.app.nearby.companion()
+        return found[:2] if found else None
 
     def _app_done(self, path, result, error):
         if path not in self.in_app:
@@ -102,11 +118,19 @@ class Signing:
             note.set_body(_("The codes were not confirmed on both the PC and the tablet"))
             self.app.send_notification(NOTIFICATION, note)
             return
+        if error == "lost":
+            note = Gio.Notification.new(_("Lost the tablet"))
+            note.set_body(_("What was signed on the tablet did not reach the PC: {name} is unchanged")
+                          .format(name=os.path.basename(path)))
+            self.app.send_notification(NOTIFICATION, note)
+            return
         if error is not None:
             # The app did not answer: Second Screen instead.
             log("signing in the app failed:", repr(error))
             self._second_screen(path)
             return
+        if result:
+            self._keep_from_app(result)
         marks = companion.to_marks(result) if result else {}
         if not marks:
             self.app.withdraw_notification(NOTIFICATION)
@@ -121,6 +145,24 @@ class Signing:
                 done = e
             GLib.idle_add(once(self._app_saved, done))
         threading.Thread(target=save, daemon=True).start()
+
+    def _keep_from_app(self, result):
+        """The pen chosen and a signature kept on the tablet, for next time
+        (on the PC too)."""
+        from .ink import load_pen, save_pen, store_signature
+        pen = result.get("pen")
+        if isinstance(pen, dict):
+            try:
+                _color, _width, smoothing = load_pen(PEN)
+                save_pen(PEN, tuple(float(c) for c in pen["color"]), float(pen["width"]), smoothing)
+            except (KeyError, TypeError, ValueError, OSError) as e:
+                log("signing: pen from the tablet not kept:", repr(e))
+        signature = result.get("signature")
+        if isinstance(signature, dict) and signature.get("strokes"):
+            try:
+                store_signature(SIGNATURE, signature)
+            except OSError as e:
+                log("signing: signature from the tablet not kept:", repr(e))
 
     def _app_saved(self, result):
         if isinstance(result, Exception):

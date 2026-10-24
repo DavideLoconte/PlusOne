@@ -26,4 +26,20 @@
     <string name="heading_paired">PAIRED COMPUTERS</string>
     <string name="paired_none">None yet. On the PC, right-click a PDF → Sign on Tablet, and confirm the code here.</string>
     <string name="forget">Forget</string>
+    <string name="ink_blue_ink">Blue ink</string>
+    <string name="ink_black">Black</string>
+    <string name="ink_blue">Blue</string>
+    <string name="ink_red">Red</string>
+    <string name="ink_green">Green</string>
+    <string name="thickness">Thickness</string>
+    <string name="my_signature">Signature</string>
+    <string name="date">Date</string>
+    <string name="text">Text</string>
+    <string name="keep_signature">Keep as my signature</string>
+    <string name="signature_kept">Kept: next time, “Signature” places it with one tap (on the PC too)</string>
+    <string name="tap_signature">Tap where your signature goes</string>
+    <string name="tap_date">Tap where the date goes</string>
+    <string name="tap_text">Tap where the text goes</string>
+    <string name="text_to_add">Text to add</string>
+    <string name="place">Place</string>
 </resources>

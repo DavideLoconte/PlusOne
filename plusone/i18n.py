@@ -104,6 +104,9 @@ _IT = {
     "Check that the tablet shows the same code: {code}":
         "Controlla che il tablet mostri lo stesso codice: {code}",
     "Pair": "Abbina",
+    "Lost the tablet": "Tablet perso",
+    "What was signed on the tablet did not reach the PC: {name} is unchanged":
+        "Quanto firmato sul tablet non è arrivato al PC: {name} è rimasto com'era",
     "Pair only if the tablet shows this same code, and confirm there too:":
         "Abbina solo se il tablet mostra questo stesso codice, e conferma anche lì:",
     "Opening Second Screen on the tablet…": "Apro Second Screen sul tablet…",

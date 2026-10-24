@@ -32,8 +32,7 @@ from .modeler import LEVELS, Params, StrokeModeler  # noqa: E402
 from .pdf import INK, Stroke, Text, curve, draw_marks, draw_segments, output_path, save_signed  # noqa: E402
 from .pen import feed as pen_feed  # noqa: E402
 
-SIGNATURE = os.path.join(GLib.get_user_data_dir(), "plus-one", "signature.json")
-PEN = os.path.join(GLib.get_user_config_dir(), "plus-one", "pen.json")
+from .signing import PEN, SIGNATURE  # noqa: E402 - shared with the tablet's app
 PEN_SOURCES = (Gdk.InputSource.PEN, Gdk.InputSource.TOUCHSCREEN)
 NO_PRESSURE = 0.35  # mouse, or a pen that reports none: a medium line
 ERASER_RADIUS = 12  # widget pixels around the pen tip
