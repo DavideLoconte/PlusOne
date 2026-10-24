@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.5.0 (in progress)
+
+The companion app: ink under the nib.
+
+- **Plus One for the tablet** (`android/`, Kotlin): Sign on Tablet sends the
+  PDF to it over the home network, and the ink is drawn on the tablet
+  itself, from every pen sample, into the front buffer (like a note app),
+  instead of reaching it as video through Second Screen. No Wi-Fi Direct.
+- The PDF is rendered by the tablet, sharp at any zoom; the same tools as on
+  the PC (pen colour and thickness, the saved signature, date, text, the
+  S Pen's side button to erase, undo, clear, pages; pinch and double-tap to
+  zoom, fingers ignored while the pen is near). Pen and saved signature are
+  shared with the PC.
+- Paired once by comparing a six-digit code on both screens; TLS with a key
+  kept by Android's keystore on the tablet. Nothing else on the network can
+  send PDFs to the app or read what is signed.
+- Opens by itself (with the "display over other apps" permission) or from a
+  notification; always ready in the background by default, with a quiet
+  notification, or only for a while after the app is opened.
+- A Wi-Fi drop while signing does not lose the signature: Plus One finds the
+  app again and gets it when the user is done.
+- When the app is not there, Second Screen as before.
+- Builds in a container (`tools/android-docker.sh`, `Dockerfile.android`),
+  nothing Android on the host; CI builds it, releases attach the signed APK.
+- New dependency: `openssl` (the PC's certificate).
+
 ## 0.4.0
 
 Sign on the tablet.

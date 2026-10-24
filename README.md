@@ -173,6 +173,31 @@ The Files menu entry needs `python3-nautilus` (installed with the `.deb` by
 default) and appears after Files restarts (`nautilus -q`). In the Flatpak,
 use *Open With*; if the folder cannot be written, Plus One asks where to save.
 
+### The companion app: ink under the nib
+
+Through Second Screen, the ink reaches the tablet as video, 70-100 ms behind
+the pen. Plus One's app for the tablet draws it on the tablet itself, as a
+note app does, and needs neither Second Screen nor Wi-Fi Direct: the PC finds
+it on the home network.
+
+1. Install `plus-one-companion_*.apk` from the release on the tablet (allow
+   installing from your browser or file manager when Android asks), and
+   open **Plus One** once.
+2. In the app, allow it to **display over other apps**, so a PDF sent from
+   the PC opens by itself (without it, a notification to tap).
+3. Sign on Tablet from Files as above. The first time, the PC and the tablet
+   both show the same six-digit code: confirm it on both. From then on they
+   recognize each other, and nothing else on the network can send PDFs to
+   the tablet or read what you sign.
+
+The app has the same tools (pen colour and thickness, the saved signature,
+date, text, the S Pen's button to erase, undo, pinch to zoom) and shares the
+pen and the saved signature with the PC. When it is on the network, Sign on
+Tablet uses it; otherwise Second Screen as before. It waits for the PC with a
+quiet notification; **Ready in the background** in the app turns that off (it
+is then ready for 10 minutes after you open it). If the Wi-Fi drops while you
+sign, Plus One finds the app again and gets the signature when you are done.
+
 ### Recommended once: tablet low-latency mode
 
 Second Screen reads a configuration file. Creating it cuts its internal
@@ -325,6 +350,9 @@ flatpak run org.flatpak.Builder --user --install --force-clean flatpak-build \
    tests, builds the `.deb` and the Flatpak bundle and publishes a GitHub
    release with both, the Quick Settings extension zip and the changelog
    section as notes. No tests, no release.
+4. With the secrets `ANDROID_KEYSTORE` (the release key, a PKCS#12 file in
+   base64) and `ANDROID_KEYSTORE_PASSWORD`, it also builds the companion app,
+   signed, and attaches the APK. The app's version is Plus One's.
 
 ## Acknowledgements
 

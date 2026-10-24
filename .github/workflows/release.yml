@@ -46,8 +46,30 @@ jobs:
           name: flatpak
           path: plus-one_*.flatpak
 
+  apk:
+    runs-on: ubuntu-24.04
+    env:
+      # The release key (tools/android-docker.sh): base64 of the PKCS#12 file.
+      ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+      PLUSONE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Companion app, signed (skipped without the key in the secrets)
+        if: env.ANDROID_KEYSTORE != ''
+        run: |
+          mkdir -p "$RUNNER_TEMP/keys"
+          echo "$ANDROID_KEYSTORE" | base64 -d > "$RUNNER_TEMP/keys/release.p12"
+          PLUSONE_KEYSTORE="$RUNNER_TEMP/keys/release.p12" tools/android-docker.sh assembleRelease
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/app-release.apk "dist/plus-one-companion_${GITHUB_REF_NAME}.apk"
+      - uses: actions/upload-artifact@v4
+        if: env.ANDROID_KEYSTORE != ''
+        with:
+          name: apk
+          path: dist/*.apk
+
   publish:
-    needs: [deb, flatpak]
+    needs: [deb, flatpak, apk]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -68,5 +90,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/*.deb dist/*.flatpak dist/*.zip \
+          shopt -s nullglob
+          gh release create "$GITHUB_REF_NAME" dist/*.deb dist/*.flatpak dist/*.zip dist/*.apk \
             --title "Plus One $GITHUB_REF_NAME" --notes-file notes.md
