@@ -304,6 +304,17 @@ def test_signature_pad_and_list(window):
         pad._move(pad.drag_gesture, dx, dx / 4)
     pad._end(pad.drag_gesture, 300, 75)
     assert pad.save_button.get_sensitive()
+    # The eraser takes a stroke away, and Save goes with the last one.
+    pad._begin(pad.drag_gesture, 10, 200)
+    pad._move(pad.drag_gesture, 50, 0)
+    pad._end(pad.drag_gesture, 50, 0)
+    assert len(pad.strokes) == 2
+    pad.eraser.set_active(True)
+    pad._begin(pad.drag_gesture, 30, 190)
+    pad._move(pad.drag_gesture, 0, 20)
+    pad._end(pad.drag_gesture, 0, 20)
+    pad.eraser.set_active(False)
+    assert len(pad.strokes) == 1 and pad.save_button.get_sensitive()
     pad._save()
     assert len(saved) == 1 and signatures.load()[0] == saved
     # The pad is 280 points wide: the drawn width comes back in points.

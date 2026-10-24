@@ -31,7 +31,7 @@ from .ink import (RawPen, View, bounds, load_pen, normalize, pen_width, place,  
 from .modeler import LEVELS, Params, StrokeModeler  # noqa: E402
 from .pdf import INK, Stroke, Text, curve, draw_marks, draw_segments, output_path, save_signed  # noqa: E402
 from .pen import feed as pen_feed  # noqa: E402
-from .signature_pad import SignatureList, SignaturePad, draw_thumb  # noqa: E402
+from .signature_pad import SignatureList, SignaturePad, draw_eraser_icon, draw_thumb  # noqa: E402
 
 from .signing import PEN  # noqa: E402 - shared with the tablet's app
 PEN_SOURCES = (Gdk.InputSource.PEN, Gdk.InputSource.TOUCHSCREEN)
@@ -885,7 +885,7 @@ class SignWindow(Adw.ApplicationWindow):
                       valign=Gtk.Align.END, margin_bottom=18)
         bar.append(self._pen_button())
         eraser_icon = Gtk.DrawingArea(content_width=20, content_height=20)
-        eraser_icon.set_draw_func(self._draw_eraser_icon)
+        eraser_icon.set_draw_func(draw_eraser_icon)
         self.eraser = Gtk.ToggleButton(child=eraser_icon, tooltip_text=_("Eraser"), css_classes=["flat"])
         bar.append(self.eraser)
         bar.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
@@ -1020,18 +1020,6 @@ class SignWindow(Adw.ApplicationWindow):
         points = [(10 + i * 1.3, height / 3 + 7 * math.sin(i / 9), 0.05 + 0.55 * math.sin(math.pi * i / 100))
                   for i in range(101)]
         draw_marks(cr, [Stroke(points, width=self.pen_width, color=self.pen_color)])
-
-    def _draw_eraser_icon(self, area, cr, width, height):
-        color = area.get_color()
-        cr.set_source_rgba(color.red, color.green, color.blue, color.alpha)
-        cr.translate(width / 2, height / 2)
-        cr.rotate(math.pi / 4)
-        # An eraser tilted 45 degrees: solid body, outlined rubber end.
-        cr.rectangle(-4, -8, 8, 9)
-        cr.fill()
-        cr.set_line_width(1.6)
-        cr.rectangle(-3.2, 1.8, 6.4, 5.4)
-        cr.stroke()
 
     def _draw_signature_thumb(self, area, cr, width, height):
         if self.signature:

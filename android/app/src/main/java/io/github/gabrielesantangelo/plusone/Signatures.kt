@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.PointF
 import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
 import android.util.AtomicFile
@@ -136,6 +137,8 @@ class SignatureThumb(context: Context, var signature: Signature?, var color: Int
 /**
  * Draws a new signature, with the pen (pressure shows) or a finger, and
  * keeps it; onSaved then. Once the pen touched it, fingers are ignored.
+ * The pen's side button, its eraser end or the eraser button erase whole
+ * strokes, as on the page.
  */
 class SignaturePad(context: Context, private val color: Int, private val pen: Float,
                    private val onSaved: (Signature) -> Unit) : Dialog(context) {
@@ -156,14 +159,12 @@ class SignaturePad(context: Context, private val color: Int, private val pen: Fl
             }
             dismiss()
         }
-        val again = android.widget.ImageButton(context).apply {
-            setImageResource(R.drawable.ic_clear)
-            contentDescription = context.getString(R.string.start_over)
-            tooltipText = contentDescription
-            background = null
-            minimumWidth = (48 * density).toInt()
-            minimumHeight = (48 * density).toInt()
-            setOnClickListener { pad.clear() }
+        val again = icon(R.drawable.ic_clear, R.string.start_over) { pad.clear() }
+        val eraser = icon(R.drawable.ic_eraser, R.string.eraser) {}
+        eraser.setOnClickListener {
+            pad.eraserMode = !pad.eraserMode
+            eraser.imageTintList = android.content.res.ColorStateList.valueOf(
+                if (pad.eraserMode) Color.rgb(120, 174, 237) else Color.WHITE)
         }
         save.isEnabled = false
         save.alpha = 0.4f
@@ -196,6 +197,7 @@ class SignaturePad(context: Context, private val color: Int, private val pen: Fl
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 addView(again)
+                addView(eraser)
                 addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
                 addView(button(context.getString(R.string.cancel)) { dismiss() })
                 addView(save)
@@ -217,6 +219,16 @@ class SignaturePad(context: Context, private val color: Int, private val pen: Fl
         window?.setGravity(Gravity.CENTER)
     }
 
+    private fun icon(drawable: Int, description: Int, onClick: () -> Unit) = android.widget.ImageButton(context).apply {
+        setImageResource(drawable)
+        contentDescription = context.getString(description)
+        tooltipText = contentDescription
+        background = null
+        minimumWidth = (48 * density).toInt()
+        minimumHeight = (48 * density).toInt()
+        setOnClickListener { onClick() }
+    }
+
     private fun button(label: String, accent: Boolean = false, onClick: () -> Unit) = Button(context).apply {
         text = label
         isAllCaps = false
@@ -236,13 +248,20 @@ class SignaturePad(context: Context, private val color: Int, private val pen: Fl
         var color = Ink.COLOR
         var pen = Ink.WIDTH
         var onChange: () -> Unit = {}
+        var eraserMode = false
         private var current: FloatArrayBuilder? = null
         private var penSeen = false
+        private var eraser: PointF? = null  // where the eraser is while it is down
         private val density = resources.displayMetrics.density
         private val card = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
         private val line = Paint().apply { color = Color.argb(46, 0, 0, 0); strokeWidth = density }
         private val ink = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.ROUND }
         private val box = RectF()
+        private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 1.5f * density
+            color = Color.argb(200, 80, 80, 80)
+        }
 
         override fun performClick(): Boolean = super.performClick()
 
@@ -260,19 +279,41 @@ class SignaturePad(context: Context, private val color: Int, private val pen: Fl
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     requestUnbufferedDispatch(event)
-                    current = FloatArrayBuilder().also { strokes.add(it) }
-                    add(event, stylus)
+                    if (eraserMode || event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER ||
+                        event.isButtonPressed(MotionEvent.BUTTON_STYLUS_PRIMARY) ||
+                        event.isButtonPressed(MotionEvent.BUTTON_STYLUS_SECONDARY)) {
+                        eraser = PointF(event.x, event.y)
+                        erase(event)
+                    } else {
+                        current = FloatArrayBuilder().also { strokes.add(it) }
+                        add(event, stylus)
+                    }
                 }
-                MotionEvent.ACTION_MOVE -> add(event, stylus)
+                MotionEvent.ACTION_MOVE -> if (eraser != null) erase(event) else add(event, stylus)
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    add(event, stylus)
+                    if (eraser == null) add(event, stylus)
                     current = null
+                    eraser = null
                     onChange()
                     if (event.actionMasked == MotionEvent.ACTION_UP) performClick()
                 }
             }
             invalidate()
             return true
+        }
+
+        /** Removes the strokes the eraser touches on its way. */
+        private fun erase(event: MotionEvent) {
+            val from = eraser ?: return
+            val radius = ERASER_RADIUS * density
+            val reach = radius + pen * width / PAD_POINTS / 2
+            strokes.removeAll { builder ->
+                val s = builder.toArray()
+                (s.indices step 3).any { i ->
+                    Ink.distanceToSegment(s[i], s[i + 1], from.x, from.y, event.x, event.y) <= reach
+                }
+            }
+            from.set(event.x, event.y)
         }
 
         private fun add(event: MotionEvent, stylus: Boolean) {
@@ -305,11 +346,13 @@ class SignaturePad(context: Context, private val color: Int, private val pen: Fl
                     canvas.drawLine(s[i], s[i + 1], s[i + 3], s[i + 4], ink)
                 }
             }
+            eraser?.let { canvas.drawCircle(it.x, it.y, ERASER_RADIUS * density, ring) }
         }
     }
 
     companion object {
         const val PAD_POINTS = 280f  // the pad's width in page points: twice a placed signature
         const val NO_PRESSURE = 0.35f  // a finger draws a medium line (as a mouse on the PC)
+        const val ERASER_RADIUS = 12f  // dp around the nib
     }
 }

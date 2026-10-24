@@ -11,11 +11,27 @@ from gi.repository import Adw, Gdk, Gtk  # noqa: E402
 
 from . import signatures  # noqa: E402
 from .i18n import _  # noqa: E402
-from .ink import normalize  # noqa: E402
+from .ink import normalize, touches  # noqa: E402
 from .pdf import Stroke, draw_marks  # noqa: E402
 
 PAD_POINTS = 280.0  # the pad's width in page points: twice a placed signature
 NO_PRESSURE = 0.35  # a mouse draws a medium line (as in sign.py)
+ERASER_RADIUS = 12  # pixels around the pointer, as in the signing window
+# The S Pen's side button arrives as the second or third button, a mouse's right one as the third.
+ERASE_BUTTONS = Gdk.ModifierType.BUTTON2_MASK | Gdk.ModifierType.BUTTON3_MASK
+
+
+def draw_eraser_icon(area, cr, width, height):
+    color = area.get_color()
+    cr.set_source_rgba(color.red, color.green, color.blue, color.alpha)
+    cr.translate(width / 2, height / 2)
+    cr.rotate(math.pi / 4)
+    # An eraser tilted 45 degrees: solid body, outlined rubber end.
+    cr.rectangle(-4, -8, 8, 9)
+    cr.fill()
+    cr.set_line_width(1.6)
+    cr.rectangle(-3.2, 1.8, 6.4, 5.4)
+    cr.stroke()
 
 
 def draw_thumb(cr, signature, width, height, color):
@@ -30,7 +46,9 @@ def draw_thumb(cr, signature, width, height, color):
 
 class SignaturePad(Adw.Window):
     """Draws a new signature, with the pen (pressure shows) or the mouse,
-    and keeps it; on_saved(signature) then."""
+    and keeps it; on_saved(signature) then. The pen's side button, its
+    eraser end, the right mouse button or the eraser button erase whole
+    strokes, as in the signing window."""
 
     def __init__(self, parent, color, pen, on_saved=None):
         super().__init__(transient_for=parent, modal=True, title=_("New signature"),
@@ -38,6 +56,7 @@ class SignaturePad(Adw.Window):
         self.color, self.pen, self.on_saved = color, pen, on_saved
         self.strokes = []  # lists of (x, y, pressure) in pad pixels
         self.current = None
+        self.erasing = None  # the eraser's last point while it is down
 
         header = Adw.HeaderBar(show_end_title_buttons=False, show_start_title_buttons=False)
         cancel = Gtk.Button(label=_("Cancel"))
@@ -50,6 +69,10 @@ class SignaturePad(Adw.Window):
                                        sensitive=False)
         self.clear_button.connect("clicked", lambda b: self._clear())
         header.pack_end(self.clear_button)
+        eraser_icon = Gtk.DrawingArea(content_width=20, content_height=20)
+        eraser_icon.set_draw_func(draw_eraser_icon)
+        self.eraser = Gtk.ToggleButton(child=eraser_icon, tooltip_text=_("Eraser"))
+        header.pack_end(self.eraser)
 
         self.area = Gtk.DrawingArea(hexpand=True, vexpand=True, cursor=Gdk.Cursor.new_from_name("crosshair"))
         self.area.set_draw_func(self._draw)
@@ -72,26 +95,53 @@ class SignaturePad(Adw.Window):
         has, pressure = event.get_axis(Gdk.AxisUse.PRESSURE) if event else (False, 0)
         return x, y, pressure if has and pressure > 0 else NO_PRESSURE
 
+    def _is_eraser(self, gesture):
+        if self.eraser.get_active() or gesture.get_current_button() == Gdk.BUTTON_SECONDARY:
+            return True
+        event = gesture.get_current_event()
+        tool = event.get_device_tool() if event else None
+        if tool is not None and tool.get_tool_type() == Gdk.DeviceToolType.ERASER:
+            return True
+        return bool(gesture.get_current_event_state() & ERASE_BUTTONS)
+
     def _begin(self, gesture, x, y):
         self.origin = (x, y)
+        if self._is_eraser(gesture):
+            self.erasing = (x, y)
+            self._erase(x, y)
+            return
         self.current = [self._sample(gesture, x, y)]
         self.strokes.append(self.current)
         self.area.queue_draw()
 
     def _move(self, gesture, dx, dy):
-        if self.current is not None:
-            self.current.append(self._sample(gesture, self.origin[0] + dx, self.origin[1] + dy))
+        x, y = self.origin[0] + dx, self.origin[1] + dy
+        if self.erasing is not None:
+            self._erase(x, y)
+        elif self.current is not None:
+            self.current.append(self._sample(gesture, x, y))
             self.area.queue_draw()
 
     def _end(self, gesture, dx, dy):
-        self.current = None
-        self.save_button.set_sensitive(True)
-        self.clear_button.set_sensitive(True)
+        self.current = self.erasing = None
+        self._changed()
+        self.area.queue_draw()
+
+    def _erase(self, x, y):
+        """Removes the strokes the eraser touches on its way to x, y."""
+        a, self.erasing = self.erasing, (x, y)
+        width = self.pen * self.area.get_width() / PAD_POINTS
+        self.strokes[:] = [s for s in self.strokes
+                           if not touches(Stroke(s, width=width), a, (x, y), ERASER_RADIUS)]
+        self.area.queue_draw()
+
+    def _changed(self):
+        self.save_button.set_sensitive(bool(self.strokes))
+        self.clear_button.set_sensitive(bool(self.strokes))
 
     def _clear(self):
         self.strokes.clear()
-        self.save_button.set_sensitive(False)
-        self.clear_button.set_sensitive(False)
+        self._changed()
         self.area.queue_draw()
 
     def _draw(self, area, cr, width, height):
@@ -111,6 +161,11 @@ class SignaturePad(Adw.Window):
         cr.stroke()
         scale = width / PAD_POINTS
         draw_marks(cr, [Stroke(s, width=self.pen * scale, color=self.color) for s in self.strokes])
+        if self.erasing is not None:
+            cr.set_source_rgba(0.3, 0.3, 0.3, 0.8)
+            cr.set_line_width(1.5)
+            cr.arc(*self.erasing, ERASER_RADIUS, 0, 2 * math.pi)
+            cr.stroke()
 
     def _save(self):
         scale = self.area.get_width() / PAD_POINTS
