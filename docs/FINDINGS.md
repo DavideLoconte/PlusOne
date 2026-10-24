@@ -60,6 +60,12 @@ input sets `UIBCDetected` and `DirectRenderer::setNonAVSyncMode(true)`.
   after encoding (one frame later), and ~1 ms with Plus One's own RTP
   sender. The video PES carry their length, so a sink can finish a frame
   without waiting for the next PES.
+- Packet loss on an idle stream (desktop still, keepalive frames), 120 s
+  each, one after the other on the same link (2026-10-24, 5745 MHz, PC and
+  tablet on the same channel): mpegtsmux alignment=7 + rtpmp2tpay +
+  udpsink 35 packets lost / 12 IDR requests; Plus One's sender with DSCP EF
+  5 / 3; without DSCP 1 / 1. A connect()ed UDP socket had made it worse
+  (each ICMP error failed the next send: 4-7 IDR requests a minute).
 - Mutter makes a virtual monitor's refresh rate the stream's
   `max-framerate` and skips frames that come a little early: a window
   drawing at 60 fps reached the encoder at ~47 fps (frames 21 ms apart, p90
