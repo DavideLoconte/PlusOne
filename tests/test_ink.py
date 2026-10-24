@@ -190,3 +190,22 @@ def test_thickness_slider_favours_thin_pens():
     assert pen_width(thickness(1.3)) == pytest.approx(1.3)
     assert pen_width(0.5) < 2                  # half the slider is still a fine pen
     assert thickness(0.1) == 0 and thickness(99) == 1
+
+
+def test_marks_move_turn_and_scale():
+    import math
+    from plusone.ink import bounds, touches, transform
+    from plusone.pdf import Text
+    # Turned a quarter about the origin, twice as big, then moved 10 right.
+    m = (0.0, 2.0, -2.0, 0.0, 10.0, 0.0)
+    stroke = transform(Stroke([(1, 0, 0.5), (2, 0, 0.6)], width=1.5), m)
+    assert [tuple(round(v, 6) for v in p) for p in stroke.points] == [(10, 2, 0.5), (10, 4, 0.6)]
+    assert stroke.width == pytest.approx(3.0)
+    text = transform(Text(1, 0, "abc", size=10), m)
+    assert (round(text.x, 6), round(text.y, 6), text.size) == (10, 2, 20)
+    assert text.angle == pytest.approx(math.pi / 2)
+    # Turned text runs down the page: the eraser finds it there, not to the right.
+    assert touches(text, (5, 20), (15, 20), 1)
+    assert not touches(text, (25, 0), (35, 0), 1)
+    x0, y0, x1, y1 = bounds(text)
+    assert x1 - x0 < y1 - y0

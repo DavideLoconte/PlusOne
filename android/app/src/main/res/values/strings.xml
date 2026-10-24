@@ -64,4 +64,8 @@
     <string name="discard_detail">The PDF on the PC stays as it was.</string>
     <string name="discard">Discard</string>
     <string name="keep_signing">Keep signing</string>
+    <string name="select">Select</string>
+    <string name="selection_hint">Drag it, turn it, or resize from a corner</string>
+    <string name="delete">Delete</string>
+    <string name="deselect">Done with the selection</string>
 </resources>

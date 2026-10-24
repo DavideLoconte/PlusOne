@@ -322,7 +322,8 @@ def to_marks(result):
                         found.append(Stroke(points, width=float(mark.get("width", PEN_WIDTH)), color=color))
                 elif mark.get("type") == "text" and mark.get("text"):
                     found.append(Text(float(mark["x"]), float(mark["y"]), str(mark["text"]),
-                                      size=float(mark.get("size", 11.0)), color=color))
+                                      size=float(mark.get("size", 11.0)), color=color,
+                                      angle=float(mark.get("angle", 0.0))))
             except (AttributeError, KeyError, TypeError, ValueError):
                 log("companion: a mark from the tablet skipped")
         if found:

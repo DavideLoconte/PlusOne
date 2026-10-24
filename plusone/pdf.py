@@ -34,10 +34,11 @@ class Stroke:
 @dataclass
 class Text:
     x: float
-    y: float          # baseline
+    y: float          # baseline's left end
     text: str
     size: float = 11.0
     color: tuple = INK
+    angle: float = 0.0  # radians, clockwise (y points down), about x, y
 
 
 def curve(points):
@@ -98,8 +99,12 @@ def draw_marks(cr, marks):
         elif isinstance(mark, Text):
             cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
             cr.set_font_size(mark.size)
-            cr.move_to(mark.x, mark.y)
+            cr.save()
+            cr.translate(mark.x, mark.y)
+            cr.rotate(mark.angle)
+            cr.move_to(0, 0)
             cr.show_text(mark.text)
+            cr.restore()
 
 
 def display_size(page):

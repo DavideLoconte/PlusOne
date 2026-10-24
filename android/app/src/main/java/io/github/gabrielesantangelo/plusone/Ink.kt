@@ -66,7 +66,21 @@ sealed interface Mark {
     val bounds: RectF
     /** Whether an eraser of this radius going from a to b touches it. */
     fun touches(ax: Float, ay: Float, bx: Float, by: Float, radius: Float): Boolean
+    /** The mark moved, turned and scaled by m (ink.py transform): the pen's
+     * width and the text's size scale with it. */
+    fun transformed(m: android.graphics.Matrix): Mark
     fun toJson(): JSONObject
+}
+
+/** How much m scales lengths, and how far it turns (radians). */
+private fun scaleOf(m: android.graphics.Matrix): Float {
+    val v = FloatArray(9).also { m.getValues(it) }
+    return sqrt(kotlin.math.abs(v[0] * v[4] - v[1] * v[3]))
+}
+
+private fun angleOf(m: android.graphics.Matrix): Float {
+    val v = FloatArray(9).also { m.getValues(it) }
+    return kotlin.math.atan2(v[3], v[0])
 }
 
 /** x, y, pressure triples in page points. */
@@ -86,6 +100,17 @@ class Stroke(val points: FloatArray, val width: Float = Ink.WIDTH, val color: In
         return false
     }
 
+    override fun transformed(m: android.graphics.Matrix): Mark {
+        val moved = points.copyOf()
+        val xy = FloatArray(2)
+        for (i in points.indices step 3) {
+            xy[0] = points[i]; xy[1] = points[i + 1]
+            m.mapPoints(xy)
+            moved[i] = xy[0]; moved[i + 1] = xy[1]
+        }
+        return Stroke(moved, width * scaleOf(m), color)
+    }
+
     override fun toJson(): JSONObject = JSONObject()
         .put("type", "stroke")
         .put("width", width.toDouble())
@@ -93,20 +118,45 @@ class Stroke(val points: FloatArray, val width: Float = Ink.WIDTH, val color: In
         .put("points", JSONArray().also { a -> points.forEach { a.put(it.toDouble()) } })
 }
 
-/** Text from its baseline's left end, as pdf.py's Text. */
+/** Text from its baseline's left end, as pdf.py's Text; turned by angle
+ * (radians, clockwise) about that point. */
 class TextMark(val x: Float, val y: Float, val text: String, val size: Float = Ink.TEXT_SIZE,
-               val color: Int = Ink.COLOR) : Mark {
+               val color: Int = Ink.COLOR, val angle: Float = 0f) : Mark {
     // pdf.py draws it in "Sans"; glyphs average about half an em (ink.py touches).
-    override val bounds = RectF(x, y - size, x + 0.55f * size * text.length, y + 0.25f * size)
+    private val local = RectF(0f, -size, 0.55f * size * text.length, 0.25f * size)
+
+    override val bounds = RectF().also { box ->
+        val corners = floatArrayOf(local.left, local.top, local.right, local.top,
+            local.right, local.bottom, local.left, local.bottom)
+        android.graphics.Matrix().apply { setRotate(Math.toDegrees(angle.toDouble()).toFloat()); postTranslate(x, y) }
+            .mapPoints(corners)
+        box.set(corners[0], corners[1], corners[0], corners[1])
+        for (i in corners.indices step 2) box.union(corners[i], corners[i + 1])
+    }
+
+    /** A page point in the text's own frame: its baseline from 0,0 along x. */
+    private fun frame(px: Float, py: Float): Pair<Float, Float> {
+        val c = kotlin.math.cos(angle)
+        val s = kotlin.math.sin(angle)
+        val dx = px - x
+        val dy = py - y
+        return (dx * c + dy * s) to (-dx * s + dy * c)
+    }
 
     override fun touches(ax: Float, ay: Float, bx: Float, by: Float, radius: Float): Boolean {
-        val box = RectF(bounds).apply { inset(-radius, -radius) }
-        return box.contains(ax, ay) || box.contains(bx, by)
+        val box = RectF(local).apply { inset(-radius, -radius) }
+        return listOf(frame(ax, ay), frame(bx, by)).any { (u, v) -> box.contains(u, v) }
+    }
+
+    override fun transformed(m: android.graphics.Matrix): Mark {
+        val at = floatArrayOf(x, y).also { m.mapPoints(it) }
+        return TextMark(at[0], at[1], text, size * scaleOf(m), color, angle + angleOf(m))
     }
 
     override fun toJson(): JSONObject = JSONObject()
         .put("type", "text").put("x", x.toDouble()).put("y", y.toDouble())
         .put("text", text).put("size", size.toDouble()).put("color", Ink.colorJson(color))
+        .put("angle", angle.toDouble())
 }
 
 /** A saved signature as ink.py normalize() keeps it: top-left at 0,0, width 1,

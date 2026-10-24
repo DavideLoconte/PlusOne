@@ -7,6 +7,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
@@ -73,6 +74,10 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
     /** Marks waiting for a tap to say where they go (signature, date, text). */
     var pending: ((Float, Float) -> List<Mark>)? = null
     var onPlaced: () -> Unit = {}
+    /** The toolbar's lasso: the pen picks marks instead of drawing. */
+    var selectMode = false
+    /** A selection appeared (true) or went (false). */
+    var onSelection: (Boolean) -> Unit = {}
 
     var index = 0
         private set
@@ -80,7 +85,18 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
     val marks = HashMap<Int, MutableList<Mark>>()
     private val history = ArrayDeque<Pair<Int, List<Mark>>>()
     val canUndo get() = history.isNotEmpty()
-    val isEmpty get() = marks.values.all { it.isEmpty() }
+    val isEmpty get() = selection == null && marks.values.all { it.isEmpty() }
+
+    // Marks picked to move, turn or scale (Selection.kt): they leave their
+    // page's list while picked, and go back where they ended up.
+    private var selection: Selection? = null
+    private var grab: Grab? = null
+    private var grabbed = -1          // the handle dragged, for the look
+    private var grabStepped = false   // the drag's undo step is taken
+    private var fingerGrab = false
+    private var lasso: FloatArrayBuilder? = null  // screen x, y, 0 while the lasso is drawn
+    private val look = SelectionLook(resources.displayMetrics.density)
+    val hasSelection get() = selection != null
 
     /** Marks from the screen this one replaces. */
     fun restore(saved: Map<Int, List<Mark>>) {
@@ -107,6 +123,8 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
     private class Scene(
         val index: Int, val size: SizeF, val zoom: Float, val ox: Float, val oy: Float,
         val picture: Picture?, val marks: List<Mark>, val eraser: FloatArray?,
+        val shape: SelectionLook.Shape? = null, val grabbed: Int = -1, val turned: Float? = null,
+        val lasso: FloatArray? = null,
     )
     @Volatile private var scene: Scene? = null
 
@@ -192,6 +210,7 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
 
     fun showPage(i: Int) {
         if (i !in 0 until pageCount) return
+        deselect()
         index = i
         picture = null
         fit()
@@ -207,9 +226,29 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
 
     /** The view or the marks changed: draw again, and render the page anew if asked. */
     private fun changed(render: Boolean = false, eraser: FloatArray? = null) {
-        scene = Scene(index, pdf.sizes[index], zoom, ox, oy, picture, marks[index]?.toList() ?: emptyList(), eraser)
+        scene = snapshot(eraser)
         requestScene()
         if (render) renderPage()
+    }
+
+    /** What the render thread is to draw, as things are now. */
+    private fun snapshot(eraser: FloatArray? = null): Scene {
+        val s = selection?.takeIf { it.page == index }
+        val shown = (marks[index]?.toList() ?: emptyList()) + (s?.marks ?: emptyList())
+        val shape = s?.let { look.shape(screenCorners(it), visibleArea()) }
+        val turned = if (grab is Grab.Turn) s?.angle else null
+        val lassoPoints = lasso?.toArray()?.let { p -> FloatArray(p.size / 3 * 2) { p[it / 2 * 3 + it % 2] } }
+        return Scene(index, pdf.sizes[index], zoom, ox, oy, picture, shown, eraser, shape, grabbed, turned, lassoPoints)
+    }
+
+    /** The view less the bars over it. */
+    private fun visibleArea() = RectF(0f, topInset, width.toFloat(), height - bottomInset)
+
+    private fun screenCorners(s: Selection) = s.corners().also { c ->
+        for (i in c.indices step 2) {
+            c[i] = c[i] * zoom + ox
+            c[i + 1] = c[i + 1] * zoom + oy
+        }
     }
 
     // The multi-buffered layer has three buffers: asked for a new scene
@@ -303,12 +342,17 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
                 is TextMark -> {
                     text.color = mark.color
                     text.textSize = mark.size
+                    canvas.save()
+                    canvas.rotate(Math.toDegrees(mark.angle.toDouble()).toFloat(), mark.x, mark.y)
                     canvas.drawText(mark.text, mark.x, mark.y, text)
+                    canvas.restore()
                 }
             }
         }
         canvas.restore()
         s.eraser?.let { canvas.drawCircle(it[0], it[1], ERASER_RADIUS, eraserPaint) }
+        s.shape?.let { look.draw(canvas, it, s.grabbed, s.turned) }
+        s.lasso?.let { look.drawLasso(canvas, it) }
     }
 
     private fun drawStroke(canvas: Canvas, stroke: Stroke) {
@@ -391,6 +435,15 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
                     return
                 }
                 placing = false
+                // The selection takes the pen on its handles and inside;
+                // elsewhere it ends, and the lasso, if chosen, starts.
+                if (!erasing && grabSelection(lastX, lastY)) return
+                deselect()
+                if (selectMode && !erasing) {
+                    lasso = FloatArrayBuilder().apply { add(lastX, lastY, 0f) }
+                    changed()
+                    return
+                }
                 if (erasing) {
                     eraseAlong(lastX, lastY, lastX, lastY)
                 } else {
@@ -405,6 +458,8 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
                     placing = false
                     return
                 }
+                if (grab != null) return endGrab()
+                if (lasso != null) return endLasso(action == MotionEvent.ACTION_CANCEL)
                 if (action != MotionEvent.ACTION_CANCEL) extend(e.getX(i), e.getY(i), e.getPressure(i))
                 val done = stroke
                 stroke = null
@@ -420,6 +475,11 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
             }
             action == MotionEvent.ACTION_MOVE -> {
                 if (placing) return
+                if (grab != null) return drag(e.getX(i), e.getY(i))
+                lasso?.let {
+                    it.add(e.getX(i), e.getY(i), 0f)
+                    return changed()
+                }
                 for (h in 0 until e.historySize) {
                     extend(e.getHistoricalX(i, h), e.getHistoricalY(i, h), e.getHistoricalPressure(i, h))
                 }
@@ -447,7 +507,7 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
         val list = marks.getOrPut(index) { mutableListOf() }
         history.addLast(index to list.toList())
         list.addAll(new)
-        scene = Scene(index, pdf.sizes[index], zoom, ox, oy, picture, list.toList(), null)
+        scene = snapshot()
         onChange()
     }
 
@@ -455,13 +515,145 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
 
     private fun placeAt(place: (Float, Float) -> List<Mark>, x: Float, y: Float) {
         pending = null
-        addMarks(place(x, y))
-        changed()
+        val placed = place(x, y)
+        addMarks(placed)
+        // Picked at once: placed a little off, it moves, turns or scales from here.
+        select(placed)
         onPlaced()
     }
 
+    // -- selection -----------------------------------------------------------
+
+    /** Picks marks of the page shown. */
+    private fun select(picked: List<Mark>) {
+        deselect()
+        val list = marks[index] ?: return
+        val mine = picked.filter { m -> list.any { it === m } }
+        if (mine.isEmpty()) return changed()
+        list.removeAll { m -> mine.any { it === m } }
+        selection = Selection(index, mine)
+        onSelection(true)
+        changed()
+    }
+
+    /** Puts the selection back on its page, as it is now. */
+    fun deselect() {
+        val s = selection ?: return
+        selection = null
+        grab = null
+        grabbed = -1
+        marks.getOrPut(s.page) { mutableListOf() }.addAll(s.marks)
+        onSelection(false)
+        changed()
+    }
+
+    fun deleteSelection() {
+        val s = selection ?: return
+        history.addLast(s.page to committed(s))
+        selection = null
+        grab = null
+        onSelection(false)
+        changed()
+        onChange()
+    }
+
+    /** The page's marks with the selection where it is now. */
+    private fun committed(s: Selection) = (marks[s.page]?.toList() ?: emptyList()) + s.marks
+
+    /** A touch on the selection's handles or inside it: true if it took it. */
+    private fun grabSelection(x: Float, y: Float): Boolean {
+        val s = selection?.takeIf { it.page == index } ?: return false
+        val hit = look.hit(look.shape(screenCorners(s), visibleArea()), x, y)
+        if (hit < 0) return false
+        val px = toPageX(x)
+        val py = toPageY(y)
+        val c = s.corners()
+        grab = when (hit) {
+            5 -> Grab.Move(px, py)
+            4 -> {
+                val cx = (c[0] + c[4]) / 2
+                val cy = (c[1] + c[5]) / 2
+                Grab.Turn(cx, cy, degrees(px - cx, py - cy), Matrix(s.matrix), s.angle)
+            }
+            else -> {
+                val o = (hit + 2) % 4
+                Grab.Scale(c[2 * o], c[2 * o + 1], c[2 * hit], c[2 * hit + 1], Matrix(s.matrix))
+            }
+        }
+        grabbed = if (hit == 5) -1 else hit
+        grabStepped = false
+        changed()
+        return true
+    }
+
+    private fun degrees(dx: Float, dy: Float) = Math.toDegrees(kotlin.math.atan2(dy, dx).toDouble()).toFloat()
+
+    private fun drag(x: Float, y: Float) {
+        val s = selection ?: return
+        val g = grab ?: return
+        val px = toPageX(x)
+        val py = toPageY(y)
+        if (!grabStepped) {
+            // One undo step per drag, taken when it actually moves something.
+            history.addLast(s.page to committed(s))
+            grabStepped = true
+            onChange()
+        }
+        when (g) {
+            is Grab.Move -> {
+                s.matrix.postTranslate(px - g.x, py - g.y)
+                g.x = px
+                g.y = py
+            }
+            is Grab.Scale -> {
+                val k = scaleAlong(g.anchorX, g.anchorY, g.fromX, g.fromY, px, py)
+                s.matrix.set(g.start)
+                s.matrix.postScale(k, k, g.anchorX, g.anchorY)
+            }
+            is Grab.Turn -> {
+                val target = snapAngle(g.startAngle + degrees(px - g.cx, py - g.cy) - g.from)
+                s.matrix.set(g.start)
+                s.matrix.postRotate(target - g.startAngle, g.cx, g.cy)
+            }
+        }
+        changed()
+    }
+
+    private fun endGrab() {
+        grab = null
+        grabbed = -1
+        changed()
+    }
+
+    /** The lasso closes: the marks its area touches are picked; a tap picks the mark under it. */
+    private fun endLasso(cancelled: Boolean) {
+        val points = lasso?.toArray() ?: return
+        lasso = null
+        val list = marks[index]
+        if (cancelled || list.isNullOrEmpty()) return changed()
+        var left = points[0]; var right = points[0]; var top = points[1]; var bottom = points[1]
+        for (i in points.indices step 3) {
+            left = min(left, points[i]); right = max(right, points[i])
+            top = min(top, points[i + 1]); bottom = max(bottom, points[i + 1])
+        }
+        val tap = TAP_SIZE * resources.displayMetrics.density
+        val picked = if (right - left < tap && bottom - top < tap) {
+            val x = toPageX(points[0])
+            val y = toPageY(points[1])
+            val r = tap / zoom
+            listOfNotNull(list.lastOrNull { it.touches(x, y, x, y, r) })
+        } else {
+            val polygon = FloatArray(points.size / 3 * 2) { i ->
+                if (i % 2 == 0) toPageX(points[i / 2 * 3]) else toPageY(points[i / 2 * 3 + 1])
+            }
+            list.filter { Lasso.picks(it, polygon) }
+        }
+        if (picked.isEmpty()) changed() else select(picked)
+    }
+
     /** The strokes on the page shown (for keeping them as the signature). */
-    val pageStrokes get() = marks[index]?.filterIsInstance<Stroke>() ?: emptyList()
+    val pageStrokes get() = ((marks[index] ?: emptyList()) + (selection?.takeIf { it.page == index }?.marks
+        ?: emptyList())).filterIsInstance<Stroke>()
 
     /** Removes the strokes the eraser touches going from a to b (screen pixels). */
     private fun eraseAlong(ax: Float, ay: Float, bx: Float, by: Float) {
@@ -480,12 +672,19 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
 
     fun undo() {
         val (page, before) = history.removeLastOrNull() ?: return
+        // The step restores the page as a whole: the selection was in it.
+        if (selection != null) {
+            selection = null
+            grab = null
+            onSelection(false)
+        }
         marks[page] = before.toMutableList()
         if (page != index) showPage(page) else changed()
         onChange()
     }
 
     fun clearPage() {
+        deselect()
         val list = marks[index] ?: return
         if (list.isEmpty()) return
         history.addLast(index to list.toList())
@@ -510,7 +709,11 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
 
     private val taps = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-            val place = pending ?: return false
+            val place = pending
+            if (place == null) {
+                deselect()  // a tap away from the selection ends it
+                return true
+            }
             placeAt(place, toPageX(e.x), toPageY(e.y))
             return true
         }
@@ -528,6 +731,22 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
     })
 
     private fun fingers(e: MotionEvent) {
+        // One finger on the selection drags it, as the pen does; more fingers
+        // join in for nothing until they all lift.
+        if (e.actionMasked == MotionEvent.ACTION_DOWN && grabSelection(e.x, e.y)) {
+            fingerGrab = true
+            return
+        }
+        if (fingerGrab) {
+            when (e.actionMasked) {
+                MotionEvent.ACTION_MOVE -> drag(e.getX(0), e.getY(0))
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    fingerGrab = false
+                    endGrab()
+                }
+            }
+            return
+        }
         taps.onTouchEvent(e)
         scaler.onTouchEvent(e)
         // Pan with the fingers' centre.
@@ -572,5 +791,6 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
         const val ERASER_RADIUS = 24f      // pixels around the nib
         const val PALM_WINDOW = 400L        // ms after the pen was seen during which touches are a palm
         const val DOUBLE_TAP_ZOOM = 2.5f
+        const val TAP_SIZE = 10f            // dp: a lasso smaller than this is a tap on a mark
     }
 }

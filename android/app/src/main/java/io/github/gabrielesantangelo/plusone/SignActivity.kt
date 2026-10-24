@@ -39,6 +39,8 @@ class SignActivity : Activity() {
     private lateinit var view: SignView
     private lateinit var undo: View
     private lateinit var eraser: android.widget.ImageButton
+    private lateinit var lassoButton: android.widget.ImageButton
+    private lateinit var selectionBar: LinearLayout
     private lateinit var penButton: PenDot
     private lateinit var signatureThumb: SignatureThumb
     private lateinit var keep: Button
@@ -76,6 +78,7 @@ class SignActivity : Activity() {
             penWidth = width.coerceIn(Ink.MIN_WIDTH, Ink.MAX_WIDTH)
             onChange = ::refresh
             onPlaced = { hint.visibility = View.GONE }
+            onSelection = { on -> selectionBar.visibility = if (on) View.VISIBLE else View.GONE }
         }
 
         // Page arrows next to the title: the bottom keeps only the toolbar,
@@ -125,6 +128,12 @@ class SignActivity : Activity() {
         undo = icon(R.drawable.ic_undo, R.string.undo) { view.undo() }
         eraser = icon(R.drawable.ic_eraser, R.string.eraser) {
             view.eraserMode = !view.eraserMode
+            view.selectMode = false
+            refresh()
+        }
+        lassoButton = icon(R.drawable.ic_lasso, R.string.select) {
+            view.selectMode = !view.selectMode
+            view.eraserMode = false
             refresh()
         }
         // The first saved signature, one tap to place it; the chevron lists them all.
@@ -145,6 +154,7 @@ class SignActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             addView(penButton, LinearLayout.LayoutParams(dp(48f).toInt(), dp(48f).toInt()))
             addView(eraser)
+            addView(lassoButton)
             addView(undo)
             addView(icon(R.drawable.ic_clear, R.string.clear_page) { view.clearPage() })
             addView(separator())
@@ -176,11 +186,26 @@ class SignActivity : Activity() {
             visibility = View.GONE
         }
 
+        selectionBar = bar().apply {
+            background = GradientDrawable().apply { setColor(SelectionLook.BLUE); cornerRadius = dp(24f) }
+            setPadding(dp(18f).toInt(), dp(2f).toInt(), dp(4f).toInt(), dp(2f).toInt())
+            addView(TextView(context).apply {
+                setText(R.string.selection_hint)
+                setTextColor(Color.WHITE)
+                textSize = 15f
+            })
+            addView(icon(R.drawable.ic_clear, R.string.delete) { view.deleteSelection() })
+            addView(button("✕") { view.deselect() }.apply { contentDescription = getString(R.string.deselect) })
+            visibility = View.GONE
+        }
+
         root = FrameLayout(this)
         root.addView(view)
         root.addView(top, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP))
         root.addView(hint, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+        root.addView(selectionBar, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,
             FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL))
         root.addView(tools, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,
             FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
@@ -208,6 +233,7 @@ class SignActivity : Activity() {
         val chrome = m + bars.bottom + tools.height
         place(keep, bottom = chrome + gap)
         place(hint, top = top.height + gap)
+        place(selectionBar, top = top.height + gap)
         val topInset = top.height.toFloat()
         val bottomInset = (chrome + gap).toFloat()
         if (top.height > 0 && (view.topInset != topInset || view.bottomInset != bottomInset)) {
@@ -227,11 +253,13 @@ class SignActivity : Activity() {
     private fun refresh() {
         undo.isEnabled = view.canUndo
         undo.alpha = if (view.canUndo) 1f else 0.4f
-        eraser.imageTintList = android.content.res.ColorStateList.valueOf(
-            if (view.eraserMode) Color.rgb(120, 174, 237) else Color.WHITE)
-        eraser.background = if (view.eraserMode) GradientDrawable().apply {
-            setColor(Color.argb(50, 120, 174, 237)); cornerRadius = dp(24f)
-        } else null
+        for ((button, on) in listOf(eraser to view.eraserMode, lassoButton to view.selectMode)) {
+            button.imageTintList = android.content.res.ColorStateList.valueOf(
+                if (on) Color.rgb(120, 174, 237) else Color.WHITE)
+            button.background = if (on) GradientDrawable().apply {
+                setColor(Color.argb(50, 120, 174, 237)); cornerRadius = dp(24f)
+            } else null
+        }
         penButton.invalidate()
         signatureThumb.signature = signature
         signatureThumb.color = view.penColor
@@ -295,12 +323,15 @@ class SignActivity : Activity() {
         view.penColor = color
         view.penWidth = width
         view.eraserMode = false
+        view.selectMode = false
         Pen.save(this, color, width)
         refresh()
     }
 
     private fun arm(message: Int, place: (Float, Float) -> List<Mark>) {
         view.eraserMode = false
+        view.selectMode = false
+        view.deselect()
         view.pending = place
         hintText.setText(message)
         hint.visibility = View.VISIBLE
@@ -394,6 +425,7 @@ class SignActivity : Activity() {
     }
 
     private fun keepSignature() {
+        view.deselect()
         Signatures.add(this, Signature.of(view.pageStrokes) ?: return)
         signatureChanged()
         Toast.makeText(this, R.string.signature_kept, Toast.LENGTH_LONG).show()
@@ -401,7 +433,10 @@ class SignActivity : Activity() {
 
     // -- closing -----------------------------------------------------------------
 
-    private fun done() = answer(resultJson())
+    private fun done() {
+        view.deselect()  // the selection goes back on its page, as it is
+        answer(resultJson())
+    }
 
     private fun cancel() = answer(null)
 
@@ -445,7 +480,10 @@ class SignActivity : Activity() {
 
     // Recreated (a configuration the manifest does not list changed): the
     // job goes on, and the new screen gets the marks.
-    override fun onRetainNonConfigurationInstance(): Any = HashMap(view.marks)
+    override fun onRetainNonConfigurationInstance(): Any {
+        view.deselect()  // the picked marks go back on their page, to come along
+        return HashMap(view.marks)
+    }
 
     override fun onDestroy() {
         if (!answered && !isChangingConfigurations) {

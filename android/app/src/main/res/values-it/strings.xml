@@ -62,4 +62,8 @@
     <string name="discard_detail">Il PDF sul PC resta com\'era.</string>
     <string name="discard">Scarta</string>
     <string name="keep_signing">Continua a firmare</string>
+    <string name="select">Seleziona</string>
+    <string name="selection_hint">Trascina, ruota o ridimensiona dagli angoli</string>
+    <string name="delete">Elimina</string>
+    <string name="deselect">Fine selezione</string>
 </resources>

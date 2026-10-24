@@ -157,17 +157,46 @@ def place(signature, x, y, width=SIGNATURE_WIDTH, pen=PEN_WIDTH, color=INK):
             for s in signature["strokes"]]
 
 
+def transform(mark, m):
+    """The mark moved by the affine matrix m = (a, b, c, d, e, f), which takes
+    x, y to a x + c y + e, b x + d y + f (cairo's order): moved, turned and
+    scaled alike, the pen's width and the text's size with it."""
+    a, b, c, d, e, f = m
+    scale = math.sqrt(abs(a * d - b * c))
+    if isinstance(mark, Text):
+        return Text(a * mark.x + c * mark.y + e, b * mark.x + d * mark.y + f, mark.text,
+                    size=mark.size * scale, color=mark.color, angle=mark.angle + math.atan2(b, a))
+    return Stroke([(a * x + c * y + e, b * x + d * y + f, p) for x, y, p in mark.points],
+                  width=mark.width * scale, color=mark.color)
+
+
+def _text_frame(mark, x, y):
+    """A page point in the text's own frame: its baseline from 0,0 along x."""
+    cos, sin = math.cos(mark.angle), math.sin(mark.angle)
+    dx, dy = x - mark.x, y - mark.y
+    return dx * cos + dy * sin, -dx * sin + dy * cos
+
+
+def text_corners(mark):
+    """The corners, in page points, of the box the text's glyphs stay within."""
+    # Wide glyphs reach about one em each.
+    left, top, right, bottom = -1, -1.1 * mark.size, mark.size * len(mark.text) + 1, 0.4 * mark.size
+    cos, sin = math.cos(mark.angle), math.sin(mark.angle)
+    return [(mark.x + u * cos - v * sin, mark.y + u * sin + v * cos)
+            for u, v in ((left, top), (right, top), (right, bottom), (left, bottom))]
+
+
 def bounds(mark):
     """(x0, y0, x1, y1) in page points that the mark's ink stays within,
     generously. Cached on the mark: marks do not change once on the page."""
     cached = mark.__dict__.get("_bounds")
-    key = len(mark.points) if isinstance(mark, Stroke) else (mark.x, mark.y, mark.text, mark.size)
+    key = len(mark.points) if isinstance(mark, Stroke) else (mark.x, mark.y, mark.text, mark.size, mark.angle)
     if cached and cached[0] == key:
         return cached[1]
     if isinstance(mark, Text):
-        # Wide glyphs reach about one em each.
-        box = (mark.x - 1, mark.y - 1.1 * mark.size, mark.x + mark.size * len(mark.text) + 1,
-               mark.y + 0.4 * mark.size)
+        corners = text_corners(mark)
+        box = (min(x for x, _y in corners), min(y for _x, y in corners),
+               max(x for x, _y in corners), max(y for _x, y in corners))
     else:
         xs = [p[0] for p in mark.points]
         ys = [p[1] for p in mark.points]
@@ -188,9 +217,9 @@ def touches(mark, a, b, radius):
         return False
     if isinstance(mark, Text):
         # Rough box around the text: glyphs average about half an em.
-        x0, x1 = mark.x - radius, mark.x + 0.55 * mark.size * len(mark.text) + radius
-        y0, y1 = mark.y - mark.size - radius, mark.y + 0.25 * mark.size + radius
-        return any(x0 <= x <= x1 and y0 <= y <= y1 for x, y in (a, b))
+        x0, x1 = -radius, 0.55 * mark.size * len(mark.text) + radius
+        y0, y1 = -mark.size - radius, 0.25 * mark.size + radius
+        return any(x0 <= x <= x1 and y0 <= y <= y1 for x, y in (_text_frame(mark, *a), _text_frame(mark, *b)))
     pts = [tuple(pt[:2]) for pt in mark.points]
     reach = radius + mark.width / 2
     if len(pts) == 1:
