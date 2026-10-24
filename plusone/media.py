@@ -89,6 +89,12 @@ def pick_encoder(preferred="auto"):
     raise RuntimeError("no H.264 encoder available")
 
 
+def warm_up(name):
+    """Load the encoder's plugin ahead of the stream (blocking): the first
+    nvh264enc in a process takes 1.5 s, CUDA probing the GPUs."""
+    Gst.ElementFactory.make(ENCODERS[name][0])
+
+
 class Streamer:
     def __init__(self, source, host, width, height, fps, bitrate, encoder,
                  port=19000, bind_port=19000, preview=True):

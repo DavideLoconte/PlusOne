@@ -66,7 +66,10 @@ Sign on the tablet.
   - the signing window draws 60 frames a second while you write (it managed
     33-40): the page is a texture made once, and a frame only draws the
     newest bit of the stroke (3.5 ms a frame instead of 10);
-  - video packets are marked for Wi-Fi's video queue (DSCP EF).
+  - video packets are marked for Wi-Fi's video queue (DSCP EF);
+  - the first connection after Plus One starts is 1.5 s quicker: the NVENC
+    plugin (CUDA probing the GPUs) loads while the tablet is being found,
+    not after it connected.
 - New dependencies: `gir1.2-poppler-0.18`, `python3-pypdf` (`.deb`); the
   Flatpak builds poppler 25.12 and pypdf.
 

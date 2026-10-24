@@ -115,6 +115,8 @@ class Controller:
             return
         try:
             self.encoder = media.pick_encoder(s.encoder)
+            # Meanwhile the tablet is found and connected, seconds at least.
+            threading.Thread(target=media.warm_up, args=(self.encoder,), daemon=True).start()
             self.srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.srv.bind(("0.0.0.0", RTSP_PORT))
