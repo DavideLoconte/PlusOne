@@ -4,6 +4,7 @@ Video-only MPEG-TS: without an audio track the sink renders frames as they
 arrive instead of syncing them to an audio clock (measured ~90 ms -> ~50 ms).
 """
 import collections
+import errno
 import random
 import socket
 import struct
@@ -66,6 +67,7 @@ class RtpSender:
         self.seq = random.getrandbits(16)
         self.ssrc = random.getrandbits(32)
         self.packets = 0
+        self.errors = set()  # kinds of send errors logged already
 
     def send(self, data, pts):
         """data: whole TS packets; pts: nanoseconds (RTP counts 90 kHz)."""
@@ -76,8 +78,12 @@ class RtpSender:
             header = struct.pack("!BBHII", 0x80, RTP_MP2T, self.seq, stamp, self.ssrc)
             try:
                 self.sock.send(header + data[offset:offset + size])
-            except OSError:
-                pass  # the sink is not listening (yet): ICMP port unreachable
+            except OSError as e:
+                # Refused: the sink is not listening (yet). Anything else (the
+                # link went away) once in the log; the RTSP session notices.
+                if e.errno != errno.ECONNREFUSED and e.errno not in self.errors:
+                    self.errors.add(e.errno)
+                    log("RTP: cannot send:", e.strerror)
             self.seq = (self.seq + 1) & 0xFFFF
             self.packets += 1
 
