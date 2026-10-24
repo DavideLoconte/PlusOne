@@ -51,7 +51,8 @@ CHUNK = 24  # settled stroke segments turned into one texture while drawing
 # the 8x zoom is 32 million pixels, 128 MB plus a copy for the texture.
 MAX_PAGE_PIXELS = 16_000_000
 TILE = 512  # device pixels per side of a page texture tile
-TILE_BUDGET = 0.008  # seconds of tile rendering per frame while the old zoom stands in
+TILE_BUDGET = 0.008  # seconds of tile rendering per frame; the overview shows meanwhile
+OVERVIEW_PIXELS = 3_000_000
 PEN_SAVE_DELAY = 500  # ms after the last change of colour, thickness or stabilization
 # cairo's 32-bit pixels are native-endian words: B, G, R, A bytes here.
 LITTLE = sys.byteorder == "little"
@@ -321,8 +322,8 @@ class PageArea(Gtk.Widget):
         self._raster = None  # PageRaster of the page shown
         self._origin = (0.0, 0.0)  # where the page is drawn (whole device pixels)
         self._pinching = False
-        self._stale = False     # render the page again at the current zoom
-        self._previous = None   # the raster before, shown while the new one renders
+        self._overview = None   # the whole page at the fitted zoom: stands in for tiles not rendered yet
+        self._fit_scale = 1.0
         self._stroke = None
         self._model = None    # the stroke's modeler, in widget pixels
         self._clock = 0.0     # time of the stroke's last sample, seconds
@@ -390,6 +391,7 @@ class PageArea(Gtk.Widget):
         w, h = w or self.get_width(), h or self.get_height()
         if w and h:
             self.view.fit(*self.page_size(), w, h, margin=24, bottom=TOOLBAR_SPACE)
+            self._fit_scale = self.view.zoom * self.get_scale_factor()
             self.fitted = True
             self.queue_draw()
 
@@ -408,7 +410,7 @@ class PageArea(Gtk.Widget):
     def _sharpen(self):
         """After a pinch, the page and its marks at exactly the new zoom."""
         self._pinching = False
-        self._stale = True
+        self._raster = None
         self.queue_draw()
 
     def _scroll(self, controller, dx, dy):
@@ -703,19 +705,25 @@ class PageArea(Gtk.Widget):
         per point, kept up to date (see PageRaster); another page or a
         different zoom renders it again."""
         index, raster = self.window.index, self._raster
-        if self._stale and raster is not None:
-            self._previous, raster = raster, None
-            self._raster = None
-        self._stale = False
         # While fingers pinch, the page is only magnified: it is rendered
         # again at the new zoom when they let go (see _sharpen).
         if raster is None or raster.index != index or (
                 abs(raster.scale / scale - 1) >= 0.15 and not self._pinching):
-            if raster is not None:  # it stands in until the new one's tiles are ready
-                self._previous = raster
             raster = self._raster = PageRaster(index, scale, self.window.page(), self.page_size())
         raster.update(self.window.marks.get(index, []))
         return raster
+
+    def _overview_raster(self):
+        """The whole page, small (at the fitted zoom): rendered at once, it
+        shows wherever the page at the current zoom has tiles to render."""
+        index, overview = self.window.index, self._overview
+        scale = min(self._fit_scale, math.sqrt(OVERVIEW_PIXELS / (self.page_size()[0] * self.page_size()[1])))
+        if overview is None or overview.index != index or abs(overview.scale / scale - 1) >= 0.15:
+            overview = self._overview = PageRaster(index, scale, self.window.page(), self.page_size())
+        overview.update(self.window.marks.get(index, []))
+        for key in overview.tile_boxes():
+            overview.tile(*key)
+        return overview
 
     def do_snapshot(self, snapshot):
         if not self.fitted:
@@ -732,31 +740,32 @@ class PageArea(Gtk.Widget):
         snapshot.push_shadow([PAGE_SHADOW])
         snapshot.append_color(WHITE, page_rect)
         snapshot.pop()
-        raster = self._page_raster(min(v.zoom * sf, math.sqrt(MAX_PAGE_PIXELS / (w * h))))
+        needed = min(v.zoom * sf, math.sqrt(MAX_PAGE_PIXELS / (w * h)))
+        raster = self._page_raster(needed)
         scale = raster.scale
         k = v.zoom / scale  # widget pixels per page device pixel
         visible = (-ox / k, -oy / k, (self.get_width() - ox) / k, (self.get_height() - oy) / k)
-        # A new zoom renders its tiles a few per frame, over the old zoom's
-        # (magnified): one go took 100 ms at high zoom, right as the pen came down.
-        deadline = time.perf_counter() + TILE_BUDGET
+        # Tiles not rendered yet (after a zoom, or coming into view) render a
+        # few per frame over the whole page drawn small: rendering them all
+        # at once took 30-200 ms, right as fingers or pen moved.
+        overview = self._overview_raster()
+        # Fingers zooming out: tiles at the old, bigger zoom would be thrown
+        # away when they let go, so the overview alone fills in.
+        budget = 0 if self._pinching and raster.scale > 1.5 * needed else TILE_BUDGET
+        deadline = time.perf_counter() + budget
         ready, waiting = [], False
         for key in raster.tile_boxes(visible):
-            if (key in raster.rendered or self._previous is None or self._previous.index != raster.index
-                    or time.perf_counter() < deadline):
+            if key in raster.rendered or time.perf_counter() < deadline:
                 ready.append(raster.tile(*key))
             else:
                 waiting = True
         if waiting:
-            old = self._previous
-            ko = v.zoom / old.scale
-            seen = (-ox / ko, -oy / ko, (self.get_width() - ox) / ko, (self.get_height() - oy) / ko)
-            for key in old.tile_boxes(seen):
-                if key in old.rendered:
-                    tile, (x0, y0, x1, y1) = old.tile(*key)
-                    snapshot.append_texture(tile, rect(ox + x0 * ko, oy + y0 * ko, (x1 - x0) * ko, (y1 - y0) * ko))
-            GLib.idle_add(once(self.queue_draw))  # more next frame (not from inside this one)
-        else:
-            self._previous = None
+            ko = v.zoom / overview.scale
+            for key in overview.tile_boxes():
+                tile, (x0, y0, x1, y1) = overview.tile(*key)
+                snapshot.append_texture(tile, rect(ox + x0 * ko, oy + y0 * ko, (x1 - x0) * ko, (y1 - y0) * ko))
+            if not self._pinching:  # (a pinch draws anyway)
+                GLib.idle_add(once(self.queue_draw))  # more next frame, not from inside this one
         for tile, (x0, y0, x1, y1) in ready:
             snapshot.append_texture(tile, rect(ox + x0 * k, oy + y0 * k, (x1 - x0) * k, (y1 - y0) * k))
         snapshot.push_clip(page_rect)
