@@ -71,7 +71,8 @@ input sets `UIBCDetected` and `DirectRenderer::setNonAVSyncMode(true)`.
 - From a window's change committed on the virtual monitor to its frame
   complete on the wire (local UDP, single changes 0.5 s apart on a still
   screen, 20 each): before, mean 108-115 ms, p50 31-33, max 230 (the frame
-  waited for a keepalive repeat); now mean 27-29 ms, p50 27-28, max 29-62.
+  waited for a keepalive repeat); now mean 27-36 ms, p50 27-36 (it varies
+  from run to run), max 29-78. `tools/latency_pc.py` measures it.
   The capture at 120 instead of 60 Hz changes single changes little (1-6 ms).
 - The signing window as one `GtkDrawingArea`: GTK spent ~10 ms a frame
   (p90 17) painting and uploading the whole window, so it ran at 33-40 fps
