@@ -161,10 +161,12 @@ everywhere, and shows which tablet Plus One sees.
 
 The pen button in the toolbar sets the colour, the thickness and the
 stabilization (how much the ink smooths the pen's movement); Plus One
-remembers them. Also in the window: **Keep as my signature** (draw it
-once), then **My signature** places it with one tap; **Date** and **Text**
-add a date or a few words where you tap; **Undo**, **Clear page**, page
-arrows and **Fit**.
+remembers them. **My signature** places your saved signature with one tap;
+its arrow lists them all: pick another, remove one, or draw a new one on a
+pad (with the pen or the mouse). The first time, **Keep as my signature**
+also saves what you just drew. **Options → My signatures** in the Plus One
+window manages them too. **Date** and **Text** add a date or a few words
+where you tap; **Undo**, **Clear page**, page arrows and **Fit**.
 If the tablet does not connect, the notification offers *Sign on this PC*
 (mouse or a pen tablet). The signature is drawn into the page (a simple
 electronic signature), not a cryptographic digital signature.
@@ -180,9 +182,9 @@ the pen. Plus One's app for the tablet draws it on the tablet itself, as a
 note app does, and needs neither Second Screen nor Wi-Fi Direct: the PC finds
 it on the home network.
 
-1. Install `plus-one-companion_*.apk` from the release on the tablet (allow
-   installing from your browser or file manager when Android asks), and
-   open **Plus One** once.
+1. Install `plus-one-companion_*.apk` from the release on the tablet
+   (Android 13 or later; allow installing from your browser or file manager
+   when Android asks), and open **Plus One** once.
 2. In the app, allow it to **display over other apps**, so a PDF sent from
    the PC opens by itself (without it, a notification to tap).
 3. Sign on Tablet from Files as above. The first time, the PC and the tablet
@@ -190,9 +192,11 @@ it on the home network.
    recognize each other, and nothing else on the network can send PDFs to
    the tablet or read what you sign.
 
-The app has the same tools (pen colour and thickness, the saved signature,
-date, text, the S Pen's button to erase, undo, pinch to zoom) and shares the
-pen and the saved signature with the PC. When it is on the network, Sign on
+The app has the same tools (pen colour and thickness, your signatures,
+date, text, the S Pen's button to erase, undo, pinch to zoom). The pen and
+the signatures are shared with the PC: each time you sign, what you added
+or removed on either side reaches the other. The app lists them too, under
+**My signatures**. When it is on the network, Sign on
 Tablet uses it; otherwise Second Screen as before. It waits for the PC with a
 quiet notification; **Ready in the background** in the app turns that off (it
 is then ready for 10 minutes after you open it). If the Wi-Fi drops while you

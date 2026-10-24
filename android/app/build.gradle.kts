@@ -17,8 +17,9 @@ android {
 
     defaultConfig {
         applicationId = "io.github.gabrielesantangelo.plusone"
-        // Front-buffered rendering needs Android 10.
-        minSdk = 29
+        // Android 13: the S Pen tablets Samsung still updates (front-buffered
+        // rendering itself needs 10).
+        minSdk = 33
         targetSdk = 36
         versionCode = major * 10000 + minor * 100 + patch
         versionName = appVersion
@@ -37,8 +38,18 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8: 6.5 MB of Kotlin and androidx down to what the app uses.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
             if (keystore != null) signingConfig = signingConfigs.getByName("release")
+        }
+        // A release build signed with the debug key, to try R8's output on a
+        // device that has the debug build installed.
+        create("shrunk") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
         }
     }
 

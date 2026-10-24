@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Plus One</string>
+    <string name="app_name" translatable="false">Plus One</string>
     <string name="cancel">Cancel</string>
     <string name="done">Done</string>
     <string name="eraser">Eraser</string>
     <string name="clear_page">Clear</string>
     <string name="fit">Fit</string>
-    <string name="page_of">%1$d / %2$d</string>
+    <string name="page_of" translatable="false">%1$d / %2$d</string>
     <string name="cannot_open">Cannot open the PDF: %1$s</string>
     <string name="saved_test">Signature kept (test)</string>
     <string name="channel_service">Ready for the PC</string>

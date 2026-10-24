@@ -10,7 +10,6 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
-import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
@@ -187,7 +186,7 @@ class SignActivity : Activity() {
         root.addView(keep, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,
             FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
         root.setOnApplyWindowInsetsListener { _, insets ->
-            bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+            bars = systemBars(insets)
             placeChrome()
             insets
         }

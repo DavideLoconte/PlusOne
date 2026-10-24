@@ -21,6 +21,13 @@ The companion app: ink under the nib.
   notification, or only for a while after the app is opened.
 - A Wi-Fi drop while signing does not lose the signature: Plus One finds the
   app again and gets it when the user is done.
+- **Several signatures**, on the PC and in the app: "My signature" places
+  the last used with one tap, its arrow lists them (pick, remove, draw a new
+  one on a pad). Kept in step between PC and tablet at each signing: what
+  either side added is kept, what either side removed stays removed. 0.4's
+  single saved signature becomes the first.
+- The app fits phones too (Android 13 or later): icons in the toolbar,
+  clear of the system bars and cutouts, popups sized to the screen.
 - When the app is not there, Second Screen as before.
 - Builds in a container (`tools/android-docker.sh`, `Dockerfile.android`),
   nothing Android on the host; CI builds it, releases attach the signed APK.

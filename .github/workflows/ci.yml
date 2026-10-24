@@ -39,8 +39,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Companion app, in the same container as locally
-        run: tools/android-docker.sh assembleDebug
+      - name: Companion app, in the same container as locally (lint errors fail it)
+        run: tools/android-docker.sh lint assembleDebug
       - uses: actions/upload-artifact@v4
         with:
           name: apk

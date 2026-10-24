@@ -49,7 +49,10 @@ object Identity {
     }
 
     /** A TLS context presenting our certificate and accepting any peer's:
-     * the peer is checked against the paired list after the handshake. */
+     * no CA vouches for either side, so the peer's certificate is checked
+     * after the handshake, against the paired list or by the user
+     * comparing the pairing code (CompanionService.handle). */
+    @android.annotation.SuppressLint("CustomX509TrustManager", "TrustAllX509TrustManager")
     fun sslContext(): SSLContext {
         certificate  // created if needed
         val keys = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm()).apply { init(keyStore, null) }

@@ -111,10 +111,12 @@ class SignatureThumb(context: Context, var signature: Signature?, var color: Int
     }
     private val card = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val density = resources.displayMetrics.density
+    private val box = RectF()
 
     override fun onDraw(canvas: Canvas) {
         val radius = 8 * density
-        canvas.drawRoundRect(RectF(0f, 0f, width.toFloat(), height.toFloat()), radius, radius, card)
+        box.set(0f, 0f, width.toFloat(), height.toFloat())
+        canvas.drawRoundRect(box, radius, radius, card)
         val shown = signature ?: return
         val margin = 6 * density
         val tall = shown.strokes.maxOf { s -> (1 until s.size step 3).maxOfOrNull { s[it] } ?: 0f }.coerceAtLeast(0.01f)
@@ -240,6 +242,9 @@ class SignaturePad(context: Context, private val color: Int, private val pen: Fl
         private val card = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
         private val line = Paint().apply { color = Color.argb(46, 0, 0, 0); strokeWidth = density }
         private val ink = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.ROUND }
+        private val box = RectF()
+
+        override fun performClick(): Boolean = super.performClick()
 
         fun clear() {
             strokes.clear()
@@ -263,6 +268,7 @@ class SignaturePad(context: Context, private val color: Int, private val pen: Fl
                     add(event, stylus)
                     current = null
                     onChange()
+                    if (event.actionMasked == MotionEvent.ACTION_UP) performClick()
                 }
             }
             invalidate()
@@ -280,7 +286,8 @@ class SignaturePad(context: Context, private val color: Int, private val pen: Fl
 
         override fun onDraw(canvas: Canvas) {
             val radius = 12 * density
-            canvas.drawRoundRect(RectF(0f, 0f, width.toFloat(), height.toFloat()), radius, radius, card)
+            box.set(0f, 0f, width.toFloat(), height.toFloat())
+            canvas.drawRoundRect(box, radius, radius, card)
             val y = height * 0.72f
             canvas.drawLine(24 * density, y, width - 24 * density, y, line)
             val scale = width / PAD_POINTS

@@ -170,6 +170,10 @@ class Signature(val width: Float, val strokes: List<FloatArray>,
     }
 }
 
+/** What the system bars and a display cutout cover (the app is drawn behind them). */
+fun systemBars(insets: android.view.WindowInsets): android.graphics.Insets =
+    insets.getInsets(android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout())
+
 /** The pen last chosen, kept on the tablet (the PC's arrives with each PDF). */
 object Pen {
     private const val PREFS = "pen"
