@@ -9,6 +9,7 @@ import faulthandler
 import itertools
 import math
 import os
+import sys
 import threading
 import time
 
@@ -18,8 +19,9 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("Graphene", "1.0")
+gi.require_version("Gsk", "4.0")
 gi.require_version("Poppler", "0.18")
-from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gtk, Poppler  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gsk, Gtk, Poppler  # noqa: E402
 
 from . import log, once  # noqa: E402
 from .i18n import _  # noqa: E402
@@ -43,6 +45,12 @@ TOOLBAR_SPACE = 84  # pixels kept clear under the page for the floating toolbar
 REPORT_INTERVAL = 1 / 285
 MIN_STEP = 1.0  # widget pixels a modelled point must move to be kept
 STALL = 3  # seconds without answering: GNOME is about to call the window frozen
+CHUNK = 24  # settled stroke segments turned into one texture while drawing
+# cairo's 32-bit pixels are native-endian words: B, G, R, A bytes here.
+LITTLE = sys.byteorder == "little"
+OPAQUE = Gdk.MemoryFormat.B8G8R8X8 if LITTLE else Gdk.MemoryFormat.X8R8G8B8
+PREMULTIPLIED = (Gdk.MemoryFormat.B8G8R8A8_PREMULTIPLIED if LITTLE
+                 else Gdk.MemoryFormat.A8R8G8B8_PREMULTIPLIED)
 
 CSS = """
 .sign-canvas { background-color: mix(@window_bg_color, @window_fg_color, 0.08); }
@@ -93,6 +101,22 @@ def tablet_monitor():
     return found
 
 
+SHADOW = Gdk.RGBA()
+SHADOW.parse("rgba(0, 0, 0, 0.28)")
+
+
+def texture(surface):
+    """A GdkTexture with a copy of a cairo image surface's pixels."""
+    surface.flush()
+    fmt = OPAQUE if surface.get_format() == cairo.FORMAT_RGB24 else PREMULTIPLIED
+    return Gdk.MemoryTexture.new(surface.get_width(), surface.get_height(), fmt,
+                                 GLib.Bytes.new(bytes(surface.get_data())), surface.get_stride())
+
+
+def rect(x, y, w, h):
+    return Graphene.Rect().init(x, y, w, h)
+
+
 def open_document(path):
     """A Poppler document, or raise GLib.Error (missing, damaged, password)."""
     return Poppler.Document.new_from_file(Gio.File.new_for_path(path).get_uri(), None)
@@ -138,24 +162,32 @@ class Lag:
         return f"samples waited {ms(waits)}, frames every {ms(gaps)}"
 
 
-class PageArea(Gtk.DrawingArea):
-    """One page with its marks; turns pen/mouse input into page coordinates."""
+class PageArea(Gtk.Widget):
+    """One page with its marks; turns pen/mouse input into page coordinates.
+
+    Drawn as render nodes, not one cairo picture: the page with its finished
+    marks is a texture, uploaded once, and so is each run of settled segments
+    of the stroke being drawn, so a frame only rasterizes the stroke's last
+    few segments and GTK repaints only where they are. Painting the whole
+    page every frame took the window about 10 ms a frame, and it missed
+    frames while the pen moved."""
+
+    NATURAL = (480, 600)  # or a window that is not maximized shrinks to nothing
 
     def __init__(self, window):
-        # A natural size, or a window that is not maximized shrinks to nothing.
-        super().__init__(hexpand=True, vexpand=True, focusable=True,
-                         content_width=480, content_height=600, css_classes=["sign-canvas"])
+        super().__init__(hexpand=True, vexpand=True, focusable=True, css_classes=["sign-canvas"])
         self.window = window
         self.view = View()
         self.fitted = False
-        self._cache = None  # (page index, zoom, surface)
+        self._cache = None  # (page index, scale, surface, marks drawn on it, texture)
         self._stroke = None
         self._model = None    # the stroke's modeler, in widget pixels
         self._clock = 0.0     # time of the stroke's last sample, seconds
         self._skipped = None  # last modelled point, if too close to keep (yet)
         self._by_mouse = False  # the stroke being drawn is the mouse's
-        self._inked = 0           # its segments already drawn onto the cached page
-        self._ink_surface = None  # which cached page they are on
+        self._inked = 0     # its segments in chunks already
+        self._chunks = []   # (surface, texture, device pixel x, y) of those, at _chunk_scale
+        self._chunk_scale = None
         self.stats = Lag()        # how far behind the pen the window runs
         self._eraser = None   # page point under the eraser, while erasing
         self._erased = False  # this eraser stroke removed something already
@@ -167,8 +199,6 @@ class PageArea(Gtk.DrawingArea):
         self._raw_tick = None
         self.raw_counts = [0, 0]  # samples drawn from the tablet, desktop events meanwhile
         self._hover = None  # pen or mouse position while something waits to be placed
-        self.set_draw_func(self._draw)
-        self.connect("resize", lambda *a: self.fit())
 
         stylus = Gtk.GestureStylus()
         stylus.connect("down", self._pen_down)
@@ -206,8 +236,15 @@ class PageArea(Gtk.DrawingArea):
     def page_size(self):
         return self.window.page().get_size()
 
-    def fit(self):
-        w, h = self.get_width(), self.get_height()
+    def do_measure(self, orientation, for_size):
+        size = self.NATURAL[orientation == Gtk.Orientation.VERTICAL]
+        return size, size, -1, -1
+
+    def do_size_allocate(self, width, height, baseline):
+        self.fit(width, height)
+
+    def fit(self, w=None, h=None):
+        w, h = w or self.get_width(), h or self.get_height()
         if w and h:
             self.view.fit(*self.page_size(), w, h, margin=24, bottom=TOOLBAR_SPACE)
             self.fitted = True
@@ -305,43 +342,53 @@ class PageArea(Gtk.DrawingArea):
             if self._skipped:
                 self._stroke.points.append(self._skipped)
             stroke, cached = self._stroke, self._cache
-            inked = self._inked and cached is not None and cached[2] is self._ink_surface
-            if inked:
-                cr = cairo.Context(self._ink_surface)
-                cr.scale(cached[1], cached[1])
-                draw_segments(cr, stroke, self._segments(stroke.points))
             self.window.add_mark(stroke)
-            if inked:
-                # On the cached page already: drawn again it would come out bolder.
-                marks = self.window.marks.get(self.window.index, [])
-                if len(marks) == len(cached[3]) + 1 and marks[-1] is stroke and all(
-                        a is b for a, b in zip(cached[3], marks)):
-                    self._cache = (*cached[:3], tuple(marks))
-                else:
-                    self._cache = None
+            marks = self.window.marks.get(self.window.index, [])
+            if (self._chunks and cached is not None and cached[1] == self._chunk_scale
+                    and len(marks) == len(cached[3]) + 1 and marks[-1] is stroke
+                    and all(a is b for a, b in zip(cached[3], marks))):
+                # What was shown goes onto the page as is: the chunks, then
+                # the rest of the stroke, rather than all of it again.
+                cr = cairo.Context(cached[2])
+                for surface, _texture, x, y in self._chunks:
+                    cr.set_source_surface(surface, x, y)
+                    cr.paint()
+                cr.scale(cached[1], cached[1])
+                draw_segments(cr, stroke, self._segments(stroke.points, self._inked))
+                self._cache = (*cached[:3], tuple(marks), None)
             self.stats.stroke_done()
-            self._stroke = self._model = self._skipped = self._ink_surface = None
-            self._inked = 0
+            self._stroke = self._model = self._skipped = None
+            self._chunks, self._inked = [], 0
 
-    def _segments(self, points, upto=None):
-        """curve() segments of points from the first not inked yet, up to
-        (not including) upto."""
-        start = max(0, self._inked - 1)  # the previous point shapes the first one
-        skip = self._inked - start
-        return itertools.islice(curve(points[start:]), skip, None if upto is None else upto - start)
+    @staticmethod
+    def _segments(points, first=0, upto=None):
+        """curve() segments of points from the first-th, up to (not
+        including) upto."""
+        start = max(0, first - 1)  # the previous point shapes the first one
+        return itertools.islice(curve(points[start:]), first - start, None if upto is None else upto - start)
 
-    def _ink(self, surface, scale):
-        """Draw the stroke's settled segments (all four points that shape
-        each are in) onto the cached page: a frame then only draws the last
-        few, however long the stroke."""
-        if self._ink_surface is not surface:
-            self._ink_surface, self._inked = surface, 0
+    def _ink(self, scale):
+        """Turn the stroke's settled segments (all four points that shape
+        each are in) into textures, CHUNK at a time: a frame then rasterizes
+        only the last few, however long the stroke."""
+        if self._chunk_scale != scale:
+            self._chunks, self._inked, self._chunk_scale = [], 0, scale
         settled = len(self._stroke.points) - 2
-        if settled > self._inked:
+        while settled - self._inked >= CHUNK:
+            segments = list(self._segments(self._stroke.points, self._inked, self._inked + CHUNK))
+            # The curve stays within its control points; the ink, half a width around it.
+            xs = [p[0] for seg in segments for p in seg[:4]]
+            ys = [p[1] for seg in segments for p in seg[:4]]
+            margin = self._stroke.width / 2 * scale + 2
+            x0, y0 = math.floor(min(xs) * scale - margin), math.floor(min(ys) * scale - margin)
+            x1, y1 = math.ceil(max(xs) * scale + margin), math.ceil(max(ys) * scale + margin)
+            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, x1 - x0, y1 - y0)
             cr = cairo.Context(surface)
+            cr.translate(-x0, -y0)
             cr.scale(scale, scale)
-            draw_segments(cr, self._stroke, self._segments(self._stroke.points, settled))
-            self._inked = settled
+            draw_segments(cr, self._stroke, segments)
+            self._chunks.append((surface, texture(surface), x0, y0))
+            self._inked += CHUNK
 
     def _is_eraser(self, gesture):
         """Side button held, or the eraser end of a pen that has one."""
@@ -507,16 +554,17 @@ class PageArea(Gtk.DrawingArea):
 
     # -- drawing ---------------------------------------------------------------
     def _page_surface(self, scale):
-        """The page with its finished marks, rendered at `scale` device
-        pixels per point. Cached: new marks are drawn onto it as they come,
-        so a frame does not redraw every stroke on the page (thousands of
-        segments); erasing, undo, another page or zoom render it again."""
+        """(scale, surface, texture): the page with its finished marks,
+        rendered at `scale` device pixels per point. Cached: new marks are
+        drawn onto it as they come, so a frame does not redraw every stroke
+        on the page (thousands of segments) and the texture is made once per
+        change; erasing, undo, another page or zoom render it again."""
         index = self.window.index
         marks = self.window.marks.get(index, [])
         cached = self._cache
         if (cached and cached[0] == index and abs(cached[1] / scale - 1) < 0.15
                 and len(cached[3]) <= len(marks) and all(a is b for a, b in zip(cached[3], marks))):
-            _index, scale, surface, drawn = cached
+            _index, scale, surface, drawn, page = cached
         else:
             w, h = self.page_size()
             surface = cairo.ImageSurface(cairo.FORMAT_RGB24, max(1, int(w * scale)), max(1, int(h * scale)))
@@ -525,56 +573,50 @@ class PageArea(Gtk.DrawingArea):
             cr.paint()
             cr.scale(scale, scale)
             self.window.page().render(cr)
-            drawn = ()
+            drawn, page = (), None
         if len(drawn) < len(marks):
             cr = cairo.Context(surface)
             cr.scale(scale, scale)
             draw_marks(cr, marks[len(drawn):])
-            drawn = tuple(marks)
-        self._cache = (index, scale, surface, drawn)
-        return scale, surface
+            drawn, page = tuple(marks), None
+        if page is None:
+            page = texture(surface)
+        self._cache = (index, scale, surface, drawn, page)
+        return scale, surface, page
 
-    def _draw(self, area, cr, width, height):
+    def do_snapshot(self, snapshot):
         if not self.fitted:
             self.fit()
         v = self.view
         w, h = self.page_size()
-        # The page floats over the background on a soft shadow: stacked
-        # rounded layers, darkest at the page's edge, fading out in 14 px.
-        cr.set_source_rgba(0, 0, 0, 0.012)
-        for spread in range(1, 15):
-            x, y = v.ox - spread, v.oy - spread + 3
-            x1, y1 = v.ox + w * v.zoom + spread, v.oy + h * v.zoom + spread + 3
-            cr.new_sub_path()
-            cr.arc(x1 - spread, y + spread, spread, -math.pi / 2, 0)
-            cr.arc(x1 - spread, y1 - spread, spread, 0, math.pi / 2)
-            cr.arc(x + spread, y1 - spread, spread, math.pi / 2, math.pi)
-            cr.arc(x + spread, y + spread, spread, math.pi, 3 * math.pi / 2)
-            cr.close_path()
-            cr.fill()
-        cr.save()
-        cr.translate(v.ox, v.oy)
-        scale, surface = self._page_surface(v.zoom * self.get_scale_factor())
+        page_rect = rect(v.ox, v.oy, w * v.zoom, h * v.zoom)
+        # The page floats over the background on a soft shadow.
+        snapshot.append_outset_shadow(Gsk.RoundedRect().init_from_rect(page_rect, 0), SHADOW, 0, 3, 0, 14)
+        scale, _surface, page = self._page_surface(v.zoom * self.get_scale_factor())
+        snapshot.append_texture(page, page_rect)
+        snapshot.push_clip(page_rect)
         if self._stroke is not None:
-            self._ink(surface, scale)
+            self._ink(scale)
             self.stats.frame()
-        cr.save()
-        cr.scale(v.zoom / scale, v.zoom / scale)
-        cr.set_source_surface(surface, 0, 0)
-        cr.paint()
-        cr.restore()
-        cr.scale(v.zoom, v.zoom)
-        cr.rectangle(0, 0, w, h)
-        cr.clip()
-        if self._stroke is not None:
+            for surface, chunk, x, y in self._chunks:
+                k = v.zoom / scale
+                snapshot.append_texture(chunk, rect(v.ox + x * k, v.oy + y * k,
+                                                    surface.get_width() * k, surface.get_height() * k))
             # The rest of the stroke, up to where the pen is predicted to be by now.
             tail = [(*v.to_page(x, y), p) for x, y, p in self._model.predict()]
-            if self._inked:
-                draw_segments(cr, self._stroke, self._segments(self._stroke.points + tail))
-            else:
-                draw_marks(cr, [Stroke(self._stroke.points + tail, self._stroke.width, self._stroke.color)])
+            points = self._stroke.points + tail
+            segments = list(self._segments(points, self._inked)) if points else []
+            if segments:
+                # The curve stays within its control points.
+                cr = self._cairo(snapshot, [p for seg in segments for p in seg[:4]], self._stroke.width / 2)
+                draw_segments(cr, self._stroke, segments)
+            elif points:  # a dot so far
+                cr = self._cairo(snapshot, points[:1], self._stroke.width / 2)
+                draw_marks(cr, [Stroke(points, self._stroke.width, self._stroke.color)])
         if self._eraser is not None:
-            cr.arc(*self._eraser, ERASER_RADIUS / v.zoom, 0, 2 * math.pi)
+            radius = ERASER_RADIUS / v.zoom
+            cr = self._cairo(snapshot, [self._eraser], radius)
+            cr.arc(*self._eraser, radius, 0, 2 * math.pi)
             cr.set_source_rgba(1, 1, 1, 0.6)
             cr.fill_preserve()
             cr.set_source_rgba(0.3, 0.3, 0.3, 0.9)
@@ -582,11 +624,26 @@ class PageArea(Gtk.DrawingArea):
             cr.stroke()
         if self._hover and self.window.pending:
             # A faint preview of what the tap will place.
-            cr.push_group()
+            snapshot.push_opacity(0.4)
+            cr = snapshot.append_cairo(page_rect)
+            cr.translate(v.ox, v.oy)
+            cr.scale(v.zoom, v.zoom)
             draw_marks(cr, self.window.pending(*v.to_page(*self._hover)))
-            cr.pop_group_to_source()
-            cr.paint_with_alpha(0.4)
-        cr.restore()
+            snapshot.pop()
+        snapshot.pop()
+
+    def _cairo(self, snapshot, points, reach):
+        """A cairo context in page points for drawing around points (and
+        reach points beyond them): only that area is rasterized."""
+        v = self.view
+        xs, ys = [p[0] for p in points], [p[1] for p in points]
+        pad = reach * v.zoom + 2
+        x0, y0 = v.ox + min(xs) * v.zoom - pad, v.oy + min(ys) * v.zoom - pad
+        cr = snapshot.append_cairo(rect(x0, y0, (max(xs) - min(xs)) * v.zoom + 2 * pad,
+                                        (max(ys) - min(ys)) * v.zoom + 2 * pad))
+        cr.translate(v.ox, v.oy)
+        cr.scale(v.zoom, v.zoom)
+        return cr
 
 
 class SignWindow(Adw.ApplicationWindow):
