@@ -53,11 +53,11 @@ class SignaturePad(Adw.Window):
 
         self.area = Gtk.DrawingArea(hexpand=True, vexpand=True, cursor=Gdk.Cursor.new_from_name("crosshair"))
         self.area.set_draw_func(self._draw)
-        drag = Gtk.GestureDrag(button=0)
-        drag.connect("drag-begin", self._begin)
-        drag.connect("drag-update", self._move)
-        drag.connect("drag-end", self._end)
-        self.area.add_controller(drag)
+        self.drag_gesture = Gtk.GestureDrag(button=0)
+        self.drag_gesture.connect("drag-begin", self._begin)
+        self.drag_gesture.connect("drag-update", self._move)
+        self.drag_gesture.connect("drag-end", self._end)
+        self.area.add_controller(self.drag_gesture)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10,
                       margin_top=18, margin_bottom=18, margin_start=18, margin_end=18)
         box.append(self.area)

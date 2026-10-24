@@ -290,3 +290,28 @@ def test_a_long_stroke_is_inked_once(window):
     a, b = bytes(raster.surface.get_data()), bytes(fresh.surface.get_data())
     # Chunks are composited in 8 bits: at most a rounding step apart.
     assert len(a) == len(b) and max(abs(x - y) for x, y in zip(a, b)) <= 2
+
+def test_signature_pad_and_list(window):
+    from plusone import signatures
+    from plusone.signature_pad import SignatureList, SignaturePad
+    win, _results, _src = window
+    saved = []
+    pad = SignaturePad(win, (0, 0, 0), 1.6, on_saved=saved.append)
+    pad.present()
+    assert spin(lambda: pad.area.get_width() > 0)
+    pad._begin(pad.drag_gesture, 40, 80)
+    for dx in range(0, 300, 20):
+        pad._move(pad.drag_gesture, dx, dx / 4)
+    pad._end(pad.drag_gesture, 300, 75)
+    assert pad.save_button.get_sensitive()
+    pad._save()
+    assert len(saved) == 1 and signatures.load()[0] == saved
+    # The pad is 280 points wide: the drawn width comes back in points.
+    assert 0 < saved[0]["width"] < 280
+    picked = []
+    listing = SignatureList((0, 0, 0), 1.6, on_pick=picked.append)
+    rows = listing.rows
+    assert rows.get_first_child() is not None
+    signatures.remove(saved[0]["id"])
+    listing.reload()
+    assert isinstance(rows.get_first_child(), Gtk.Label)  # "No signature saved yet"
