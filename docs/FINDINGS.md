@@ -205,3 +205,17 @@ the tablet and read with REA (JADX, objdump); static analysis only.
   was dismissed as soon as it showed; a plain layout stays.
 - Each container build made a new debug signing key, and Android refused
   to update the installed app; the key now lives in the Gradle volume.
+- Closing an `Adw.MessageDialog` from its own "response" handler emits
+  "response" again, with its close response: the pairing dialog's "Pair"
+  then counted as "Cancel". The first answer is the one that counts now.
+- A link that dies without a word (Wi-Fi gone, the tablet's address
+  changed) left the PC waiting forever: it now asks "ping" after 15 s of
+  silence and gives the link up after 45, then looks for the app again. The
+  app keeps a job's answer until the PC says "got": bytes written into a
+  dead link are not an answer delivered.
+- On Android 16 with "Display over other apps", the signing screen opens
+  from the background too (the service is in the foreground).
+- Pairing codes made of the two certificates only could be ground by
+  someone in the middle (a certificate whose code matches, about 10^6
+  tries); each side's random number, the app's committed to first, takes
+  that away (Bluetooth's numeric comparison does the same).

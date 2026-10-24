@@ -17,29 +17,36 @@ import java.util.concurrent.TimeUnit
 
 /** Asking the user whether to pair with a PC, showing the code both screens show. */
 object Pairing {
-    private class Request(val pc: String, val code: String) {
+    private class Request(val pc: String, @Suppress("unused") val code: String) {
         val answered = CountDownLatch(1)
         @Volatile var accepted = false
     }
 
     private val requests = ConcurrentHashMap<String, Request>()
 
-    /** Blocks the calling (connection) thread until the user answers, two minutes at most. */
+    /** Blocks the calling (connection) thread until the user answers, two
+     * minutes at most. Asked again with the same code (the same PC, several
+     * PDFs at once), it waits for the same answer. */
     fun ask(context: Context, pc: String, code: String): Boolean {
-        val request = Request(pc, code)
-        requests[code] = request
-        val open = Intent(context, PairActivity::class.java)
-            .putExtra(PairActivity.EXTRA_CODE, code)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        if (Settings.canDrawOverlays(context)) context.startActivity(open)
-        Notifications.pairing(context, pc, code, open)
+        var asking = false
+        val request = requests.computeIfAbsent(code) { asking = true; Request(pc, code) }
+        if (asking) {
+            val open = Intent(context, PairActivity::class.java)
+                .putExtra(PairActivity.EXTRA_CODE, code)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (Settings.canDrawOverlays(context)) context.startActivity(open)
+            Notifications.pairing(context, pc, code, open)
+        }
         val answered = request.answered.await(2, TimeUnit.MINUTES)
-        requests.remove(code)
-        Notifications.cancelPairing(context)
+        if (asking) {
+            requests.remove(code)
+            Notifications.cancelPairing(context, code)
+        }
         return answered && request.accepted
     }
 
-    fun pending(code: String): Pair<String, String>? = requests[code]?.let { it.pc to it.code }
+    /** The PC's name, while its pairing waits for an answer. */
+    fun pending(code: String): String? = requests[code]?.pc
 
     fun answer(code: String, accepted: Boolean) {
         requests[code]?.let {
@@ -56,7 +63,7 @@ class PairActivity : Activity() {
         super.onCreate(savedInstanceState)
         setFinishOnTouchOutside(false)
         val code = intent.getStringExtra(EXTRA_CODE) ?: return finish()
-        val (pc, _) = Pairing.pending(code) ?: return finish()
+        val pc = Pairing.pending(code) ?: return finish()
         fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
         fun button(label: Int, accept: Boolean) = Button(this).apply {
             setText(label)

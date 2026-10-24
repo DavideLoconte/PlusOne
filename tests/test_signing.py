@@ -23,7 +23,7 @@ class FakeNearby:
     def __init__(self):
         self.app_on = None  # (address, port, name) of the companion app, if any
 
-    def companion(self):
+    def companion(self, paired=()):
         return self.app_on
 
 
@@ -161,3 +161,31 @@ def test_pen_and_signatures_from_the_tablet_are_kept(monkeypatch, tmp_path):
     signing._merge_signatures({"signatures": [{"id": "t1", "width": 120.0,
                                                "strokes": [[[0, 0, 0.5], [1, 0.2, 0.5]]]}], "removed": []})
     assert [s["width"] for s in signatures.load()[0]] == [120.0]
+
+
+def test_the_first_answer_to_pairing_counts(monkeypatch):
+    # Closing the dialog after "Pair" answers "close" too: it must not undo the pairing.
+    import threading
+    app, signing, _, _ = make(monkeypatch)
+    shown = []
+    monkeypatch.setattr(signing, "_show_pairing", lambda tablet, code: shown.append(code))
+    monkeypatch.setattr(signing, "_pairing_over", lambda code: None)
+    results = []
+    askers = [threading.Thread(target=lambda: results.append(signing._ask_pairing("Tab", "123456")))
+              for _ in range(2)]  # two PDFs at once: the same tablet, the same code
+    for t in askers:
+        t.start()
+    assert spin(lambda: shown) and spin(lambda: "123456" in signing.pairing)
+    signing._answer_pairing("123456", True)
+    signing._answer_pairing("123456", False)
+    for t in askers:
+        t.join(5)
+    assert results == [True, True] and shown == ["123456"]
+
+
+def test_a_paired_app_comes_first():
+    from plusone.nearby import Nearby
+    nearby = Nearby()
+    nearby.companions = {"a": ("10.0.0.2", 1000, "Stranger", "aaaa"), "b": ("10.0.0.9", 2000, "Tab", "bbbb")}
+    assert nearby.companion() == ("10.0.0.2", 1000, "Stranger")
+    assert nearby.companion(["bbbb" + "0" * 60]) == ("10.0.0.9", 2000, "Tab")

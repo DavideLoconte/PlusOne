@@ -68,14 +68,23 @@ object Identity {
         MessageDigest.getInstance("SHA-256").digest(der).joinToString("") { "%02x".format(it) }
 
     /** Six digits both screens show while pairing: the same only if each
-     * side got the other's certificate untouched (plusone/companion.py). */
-    fun pairingCode(a: ByteArray, b: ByteArray): String {
+     * side got the other's certificate untouched; pcNonce and appNonce are
+     * the two sides' random numbers, the app's committed to before it saw
+     * the PC's (plusone/companion.py). */
+    fun pairingCode(a: ByteArray, b: ByteArray, pcNonce: ByteArray, appNonce: ByteArray): String {
         val (first, second) = if (compare(a, b) <= 0) a to b else b to a
-        val digest = MessageDigest.getInstance("SHA-256").apply { update(first); update(second) }.digest()
+        val digest = MessageDigest.getInstance("SHA-256").apply {
+            update(first); update(second); update(pcNonce); update(appNonce)
+        }.digest()
         val number = ((digest[0].toLong() and 0xff) shl 24) or ((digest[1].toLong() and 0xff) shl 16) or
             ((digest[2].toLong() and 0xff) shl 8) or (digest[3].toLong() and 0xff)
         return "%06d".format(number % 1_000_000)
     }
+
+    /** What the app sends before it learns the PC's number: binds its own. */
+    fun commitment(nonce: ByteArray, appCert: ByteArray, pcCert: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").apply { update(nonce); update(appCert); update(pcCert) }
+            .digest().joinToString("") { "%02x".format(it) }
 
     private fun compare(a: ByteArray, b: ByteArray): Int {
         for (i in 0 until minOf(a.size, b.size)) {

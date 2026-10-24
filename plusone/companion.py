@@ -6,16 +6,24 @@ found by nearby.py). Plus One connects over TLS, each side presenting a
 self-signed certificate. The first time, both screens show a six-digit code
 made from the two certificates and the user confirms it on both (like
 Bluetooth's numeric comparison); then each side remembers the other's
-certificate. Messages: a 4-byte big-endian length, a JSON header, and as
-many payload bytes as the header's "size" says (android/.../Wire.kt).
+certificate. The code also mixes a random number from each side, the app's
+committed to before it sees the PC's: someone in the middle, showing each
+side a certificate of their own, cannot make both screens show the same
+code but by a one-in-a-million chance.
+
+Messages: a 4-byte big-endian length, a JSON header, and as many payload
+bytes as the header's "size" says (android/.../Wire.kt).
 """
 import hashlib
 import json
 import os
+import secrets
+import select
 import socket
 import ssl
 import struct
 import subprocess
+import threading
 import time
 import uuid
 
@@ -23,19 +31,33 @@ from gi.repository import GLib
 
 from . import log
 
-PROTOCOL = 1
+PROTOCOL = 2
 CONNECT_TIMEOUT = 5          # seconds
 PAIRING_TIMEOUT = 120        # seconds for the user to compare the codes
-MAX_HEADER = 16 * 1024 * 1024
+IO_TIMEOUT = 30              # seconds for a message to go through
+PING_EVERY = 15              # seconds of silence while the user signs before asking "still there?"
+SILENT_FOR = 45              # seconds of silence after which the link is taken for dead
+MAX_HEADER = 32 * 1024 * 1024  # the marks of a long document
 CONFIG = os.path.join(GLib.get_user_config_dir(), "plus-one", "companion")
+_making_identity = threading.Lock()
 
 
-def pairing_code(a, b):
-    """Six digits from two certificates (DER), the same in either order;
-    android/.../Identity.kt pairingCode computes the same."""
+class Incompatible(Exception):
+    """The app speaks another version of the protocol: one of the two needs updating."""
+
+
+def pairing_code(a, b, ours, theirs):
+    """Six digits from two certificates (DER, in either order) and the PC's
+    and the app's random numbers; android/.../Identity.kt pairingCode
+    computes the same."""
     first, second = sorted([a, b])
-    digest = hashlib.sha256(first + second).digest()
+    digest = hashlib.sha256(first + second + ours + theirs).digest()
     return f"{int.from_bytes(digest[:4], 'big') % 1_000_000:06d}"
+
+
+def commitment(nonce, app_cert, pc_cert):
+    """What the app sends before it learns the PC's number: binds its own."""
+    return hashlib.sha256(nonce + app_cert + pc_cert).hexdigest()
 
 
 def fingerprint(der):
@@ -47,16 +69,17 @@ def identity(directory=CONFIG):
     first use with openssl (on every Ubuntu, and in the GNOME runtime): an
     EC P-256 key and a self-signed certificate."""
     cert, key = os.path.join(directory, "cert.pem"), os.path.join(directory, "key.pem")
-    if not (os.path.exists(cert) and os.path.exists(key)):
-        os.makedirs(directory, mode=0o700, exist_ok=True)
-        old = os.umask(0o077)  # the key is readable by us only
-        try:
+    with _making_identity:  # two PDFs at once: one key, one certificate
+        if not (os.path.exists(cert) and os.path.exists(key)):
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+            os.chmod(directory, 0o700)  # the key in it is ours only
             subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
-                            "-nodes", "-keyout", key, "-out", cert, "-days", "10950",
+                            "-nodes", "-keyout", key + ".part", "-out", cert + ".part", "-days", "10950",
                             "-subj", f"/CN=Plus One on {socket.gethostname()}"],
                            check=True, capture_output=True, timeout=30)
-        finally:
-            os.umask(old)
+            os.chmod(key + ".part", 0o600)
+            os.replace(key + ".part", key)
+            os.replace(cert + ".part", cert)
     with open(cert) as f:
         der = ssl.PEM_cert_to_DER_cert(f.read())
     return cert, key, der
@@ -97,6 +120,12 @@ class Wire:
         data = json.dumps(header).encode()
         self.sock.sendall(struct.pack(">I", len(data)) + data + (payload or b""))
 
+    def readable(self, timeout):
+        """Whether a message starts arriving within timeout seconds."""
+        if isinstance(self.sock, ssl.SSLSocket) and self.sock.pending():
+            return True
+        return bool(select.select([self.sock], [], [], timeout)[0])
+
     def _exactly(self, n):
         chunks, left = [], n
         while left:
@@ -112,9 +141,11 @@ class Wire:
         if not 0 < length <= MAX_HEADER:
             raise ValueError(f"bad header length {length}")
         header = json.loads(self._exactly(length))
-        size = header.get("size")
-        payload = self._exactly(size) if isinstance(size, int) and size >= 0 else None
-        return header, payload
+        if not isinstance(header, dict):
+            raise ValueError("a message that is not an object")
+        if header.get("size"):
+            raise ValueError("the app sends no payloads")
+        return header, None
 
 
 class PairingRefused(Exception):
@@ -136,6 +167,7 @@ def _connect(target, paired, ask_pairing):
     PairingRefused if ask_pairing is None)."""
     cert, key, ours = identity()
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
     # No CA vouches for either side: the app's certificate is checked
     # against the paired list (or the user compares the code).
     context.check_hostname = False
@@ -148,17 +180,29 @@ def _connect(target, paired, ask_pairing):
         raw.close()
         raise
     try:
+        sock.settimeout(IO_TIMEOUT)
         theirs = sock.getpeercert(binary_form=True)
         fp = fingerprint(theirs)
         wire = Wire(sock)
         known = fp in paired.all()
         wire.send({"type": "hello", "name": socket.gethostname(), "version": PROTOCOL, "paired": known})
         hello, _ = wire.receive()
-        name = hello.get("name", "tablet")
+        name = str(hello.get("name") or "tablet")
+        if hello.get("version") != PROTOCOL:
+            raise Incompatible(f"{name} speaks version {hello.get('version')}, this PC {PROTOCOL}")
         if not known or not hello.get("paired"):
             if ask_pairing is None:
                 raise PairingRefused(name)
-            code = pairing_code(ours, theirs)
+            # The app commits to its number, learns ours, then shows its own.
+            commit, _ = wire.receive()
+            nonce = secrets.token_bytes(16)
+            wire.send({"type": "pair-nonce", "nonce": nonce.hex()})
+            reveal, _ = wire.receive()
+            their_nonce = bytes.fromhex(str(reveal.get("nonce", "")))
+            if (commit.get("type") != "pair-commit" or len(their_nonce) != 16
+                    or commit.get("commit") != commitment(their_nonce, theirs, ours)):
+                raise PairingRefused(name)
+            code = pairing_code(ours, theirs, nonce, their_nonce)
             log(f"companion: pairing with {name}, code {code}")
             sock.settimeout(PAIRING_TIMEOUT + 10)
             accepted = ask_pairing(name, code)
@@ -167,6 +211,7 @@ def _connect(target, paired, ask_pairing):
             if not accepted or answer.get("type") != "pair-ok":
                 raise PairingRefused(name)
             paired.add(fp, name)
+            sock.settimeout(IO_TIMEOUT)
         return sock, wire, name
     except Exception:
         sock.close()
@@ -174,19 +219,33 @@ def _connect(target, paired, ask_pairing):
 
 
 def _answer(wire, job, on_opened, name, on_signatures):
-    """Waits for the job's answer: the result, or None if cancelled."""
+    """Waits for the job's answer: the result, or None if cancelled. Asks
+    whether the app is still there when it is quiet for a while: a link
+    that died without a word (Wi-Fi gone) raises TimeoutError."""
+    heard = time.monotonic()
     while True:
+        if not wire.readable(PING_EVERY):
+            if time.monotonic() - heard > SILENT_FOR:
+                raise TimeoutError("the tablet stopped answering")
+            wire.send({"type": "ping"})
+            continue
         message, _ = wire.receive()
+        heard = time.monotonic()
         kind = message.get("type")
         if kind == "opened" and on_opened:
             on_opened(name)
+        elif kind == "resumed":
+            log("companion: the tablet still has the job")
         elif kind == "unknown-job":
             raise Lost("the tablet no longer has the job")
         elif kind in ("signed", "cancelled") and message.get("job") == job:
+            # The app keeps the answer until it knows it arrived.
+            wire.send({"type": "got", "job": job})
             wire.send({"type": "bye"})
             if on_signatures and isinstance(message.get("signatures"), dict):
                 on_signatures(message["signatures"])
-            return (message.get("marks") or {"pages": []}) if kind == "signed" else None
+            marks = message.get("marks") if kind == "signed" else None
+            return (marks if isinstance(marks, dict) else {"pages": []}) if kind == "signed" else None
 
 
 def sign(target, path, ask_pairing, paired=None, on_opened=None, pen=None, signatures=None,
@@ -203,22 +262,22 @@ def sign(target, path, ask_pairing, paired=None, on_opened=None, pen=None, signa
     job: Plus One connects again (to locate()'s address, the app's port may
     have changed) and asks for it, for resume_for seconds.
 
-    Raises OSError, EOFError, ValueError or PairingRefused before the PDF
-    reached the tablet, Lost after."""
+    Raises OSError, EOFError, ValueError, PairingRefused or Incompatible
+    before the PDF reached the tablet, Lost after."""
     paired = paired or Paired()
     sock, wire, name = _connect(target, paired, ask_pairing)
     job = uuid.uuid4().hex
     with sock:
         with open(path, "rb") as f:
             pdf = f.read()
-        sock.settimeout(CONNECT_TIMEOUT * 6)
+        sock.settimeout(IO_TIMEOUT * 4)  # a big PDF over slow Wi-Fi
         header = {"type": "sign", "job": job, "title": os.path.basename(path)}
         if pen:
             header["pen"] = pen
         if signatures:
             header["signatures"] = signatures
         wire.send(header, pdf)
-        sock.settimeout(None)  # signing takes as long as the user wants
+        sock.settimeout(IO_TIMEOUT)
         try:
             return _answer(wire, job, on_opened, name, on_signatures)
         except (OSError, EOFError, ValueError) as e:
@@ -231,12 +290,11 @@ def sign(target, path, ask_pairing, paired=None, on_opened=None, pen=None, signa
             continue
         try:
             sock, wire, name = _connect(where, paired, None)
-        except (OSError, EOFError, ValueError, PairingRefused):
+        except (OSError, EOFError, ValueError, PairingRefused, Incompatible):
             continue
         with sock:
             try:
                 wire.send({"type": "resume", "job": job})
-                sock.settimeout(None)
                 log("companion: back in touch with the tablet")
                 return _answer(wire, job, None, name, on_signatures)
             except (OSError, EOFError, ValueError) as e:
@@ -249,18 +307,24 @@ def to_marks(result):
     from .pdf import INK, PEN_WIDTH, Stroke, Text
 
     marks = {}
-    for page in result.get("pages", []):
+    pages = result.get("pages") if isinstance(result, dict) else None
+    for page in pages if isinstance(pages, list) else []:
+        if not isinstance(page, dict) or not isinstance(page.get("page"), int):
+            continue
         found = []
-        for mark in page.get("marks", []):
-            color = tuple(mark.get("color", INK))
-            if mark.get("type") == "stroke":
-                p = mark.get("points", [])
-                points = [(p[i], p[i + 1], p[i + 2]) for i in range(0, len(p) - 2, 3)]
-                if points:
-                    found.append(Stroke(points, width=float(mark.get("width", PEN_WIDTH)), color=color))
-            elif mark.get("type") == "text" and mark.get("text"):
-                found.append(Text(float(mark["x"]), float(mark["y"]), str(mark["text"]),
-                                  size=float(mark.get("size", 11.0)), color=color))
+        for mark in page.get("marks") if isinstance(page.get("marks"), list) else []:
+            try:
+                color = tuple(float(c) for c in mark.get("color", INK))[:3]
+                if mark.get("type") == "stroke":
+                    p = [float(v) for v in mark.get("points", [])]
+                    points = [(p[i], p[i + 1], p[i + 2]) for i in range(0, len(p) - 2, 3)]
+                    if points:
+                        found.append(Stroke(points, width=float(mark.get("width", PEN_WIDTH)), color=color))
+                elif mark.get("type") == "text" and mark.get("text"):
+                    found.append(Text(float(mark["x"]), float(mark["y"]), str(mark["text"]),
+                                      size=float(mark.get("size", 11.0)), color=color))
+            except (AttributeError, KeyError, TypeError, ValueError):
+                log("companion: a mark from the tablet skipped")
         if found:
             marks[int(page["page"])] = found
     return marks

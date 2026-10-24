@@ -12,7 +12,11 @@ import android.provider.Settings
 import android.util.Log
 import org.json.JSONObject
 import java.io.File
-import java.util.concurrent.Executors
+import java.security.SecureRandom
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.SynchronousQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLServerSocket
 import javax.net.ssl.SSLSocket
 
@@ -23,9 +27,11 @@ import javax.net.ssl.SSLSocket
  * nothing until the PC connects.
  */
 class CompanionService : Service() {
-    private var server: SSLServerSocket? = null
-    private var registration: NsdManager.RegistrationListener? = null
-    private val connections = Executors.newCachedThreadPool()
+    @Volatile private var server: SSLServerSocket? = null
+    @Volatile private var registration: NsdManager.RegistrationListener? = null
+    @Volatile private var stopped = false
+    // A few PCs at a time; more connections are turned away.
+    private val connections = ThreadPoolExecutor(0, MAX_CONNECTIONS, 60, TimeUnit.SECONDS, SynchronousQueue())
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -34,6 +40,8 @@ class CompanionService : Service() {
         Notifications.channels(this)
         startForeground(Notifications.SERVICE_ID, Notifications.ready(this),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        // PDFs of jobs this process no longer has (it was ended meanwhile).
+        File(cacheDir, "jobs").listFiles()?.forEach { if (it.nameWithoutExtension !in Jobs.ids) it.delete() }
         Thread(::serve, "plusone-server").start()
         handler.postDelayed(::idleCheck, IDLE_CHECK)
     }
@@ -49,7 +57,8 @@ class CompanionService : Service() {
     private val busy = java.util.concurrent.atomic.AtomicInteger()  // PCs connected
 
     private fun idleCheck() {
-        if (!Options.alwaysReady(this) && busy.get() == 0 && System.currentTimeMillis() - lastUse > IDLE_STOP) {
+        if (!Options.alwaysReady(this) && busy.get() == 0 && Jobs.ids.isEmpty() &&
+            System.currentTimeMillis() - lastUse > IDLE_STOP) {
             stopSelf()
             return
         }
@@ -58,8 +67,12 @@ class CompanionService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
-        registration?.let { (getSystemService(NSD_SERVICE) as NsdManager).unregisterService(it) }
-        server?.close()
+        synchronized(this) {
+            stopped = true
+            registration?.let { (getSystemService(NSD_SERVICE) as NsdManager).unregisterService(it) }
+            registration = null
+            server?.close()
+        }
         connections.shutdownNow()
         super.onDestroy()
     }
@@ -72,11 +85,20 @@ class CompanionService : Service() {
             return
         }
         socket.needClientAuth = true
-        server = socket
-        advertise(socket.localPort)
+        socket.enabledProtocols = arrayOf("TLSv1.3")
+        synchronized(this) {
+            // Stopped while the first key was being made: nothing to leave behind.
+            if (stopped) return socket.close()
+            server = socket
+            advertise(socket.localPort)
+        }
         while (!socket.isClosed) {
             val client = try { socket.accept() as SSLSocket } catch (e: Exception) { break }
-            connections.execute { handle(client) }
+            try {
+                connections.execute { handle(client) }
+            } catch (e: RejectedExecutionException) {
+                client.close()
+            }
         }
     }
 
@@ -108,28 +130,33 @@ class CompanionService : Service() {
         lastUse = System.currentTimeMillis()
         try {
             socket.use {
+                // Nothing waits long for a peer that is not even paired.
+                socket.soTimeout = HANDSHAKE_TIMEOUT
                 socket.startHandshake()
                 val pc = socket.session.peerCertificates[0].encoded
                 val fingerprint = Identity.fingerprint(pc)
                 val wire = Wire(socket)
-                val (hello, _) = wire.receive()
+                val hello = wire.receive(Wire.UNPAIRED_HEADER)
                 require(hello.optString("type") == "hello") { "expected hello" }
-                val pcName = hello.optString("name", "PC")
+                val pcName = hello.optString("name", "PC").take(64)
                 val known = Paired.contains(this, fingerprint)
                 wire.send(JSONObject().put("type", "hello").put("name", deviceName(this))
                     .put("version", PROTOCOL).put("paired", known))
+                // Another version: the PC sees ours and says so to its user.
+                if (hello.optInt("version") != PROTOCOL) return
                 if (!known || !hello.optBoolean("paired", true)) {
-                    val code = Identity.pairingCode(pc, Identity.certificate.encoded)
-                    val accepted = Pairing.ask(this, pcName, code)
-                    wire.send(JSONObject().put("type", if (accepted) "pair-ok" else "pair-no"))
-                    val (answer, _) = wire.receive()
-                    if (!accepted || answer.optString("type") != "pair-ok") return
+                    if (!pair(socket, wire, pc, pcName)) return
                     Paired.add(this, fingerprint, pcName)
                 }
+                // The PC asks "ping" every 15 s while the user signs.
+                socket.soTimeout = PAIRED_TIMEOUT
                 while (true) {
-                    val (message, payload) = wire.receive()
-                    when (message.optString("type")) {
-                        "sign" -> sign(wire, message, payload ?: ByteArray(0))
+                    val message = wire.receive()
+                    val type = message.optString("type")
+                    val size = message.optLong("size", 0)
+                    require(size == 0L || type == "sign") { "unexpected payload" }
+                    when (type) {
+                        "sign" -> sign(wire, message, size)
                         "resume" -> {
                             val job = message.optString("job")
                             if (Jobs.resume(job) { answer(wire, job, it.result) }) {
@@ -137,6 +164,10 @@ class CompanionService : Service() {
                             } else {
                                 wire.send(JSONObject().put("type", "unknown-job").put("job", job))
                             }
+                        }
+                        "got" -> {
+                            val job = message.optString("job")
+                            if (Jobs.acknowledge(job)) jobFile(job)?.delete()
                         }
                         "ping" -> wire.send(JSONObject().put("type", "pong"))
                         "bye" -> return
@@ -151,15 +182,42 @@ class CompanionService : Service() {
         }
     }
 
+    /** Numeric comparison: the app commits to its random number, learns the
+     * PC's, shows its own; both screens then show a code made of the two
+     * certificates and the two numbers, and the user confirms it on both. */
+    private fun pair(socket: SSLSocket, wire: Wire, pc: ByteArray, pcName: String): Boolean {
+        val mine = Identity.certificate.encoded
+        val nonce = ByteArray(16).also { SecureRandom().nextBytes(it) }
+        wire.send(JSONObject().put("type", "pair-commit").put("commit", Identity.commitment(nonce, mine, pc)))
+        val theirs = wire.receive(Wire.UNPAIRED_HEADER)
+        val pcNonce = hex(theirs.optString("nonce"))
+        require(theirs.optString("type") == "pair-nonce" && pcNonce?.size == 16) { "expected the PC's number" }
+        wire.send(JSONObject().put("type", "pair-nonce").put("nonce", nonce.joinToString("") { "%02x".format(it) }))
+        val code = Identity.pairingCode(pc, mine, pcNonce!!, nonce)
+        socket.soTimeout = PAIRING_TIMEOUT
+        val accepted = Pairing.ask(this, pcName, code)
+        wire.send(JSONObject().put("type", if (accepted) "pair-ok" else "pair-no"))
+        return accepted && wire.receive(Wire.UNPAIRED_HEADER).optString("type") == "pair-ok"
+    }
+
+    private fun hex(s: String): ByteArray? =
+        if (s.length % 2 != 0 || !s.all { it in "0123456789abcdef" }) null
+        else ByteArray(s.length / 2) { s.substring(2 * it, 2 * it + 2).toInt(16).toByte() }
+
+    /** Where a job's PDF goes; null for an id that is not the PC's 32 hex digits. */
+    private fun jobFile(job: String): File? =
+        if (JOB_ID.matches(job)) File(File(cacheDir, "jobs").apply { mkdirs() }, "$job.pdf") else null
+
     /** A PDF to sign: the signing screen opens on it; its answer goes back. */
-    private fun sign(wire: Wire, message: JSONObject, pdf: ByteArray) {
-        val job = message.getString("job")
+    private fun sign(wire: Wire, message: JSONObject, size: Long) {
+        val job = message.optString("job")
+        val file = jobFile(job)
+        require(file != null && size in 1..Wire.MAX_PAYLOAD) { "bad job" }
+        file.outputStream().use { wire.readPayload(size, it) }
         // Signatures added or removed on the PC since the last job.
         message.optJSONObject("signatures")?.let { Signatures.merge(this, it) }
-        val file = File(File(cacheDir, "jobs").apply { mkdirs() }, "$job.pdf")
-        file.writeBytes(pdf)
         Jobs.start(job) { answer(wire, job, it.result) }
-        val title = message.optString("title", file.name)
+        val title = message.optString("title", file.name).take(200)
         val open = Intent(this, SignActivity::class.java).apply {
             putExtra(SignActivity.EXTRA_PATH, file.path)
             putExtra(SignActivity.EXTRA_JOB, job)
@@ -170,20 +228,21 @@ class CompanionService : Service() {
         }
         // Opening over whatever is on screen needs "Display over other apps";
         // without it, a notification to tap.
-        if (Settings.canDrawOverlays(this)) startActivity(open) else Notifications.signJob(this, title, open)
+        if (Settings.canDrawOverlays(this)) startActivity(open) else Notifications.signJob(this, job, title, open)
         wire.send(JSONObject().put("type", "opened").put("job", job))
     }
 
     /** Sends a job's answer, and the saved signatures for the PC to merge;
-     * false if the link is gone (the PC asks again). */
+     * false if the link is gone (the PC asks again). The job stays until
+     * the PC says it got it. */
     private fun answer(wire: Wire, job: String, result: JSONObject?): Boolean = try {
+        Notifications.cancelJob(this, job)
         val message = JSONObject().put("job", job).put("signatures", Signatures.toJson(this))
         if (result != null) {
             wire.send(message.put("type", "signed").put("marks", result))
         } else {
             wire.send(message.put("type", "cancelled"))
         }
-        File(File(cacheDir, "jobs"), "$job.pdf").delete()
         true
     } catch (e: Exception) {
         Log.w(TAG, "could not answer job $job yet: $e")
@@ -193,7 +252,12 @@ class CompanionService : Service() {
     companion object {
         const val TAG = "PlusOne"
         const val SERVICE_TYPE = "_plusone._tcp"
-        const val PROTOCOL = 1
+        const val PROTOCOL = 2
+        const val MAX_CONNECTIONS = 8
+        const val HANDSHAKE_TIMEOUT = 20_000   // ms for TLS, hello and the pairing messages
+        const val PAIRING_TIMEOUT = 150_000    // ms: the user compares the codes
+        const val PAIRED_TIMEOUT = 90_000      // ms without a word from a paired PC
+        private val JOB_ID = Regex("[0-9a-f]{32}")
         const val IDLE_CHECK = 60_000L       // ms
         const val IDLE_STOP = 10 * 60_000L   // ms without a PC when not always ready
 

@@ -60,7 +60,6 @@ android {
 }
 
 dependencies {
-    // Ink drawn straight into the front buffer, and the pen's next samples predicted.
+    // Ink drawn straight into the front buffer.
     implementation("androidx.graphics:graphics-core:1.0.4")
-    implementation("androidx.input:input-motionprediction:1.0.0")
 }

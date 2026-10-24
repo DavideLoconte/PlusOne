@@ -72,9 +72,14 @@ class Nearby:
     def names(self):
         return sorted({name for name in self.tablets.values() if name})
 
-    def companion(self):
-        """(address, port, name) of the companion app on the network, or None."""
-        return next(iter(sorted(self.companions.values())), None)
+    def companion(self, paired=()):
+        """(address, port, name) of the companion app on the network, or None:
+        one paired already (paired: certificate fingerprints; the app
+        advertises the start of its own) before any other."""
+        def known(found):
+            return bool(found[3]) and any(fp.startswith(found[3]) for fp in paired)
+        ranked = sorted(self.companions.values(), key=lambda found: (not known(found), found))
+        return ranked[0][:3] if ranked else None
 
     def start(self):
         if self.bus is not None:
@@ -178,7 +183,8 @@ class Nearby:
         else:
             fields = dict(entry.partition(b"=")[::2] for entry in txt)
             name = fields.get(b"name", b"").decode(errors="replace") or key[2]
-            self.companions[key] = (reply[7], reply[8], name)
+            app_id = fields.get(b"id", b"").decode(errors="replace").lower()
+            self.companions[key] = (reply[7], reply[8], name, app_id)
         if self.companions.get(key) != before:
             log("nearby:", f"the Plus One app on {self.companions[key][2]} at {reply[7]}:{reply[8]}"
                 if key in self.companions else "the Plus One app is gone")

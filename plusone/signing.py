@@ -9,7 +9,6 @@ with a notification; if the tablet does not come, the notification offers
 signing on the PC.
 """
 import os
-import ssl
 import threading
 
 from gi.repository import Gio, GLib
@@ -33,6 +32,7 @@ class Signing:
         self.windows = []
         self.in_app = set()        # paths the tablet's app is signing
         self.pairing = {}          # code -> (threading.Event, answer list), while the user compares
+        self._pairing_lock = threading.Lock()
         self._pair_dialogs = {}    # code -> its window
         self.connected_for_us = False
         for name, callback in (("sign-here", self._sign_here), ("open-file", self._open_file),
@@ -54,7 +54,7 @@ class Signing:
         if path in self.opening or path in self.in_app:
             return
         controller = self.app.controller
-        target = self.app.nearby.companion() if self.app.settings.sign_on_tablet else None
+        target = self._find_app() if self.app.settings.sign_on_tablet else None
         if target and controller.state != State.STREAMING:
             self._sign_in_app(path, target)
             return
@@ -91,23 +91,39 @@ class Signing:
         def theirs(found):
             GLib.idle_add(once(self._merge_signatures, found))
 
+        def opened(tablet):
+            GLib.idle_add(once(self._notify_waiting, path, _("Sign {name} on {tablet}")
+                               .format(name=os.path.basename(path), tablet=tablet)))
+
         def work():
-            error = None
+            result = error = None
             try:
                 result = companion.sign((address, port), path, self._ask_pairing, pen=pen, signatures=ours,
-                                        on_signatures=theirs, locate=self._locate_app)
+                                        on_signatures=theirs, on_opened=opened, locate=self._locate_app)
             except companion.PairingRefused:
-                result, error = None, "refused"
+                error = "refused"
             except companion.Lost:
-                result, error = None, "lost"
-            except (OSError, EOFError, ValueError, ssl.SSLError) as e:
-                result, error = None, e
-            GLib.idle_add(once(self._app_done, path, result, error))
+                error = "lost"
+            except companion.Incompatible as e:
+                log("companion:", e)
+                error = "incompatible"
+            except Exception as e:  # noqa: BLE001 - whatever it was, Second Screen instead
+                error = e
+            finally:
+                GLib.idle_add(once(self._app_done, path, result, error))
         threading.Thread(target=work, daemon=True).start()
+
+    def _find_app(self):
+        """The app on the network, one already paired first."""
+        try:
+            paired = companion.Paired().all()
+        except OSError:
+            paired = {}
+        return self.app.nearby.companion(paired)
 
     def _locate_app(self):
         """Where the app is now (its port changes when it restarts)."""
-        found = self.app.nearby.companion()
+        found = self._find_app()
         return found[:2] if found else None
 
     def _app_done(self, path, result, error):
@@ -120,6 +136,13 @@ class Signing:
             note.set_body(_("The codes were not confirmed on both the PC and the tablet"))
             self.app.send_notification(NOTIFICATION, note)
             return
+        if error == "incompatible":
+            note = Gio.Notification.new(_("Update Plus One"))
+            note.set_body(_("The app on the tablet and Plus One on this PC are different versions: "
+                            "signing with Second Screen instead"))
+            self.app.send_notification(PAIRING, note)
+            self._second_screen(path)
+            return
         if error == "lost":
             note = Gio.Notification.new(_("Lost the tablet"))
             note.set_body(_("What was signed on the tablet did not reach the PC: {name} is unchanged")
@@ -131,7 +154,7 @@ class Signing:
             log("signing in the app failed:", repr(error))
             self._second_screen(path)
             return
-        if result:
+        if isinstance(result, dict):
             self._keep_from_app(result)
         marks = companion.to_marks(result) if result else {}
         if not marks:
@@ -176,15 +199,22 @@ class Signing:
 
     def _ask_pairing(self, tablet, code):
         """From the app's thread: asks this PC's user to compare the code
-        (the tablet shows it too); blocks until they answer."""
-        answered = threading.Event()
-        answer = []
-        self.pairing[code] = (answered, answer)
-        GLib.idle_add(once(self._show_pairing, tablet, code))
+        (the tablet shows it too); blocks until they answer. Several PDFs
+        sent at once share the one question."""
+        with self._pairing_lock:
+            waiting = self.pairing.get(code)
+            asking = waiting is None
+            if asking:
+                waiting = self.pairing[code] = (threading.Event(), [])
+        answered, answer = waiting
+        if asking:
+            GLib.idle_add(once(self._show_pairing, tablet, code))
         if not answered.wait(companion.PAIRING_TIMEOUT):
             log("companion: pairing not confirmed on the PC in time")
-        self.pairing.pop(code, None)
-        GLib.idle_add(once(self._pairing_over, code))
+        if asking:
+            with self._pairing_lock:
+                self.pairing.pop(code, None)
+            GLib.idle_add(once(self._pairing_over, code))
         return bool(answer and answer[0])
 
     def _pairing_over(self, code):
@@ -219,15 +249,16 @@ class Signing:
         self._answer_pairing(param.get_string(), action.get_name() == "companion-pair")
 
     def _answer_pairing(self, code, accepted):
-        log("companion: pairing", "confirmed on the PC" if accepted else "refused on the PC")
-        dialog = self._pair_dialogs.pop(code, None)
-        if dialog is not None:
-            dialog.close()
+        """The first answer counts: closing the dialog answers "close" too."""
         waiting = self.pairing.get(code)
-        if waiting:
+        if waiting and not waiting[0].is_set():
+            log("companion: pairing", "confirmed on the PC" if accepted else "refused on the PC")
             answered, answer = waiting
             answer.append(accepted)
             answered.set()
+        dialog = self._pair_dialogs.pop(code, None)
+        if dialog is not None:
+            dialog.close()
 
     # -- Second Screen ---------------------------------------------------------
     def _notify_waiting(self, path, body):

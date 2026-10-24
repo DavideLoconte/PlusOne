@@ -33,14 +33,19 @@ class Pdf(file: File) : Closeable {
         renderer.openPage(i).use { SizeF(it.width.toFloat(), it.height.toFloat()) }
     }
 
-    /** Draws page index into bitmap, page points mapped by matrix. */
+    private var closed = false
+
+    /** Draws page index into bitmap, page points mapped by matrix; nothing once closed. */
     @Synchronized
     fun render(index: Int, bitmap: Bitmap, matrix: Matrix) {
+        if (closed) return
         renderer.openPage(index).use { it.render(bitmap, null, matrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY) }
     }
 
     @Synchronized
     override fun close() {
+        if (closed) return
+        closed = true
         renderer.close()
         fd.close()
     }
@@ -76,6 +81,13 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
     private val history = ArrayDeque<Pair<Int, List<Mark>>>()
     val canUndo get() = history.isNotEmpty()
     val isEmpty get() = marks.values.all { it.isEmpty() }
+
+    /** Marks from the screen this one replaces. */
+    fun restore(saved: Map<Int, List<Mark>>) {
+        for ((page, list) in saved) marks[page] = list.toMutableList()
+        changed()
+        onChange()
+    }
 
     // screen = page * zoom + (ox, oy)
     private var zoom = 1f
@@ -145,6 +157,20 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
         }
     })
 
+    init {
+        // Back from another app the surface is new: draw the scene into it.
+        holder.addCallback(object : android.view.SurfaceHolder.Callback {
+            override fun surfaceCreated(holder: android.view.SurfaceHolder) {}
+            override fun surfaceChanged(holder: android.view.SurfaceHolder, format: Int, width: Int, height: Int) {
+                post {
+                    sceneInFlight = false
+                    changed()
+                }
+            }
+            override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {}
+        })
+    }
+
     // -- view ----------------------------------------------------------------
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -196,10 +222,19 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
 
     private var sceneSent = 0L
 
+    private var retryPosted = false
+
     private fun requestScene() {
         sceneWanted = true
         // Should a completion never come, do not wait for it forever.
         if (sceneInFlight && SystemClock.uptimeMillis() - sceneSent > 500) sceneInFlight = false
+        if (sceneInFlight && !retryPosted) {
+            retryPosted = true
+            postDelayed({
+                retryPosted = false
+                if (sceneWanted) requestScene()
+            }, 550)
+        }
         if (sceneInFlight || frameWaiting) return
         frameWaiting = true
         postOnAnimation {
@@ -223,9 +258,17 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
         if (w == 0 || h == 0) return
         pageRenderer.execute {
             if (serial != renderSerial) return@execute
-            val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            bitmap.eraseColor(Color.WHITE)
-            pdf.render(i, bitmap, Matrix().apply { setScale(z, z); postTranslate(x, y) })
+            val bitmap = try {
+                Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also {
+                    it.eraseColor(Color.WHITE)
+                    pdf.render(i, it, Matrix().apply { setScale(z, z); postTranslate(x, y) })
+                }
+            } catch (e: Throwable) {
+                // A page the renderer cannot draw, or no memory for it: the
+                // scaled last rendering stays, and the app with it.
+                android.util.Log.w("PlusOne", "page $i not rendered: $e")
+                return@execute
+            }
             post {
                 if (serial == renderSerial) {
                     picture = Picture(i, bitmap, z, x, y)
@@ -291,24 +334,28 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
     private var lastP = 0f
     private var penSeen = 0L  // when the pen was last near the screen
 
-    private fun isEraser(e: MotionEvent) = eraserMode ||
-        e.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER ||
+    private var penId = -1  // the pen's pointer while it touches the screen
+
+    private fun isEraser(e: MotionEvent, i: Int) = eraserMode ||
+        e.getToolType(i) == MotionEvent.TOOL_TYPE_ERASER ||
         e.isButtonPressed(MotionEvent.BUTTON_STYLUS_PRIMARY) ||
         e.isButtonPressed(MotionEvent.BUTTON_STYLUS_SECONDARY)
 
-    private fun isPen(e: MotionEvent) = e.getToolType(0).let {
+    private fun isPen(e: MotionEvent, i: Int) = e.getToolType(i).let {
         it == MotionEvent.TOOL_TYPE_STYLUS || it == MotionEvent.TOOL_TYPE_ERASER
     }
 
     override fun onHoverEvent(event: MotionEvent): Boolean {
-        if (isPen(event)) penSeen = SystemClock.uptimeMillis()
+        if (isPen(event, 0)) penSeen = SystemClock.uptimeMillis()
         return super.onHoverEvent(event)
     }
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (isPen(event)) {
+        // The pen is whichever pointer it is: a palm may have landed first.
+        if (penId >= 0 || (0 until event.pointerCount).any { isPen(event, it) }) {
             penSeen = SystemClock.uptimeMillis()
+            fingersDown = 0  // a pan the palm started ends here
             pen(event)
             return true
         }
@@ -319,13 +366,21 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
     }
 
     private fun pen(e: MotionEvent) {
-        when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
+        val action = e.actionMasked
+        val down = (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) &&
+            penId < 0 && isPen(e, e.actionIndex)
+        val i = if (down) e.actionIndex else e.findPointerIndex(penId)
+        if (i < 0) return  // the palm's own comings and goings
+        val up = action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL ||
+            (action == MotionEvent.ACTION_POINTER_UP && e.actionIndex == i)
+        when {
+            down -> {
+                penId = e.getPointerId(i)
                 requestUnbufferedDispatch(e)  // every sample as it comes, not once a frame
-                lastX = e.x
-                lastY = e.y
-                lastP = e.pressure
-                erasing = isEraser(e)
+                lastX = e.getX(i)
+                lastY = e.getY(i)
+                lastP = e.getPressure(i)
+                erasing = isEraser(e, i)
                 erasedThisStroke = false
                 val place = pending
                 if (place != null && !erasing) {
@@ -344,19 +399,13 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
                         penWidth * zoom, penColor))
                 }
             }
-            MotionEvent.ACTION_MOVE -> {
-                if (placing) return
-                for (i in 0 until e.historySize) {
-                    extend(e.getHistoricalX(i), e.getHistoricalY(i), e.getHistoricalPressure(i))
-                }
-                extend(e.x, e.y, e.pressure)
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+            up -> {
+                penId = -1
                 if (placing) {
                     placing = false
                     return
                 }
-                if (e.actionMasked == MotionEvent.ACTION_UP) extend(e.x, e.y, e.pressure)
+                if (action != MotionEvent.ACTION_CANCEL) extend(e.getX(i), e.getY(i), e.getPressure(i))
                 val done = stroke
                 stroke = null
                 if (erasing) {
@@ -368,6 +417,13 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
                     sceneSent = SystemClock.uptimeMillis()
                     front.commit()
                 }
+            }
+            action == MotionEvent.ACTION_MOVE -> {
+                if (placing) return
+                for (h in 0 until e.historySize) {
+                    extend(e.getHistoricalX(i, h), e.getHistoricalY(i, h), e.getHistoricalPressure(i, h))
+                }
+                extend(e.getX(i), e.getY(i), e.getPressure(i))
             }
         }
     }

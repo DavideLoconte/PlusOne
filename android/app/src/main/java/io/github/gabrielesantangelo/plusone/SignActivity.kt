@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.window.OnBackInvokedDispatcher
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -98,7 +99,7 @@ class SignActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(Color.rgb(36, 36, 38))
-            addView(button(getString(R.string.cancel)) { cancel() })
+            addView(button(getString(R.string.cancel)) { askCancel() })
             // Title and page arrows share what Cancel and Done leave: on a
             // narrow screen they give way, never Done.
             addView(LinearLayout(context).apply {
@@ -192,6 +193,9 @@ class SignActivity : Activity() {
         }
         root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> placeChrome() }
         setContentView(root)
+        @Suppress("UNCHECKED_CAST", "DEPRECATION")
+        (lastNonConfigurationInstance as? Map<Int, MutableList<Mark>>)?.let { view.restore(it) }
+        onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT) { askCancel() }
         refresh()
     }
 
@@ -401,6 +405,17 @@ class SignActivity : Activity() {
 
     private fun cancel() = answer(null)
 
+    /** Cancel, Back: asks first when something was drawn. */
+    private fun askCancel() {
+        if (view.isEmpty) return cancel()
+        AlertDialog.Builder(this)
+            .setTitle(R.string.discard_title)
+            .setMessage(R.string.discard_detail)
+            .setPositiveButton(R.string.discard) { _, _ -> cancel() }
+            .setNegativeButton(R.string.keep_signing, null)
+            .show()
+    }
+
     /** Hands the result to whoever asked (the PC through the link), then closes. */
     private fun answer(result: JSONObject?) {
         if (answered) return
@@ -428,8 +443,12 @@ class SignActivity : Activity() {
         return result
     }
 
+    // Recreated (a configuration the manifest does not list changed): the
+    // job goes on, and the new screen gets the marks.
+    override fun onRetainNonConfigurationInstance(): Any = HashMap(view.marks)
+
     override fun onDestroy() {
-        if (!answered) {
+        if (!answered && !isChangingConfigurations) {
             answered = true
             job?.let { Jobs.finish(it, null) }
         }

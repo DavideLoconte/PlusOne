@@ -11,8 +11,6 @@ object Notifications {
     private const val SERVICE = "service"
     private const val ASK = "ask"
     const val SERVICE_ID = 1
-    private const val PAIR_ID = 2
-    private const val JOB_ID = 3
 
     fun channels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java)
@@ -32,15 +30,18 @@ object Notifications {
             .setOngoing(true)
             .build()
 
+    /** One per code (several PCs may pair at once); 1000 and up, clear of SERVICE_ID. */
+    private fun pairingId(code: String) = 1000 + code.toInt()
+
     fun pairing(context: Context, pc: String, code: String, open: Intent) {
-        fun action(action: String) = PendingIntent.getBroadcast(context, action.hashCode(),
+        fun action(action: String) = PendingIntent.getBroadcast(context, pairingId(code),
             Intent(context, PairingReceiver::class.java).setAction(action).putExtra(PairActivity.EXTRA_CODE, code),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val notification = Notification.Builder(context, ASK)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(context.getString(R.string.pair_title, pc))
             .setContentText(context.getString(R.string.pair_message, code.chunked(3).joinToString(" ")))
-            .setContentIntent(PendingIntent.getActivity(context, 1, open,
+            .setContentIntent(PendingIntent.getActivity(context, pairingId(code), open,
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
             .addAction(Notification.Action.Builder(null, context.getString(R.string.pair),
                 action(PairingReceiver.ACTION_ACCEPT)).build())
@@ -48,20 +49,27 @@ object Notifications {
                 action(PairingReceiver.ACTION_REJECT)).build())
             .setAutoCancel(true)
             .build()
-        context.getSystemService(NotificationManager::class.java).notify(PAIR_ID, notification)
+        context.getSystemService(NotificationManager::class.java).notify(pairingId(code), notification)
     }
 
-    fun cancelPairing(context: Context) = context.getSystemService(NotificationManager::class.java).cancel(PAIR_ID)
+    fun cancelPairing(context: Context, code: String) =
+        context.getSystemService(NotificationManager::class.java).cancel(pairingId(code))
 
-    fun signJob(context: Context, title: String, open: Intent) {
+    /** One per job: its own notification, its own intent (extras do not tell PendingIntents apart). */
+    private fun jobId(job: String) = 2_000_000 + (job.hashCode() and 0x3fffffff) % 1_000_000_000
+
+    fun signJob(context: Context, job: String, title: String, open: Intent) {
         val notification = Notification.Builder(context, ASK)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(context.getString(R.string.sign_title))
             .setContentText(title)
-            .setContentIntent(PendingIntent.getActivity(context, 2, open,
+            .setContentIntent(PendingIntent.getActivity(context, jobId(job), open,
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
             .setAutoCancel(true)
             .build()
-        context.getSystemService(NotificationManager::class.java).notify(JOB_ID, notification)
+        context.getSystemService(NotificationManager::class.java).notify(jobId(job), notification)
     }
+
+    fun cancelJob(context: Context, job: String) =
+        context.getSystemService(NotificationManager::class.java).cancel(jobId(job))
 }

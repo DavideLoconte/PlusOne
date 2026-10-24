@@ -58,4 +58,8 @@
     <string name="undo">Annulla tratto</string>
     <string name="previous_page">Pagina precedente</string>
     <string name="next_page">Pagina successiva</string>
+    <string name="discard_title">Scartare quello che hai disegnato?</string>
+    <string name="discard_detail">Il PDF sul PC resta com\'era.</string>
+    <string name="discard">Scarta</string>
+    <string name="keep_signing">Continua a firmare</string>
 </resources>

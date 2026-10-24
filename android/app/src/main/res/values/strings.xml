@@ -60,4 +60,8 @@
     <string name="undo">Undo</string>
     <string name="previous_page">Previous page</string>
     <string name="next_page">Next page</string>
+    <string name="discard_title">Discard what you drew?</string>
+    <string name="discard_detail">The PDF on the PC stays as it was.</string>
+    <string name="discard">Discard</string>
+    <string name="keep_signing">Keep signing</string>
 </resources>

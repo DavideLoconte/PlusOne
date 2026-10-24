@@ -29,6 +29,10 @@ The companion app: ink under the nib.
 - The app fits phones too (Android 13 or later): icons in the toolbar,
   clear of the system bars and cutouts, popups sized to the screen.
 - When the app is not there, Second Screen as before.
+- Sturdy: a Wi-Fi drop while signing is noticed within a minute and the
+  signature still arrives; turning the tablet, dark mode, a keyboard cover
+  or split screen keep the ink; Back asks before throwing a signature away;
+  several PDFs at once share one pairing question.
 - Builds in a container (`tools/android-docker.sh`, `Dockerfile.android`),
   nothing Android on the host; CI builds it, releases attach the signed APK.
 - New dependency: `openssl` (the PC's certificate).

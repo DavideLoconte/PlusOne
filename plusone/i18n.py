@@ -117,6 +117,10 @@ _IT = {
     "Check that the tablet shows the same code: {code}":
         "Controlla che il tablet mostri lo stesso codice: {code}",
     "Pair": "Abbina",
+    "Sign {name} on {tablet}": "Firma {name} su {tablet}",
+    "Update Plus One": "Aggiorna Plus One",
+    "The app on the tablet and Plus One on this PC are different versions: signing with Second Screen instead":
+        "L'app sul tablet e Plus One su questo PC sono versioni diverse: si firma con Second Screen",
     "Lost the tablet": "Tablet perso",
     "What was signed on the tablet did not reach the PC: {name} is unchanged":
         "Quanto firmato sul tablet non è arrivato al PC: {name} è rimasto com'era",
