@@ -282,6 +282,7 @@ plusone/          the app: app.py (background app, D-Bus, notifications), gui.py
                   nearby.py (tablets on the network)
 data/gnome-shell/ the Quick Settings extension
 data/nautilus/    the Files context-menu entry
+android/          the companion app for the tablet (Kotlin, 0.5, in progress)
 tests/            unit and protocol tests (a scripted fake tablet, no hardware needed)
 packaging/        build-deb.sh and maintainer scripts
 tools/            CI scripts; tools/re/ has the reverse-engineering and measurement helpers
@@ -296,6 +297,12 @@ Tests:
 python3 -m pytest tests          # quick, on the host
 tools/ci-docker.sh               # everything CI runs, in an Ubuntu 24.04 container
 ```
+
+The companion app builds in a container too, so no Android SDK goes on the
+host: `tools/android-docker.sh` (Gradle tasks as arguments, `assembleDebug`
+by default) puts the APK in `android/app/build/outputs/apk/`; install it with
+`adb install -r`. Building `Dockerfile.android` accepts the Android SDK
+license.
 
 `tools/ci-docker.sh` builds `Dockerfile.ci`, runs the tests, builds the `.deb`
 into `dist/` and checks it with lintian. GitHub Actions runs the same container

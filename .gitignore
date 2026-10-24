@@ -6,3 +6,7 @@ dist/
 flatpak-build/
 flatpak-repo/
 *.flatpak
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties

@@ -1,0 +1,39 @@
+# Build environment for the companion app (android/): JDK, Android SDK and
+# Gradle stay in this image, nothing on the host. Used locally
+# (tools/android-docker.sh) and by GitHub Actions.
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        openjdk-21-jdk-headless unzip curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Google's command-line tools, checked against the SHA-1 their repository
+# lists (dl.google.com/android/repository/repository2-3.xml).
+ENV ANDROID_HOME=/opt/android-sdk
+ARG CMDLINE_TOOLS=commandlinetools-linux-16111833_latest.zip
+ARG CMDLINE_TOOLS_SHA1=e025545c62a8e64c7559119566a569fb1dec5f60
+RUN curl -fsSL -o /tmp/tools.zip "https://dl.google.com/android/repository/$CMDLINE_TOOLS" \
+    && echo "$CMDLINE_TOOLS_SHA1  /tmp/tools.zip" | sha1sum -c - \
+    && unzip -q /tmp/tools.zip -d /tmp/tools \
+    && mkdir -p "$ANDROID_HOME/cmdline-tools" \
+    && mv /tmp/tools/cmdline-tools "$ANDROID_HOME/cmdline-tools/latest" \
+    && rm -rf /tmp/tools /tmp/tools.zip
+
+# Building this image accepts the Android SDK license
+# (https://developer.android.com/studio/terms), as the project owner did.
+RUN yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null \
+    && "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+        "platforms;android-36" "build-tools;36.0.0" > /dev/null
+
+ARG GRADLE=9.8.2
+ARG GRADLE_SHA256=21bd5da2de49b642904077f38c0efdc7778e92b3ed0889392dca61b97e389607
+RUN curl -fsSL -o /tmp/gradle.zip "https://services.gradle.org/distributions/gradle-$GRADLE-bin.zip" \
+    && echo "$GRADLE_SHA256  /tmp/gradle.zip" | sha256sum -c - \
+    && unzip -q /tmp/gradle.zip -d /opt \
+    && ln -s "/opt/gradle-$GRADLE/bin/gradle" /usr/local/bin/gradle \
+    && rm /tmp/gradle.zip
+
+# Gradle's caches live in a volume (see tools/android-docker.sh).
+ENV GRADLE_USER_HOME=/gradle
+WORKDIR /src/android

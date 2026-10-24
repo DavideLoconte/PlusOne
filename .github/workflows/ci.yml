@@ -34,3 +34,14 @@ jobs:
           manifest-path: packaging/flatpak/io.github.gabrielesantangelo.PlusOne.yml
           # libnm only rebuilds when the manifest changes.
           cache-key: flatpak-builder-${{ hashFiles('packaging/flatpak/*.yml') }}
+
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Companion app, in the same container as locally
+        run: tools/android-docker.sh assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: android/app/build/outputs/apk/debug/*.apk

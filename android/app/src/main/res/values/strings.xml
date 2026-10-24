@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Plus One</string>
+    <string name="ink_hint">Write with the S Pen · hold its button to erase · tap with a finger to clear</string>
+</resources>
