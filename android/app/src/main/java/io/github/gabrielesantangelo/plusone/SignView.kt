@@ -16,6 +16,7 @@ import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.SurfaceView
 import androidx.graphics.lowlatency.CanvasFrontBufferedRenderer
+import androidx.graphics.surface.SurfaceControlCompat
 import java.io.Closeable
 import java.io.File
 import java.util.concurrent.Executors
@@ -123,6 +124,16 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
         override fun onDrawMultiBufferedLayer(
             canvas: Canvas, bufferWidth: Int, bufferHeight: Int, params: Collection<Segment>,
         ) = drawScene(canvas)
+
+        override fun onMultiBufferedLayerRenderComplete(
+            frontBufferedLayer: SurfaceControlCompat, multiBufferedLayer: SurfaceControlCompat,
+            transaction: SurfaceControlCompat.Transaction,
+        ) {
+            post {
+                sceneInFlight = false
+                if (sceneWanted) requestScene()
+            }
+        }
     })
 
     // -- view ----------------------------------------------------------------
@@ -159,21 +170,38 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
         zoom = z
     }
 
-    /** The view or the marks changed: draw again (once a frame at most), and
-     * render the page anew if asked. */
+    /** The view or the marks changed: draw again, and render the page anew if asked. */
     private fun changed(render: Boolean = false, eraser: FloatArray? = null) {
         scene = Scene(index, pdf.sizes[index], zoom, ox, oy, picture, marks[index]?.toList() ?: emptyList(), eraser)
-        if (!redrawPending) {
-            redrawPending = true
-            postOnAnimation {
-                redrawPending = false
-                front.renderMultiBufferedLayer(emptyList())
-            }
-        }
+        requestScene()
         if (render) renderPage()
     }
 
-    private var redrawPending = false
+    // The multi-buffered layer has three buffers: asked for a new scene
+    // faster than they come back (every frame while erasing or zooming),
+    // its renderer waited for one forever and the screen froze. One scene
+    // at a time then, at most once a frame; the latest wins.
+    private var sceneInFlight = false
+    private var sceneWanted = false
+    private var frameWaiting = false
+
+    private var sceneSent = 0L
+
+    private fun requestScene() {
+        sceneWanted = true
+        // Should a completion never come, do not wait for it forever.
+        if (sceneInFlight && SystemClock.uptimeMillis() - sceneSent > 500) sceneInFlight = false
+        if (sceneInFlight || frameWaiting) return
+        frameWaiting = true
+        postOnAnimation {
+            frameWaiting = false
+            if (sceneInFlight || !sceneWanted) return@postOnAnimation
+            sceneWanted = false
+            sceneInFlight = true
+            sceneSent = SystemClock.uptimeMillis()
+            front.renderMultiBufferedLayer(emptyList())
+        }
+    }
 
     private fun renderPage() {
         val serial = ++renderSerial
@@ -304,6 +332,8 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
                     changed()  // the eraser's ring goes
                 } else if (done != null) {
                     addMark(Stroke(done.toArray()))
+                    sceneInFlight = true  // commit draws the multi-buffered layer too
+                    sceneSent = SystemClock.uptimeMillis()
                     front.commit()
                 }
             }
