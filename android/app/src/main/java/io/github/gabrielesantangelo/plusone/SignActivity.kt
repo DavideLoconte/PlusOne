@@ -65,6 +65,8 @@ class SignActivity : AppCompatActivity() {
     private lateinit var subtitle: TextView
     private lateinit var pages: LinearLayout
     private lateinit var pageLabel: TextView
+    private lateinit var previousPage: View
+    private lateinit var nextPage: View
     private lateinit var queueButton: MaterialButton
     private lateinit var queueGap: View
     private lateinit var nav: LinearLayout
@@ -152,7 +154,8 @@ class SignActivity : AppCompatActivity() {
         leave()
         current = job
         pdf = opened
-        view = SignView(this, opened).apply {
+        val scrolling = Options.scrollPages(this)
+        view = SignView(this, opened, continuous = scrolling).apply {
             topInset = chromeTop
             bottomInset = chromeBottom
             canvasColor = themeColor(M.attr.colorSurfaceContainerHigh)
@@ -169,6 +172,9 @@ class SignActivity : AppCompatActivity() {
         subtitle.text = job.pc
         subtitle.visibility = if (job.pc.isEmpty()) View.GONE else View.VISIBLE
         pages.visibility = if (opened.sizes.size > 1) View.VISIBLE else View.GONE
+        // Scrolling, the bar only tells the page in the middle of the screen.
+        for (arrow in listOf(previousPage, nextPage)) arrow.visibility = if (scrolling) View.GONE else View.VISIBLE
+        pageLabel.setPadding(dp(if (scrolling) 12 else 2), 0, dp(if (scrolling) 12 else 2), 0)
         refreshNav()
         hint.visibility = View.GONE
         selectionBar.visibility = View.GONE
@@ -304,9 +310,11 @@ class SignActivity : AppCompatActivity() {
         pages = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            addView(toolButton(R.drawable.ic_chevron_left, R.string.previous_page) { view.showPage(view.index - 1) })
+            previousPage = toolButton(R.drawable.ic_chevron_left, R.string.previous_page) { view.showPage(view.index - 1) }
+            nextPage = toolButton(R.drawable.ic_chevron_right, R.string.next_page) { view.showPage(view.index + 1) }
+            addView(previousPage)
             addView(pageLabel)
-            addView(toolButton(R.drawable.ic_chevron_right, R.string.next_page) { view.showPage(view.index + 1) })
+            addView(nextPage)
         }
         queueButton = button("", Look.TONAL, R.drawable.ic_documents) { showQueue(it) }.apply {
             contentDescription = getString(R.string.queue_title)

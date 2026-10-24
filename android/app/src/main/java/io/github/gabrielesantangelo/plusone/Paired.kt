@@ -13,6 +13,14 @@ object Options {
 
     fun setAlwaysReady(context: Context, on: Boolean) =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("always", on).apply()
+
+    /** A PDF's pages one under the other, scrolled through (as a note app
+     * shows a notebook), or one at a time, turned with the arrows. */
+    fun scrollPages(context: Context) =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("scroll", true)
+
+    fun setScrollPages(context: Context, on: Boolean) =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("scroll", on).apply()
 }
 
 /** PCs the user paired with: certificate fingerprint -> name. */

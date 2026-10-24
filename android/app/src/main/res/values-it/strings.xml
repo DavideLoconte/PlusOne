@@ -101,4 +101,8 @@
         <item quantity="many">e altri %d</item>
         <item quantity="other">e altri %d</item>
     </plurals>
+    <string name="heading_pages">Documenti di più pagine</string>
+    <string name="scroll_pages">Scorri le pagine</string>
+    <string name="scroll_on">Una sotto l\'altra: un dito le scorre.</string>
+    <string name="scroll_off">Una alla volta: le frecce in alto le girano.</string>
 </resources>

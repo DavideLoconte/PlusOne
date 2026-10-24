@@ -100,4 +100,8 @@
         <item quantity="one">and %d more</item>
         <item quantity="other">and %d more</item>
     </plurals>
+    <string name="heading_pages">Documents of several pages</string>
+    <string name="scroll_pages">Scroll through the pages</string>
+    <string name="scroll_on">One under the other: a finger scrolls through them.</string>
+    <string name="scroll_off">One at a time: the arrows at the top turn them.</string>
 </resources>

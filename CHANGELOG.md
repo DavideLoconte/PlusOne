@@ -40,6 +40,11 @@ The companion app: ink under the nib.
   keeping what was drawn on each. The PC tells about them in one
   notification ("5 PDFs to sign on…", "Signed 5 PDFs"); its file chooser
   takes several PDFs. A PDF whose PC stopped waiting leaves the queue.
+- **Scrolling through the pages**, as a note app shows a notebook: a PDF's
+  pages one under the other, a finger scrolls (a flick carries on), the
+  page in the middle of the screen counted at the top; the pen draws on
+  whichever page it touches. An option in the app (*Documents of several
+  pages*) brings back one page at a time with the arrows.
 - **Material 3 Expressive** look for the app, in the wallpaper's colours,
   light or dark as the system: grouped settings as in Android 16; signing
   under floating bars only (close and title, pages and queue, Done, the

@@ -110,6 +110,18 @@ class MainActivity : AppCompatActivity() {
                 getString(if (always.isChecked) R.string.always_on else R.string.always_off), always)) { always.toggle() },
         ))
 
+        val scroll = MaterialSwitch(this).apply {
+            isChecked = Options.scrollPages(this@MainActivity)
+            setOnCheckedChangeListener { _, on ->
+                Options.setScrollPages(this@MainActivity, on)
+                refresh()
+            }
+        }
+        section(R.string.heading_pages, listOf(
+            Row(row(R.drawable.ic_scroll, getString(R.string.scroll_pages),
+                getString(if (scroll.isChecked) R.string.scroll_on else R.string.scroll_off), scroll)) { scroll.toggle() },
+        ))
+
         val saved = Signatures.all(this)
         section(R.string.heading_signatures, saved.map { signature ->
             Row(LinearLayout(this).apply {
