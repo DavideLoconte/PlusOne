@@ -5,14 +5,26 @@ events (WFD spec 4.11): a 4-byte header (version/timestamp flag, input
 category, total length), an optional 2-byte timestamp, then one or more
 generic input elements: ID (1 byte), length (2 bytes), body.
 """
+import collections
 import socket
 import struct
 import threading
+import time
 
 from . import log
 from .pen import feed as pen_feed
 
 TOUCH_DOWN, TOUCH_UP, TOUCH_MOVE = 0, 1, 2
+
+
+def arrival_gaps(times):
+    """How evenly reports arrived: gaps between them while the pen was in
+    use (pauses over 0.2 s left out)."""
+    gaps = sorted(b - a for a, b in zip(times, list(times)[1:]) if b - a < 0.2)
+    if not gaps:
+        return "no gaps yet"
+    return (f"gaps p50 {1000 * gaps[len(gaps) // 2]:.1f} ms, p90 {1000 * gaps[int(len(gaps) * 0.9)]:.1f}, "
+            f"max {1000 * gaps[-1]:.0f}, {sum(g > 0.02 for g in gaps)} over 20 ms")
 
 
 class UibcServer:
@@ -26,6 +38,9 @@ class UibcServer:
         self.pen_factory = pen_factory
         self.pen = None
         self.reports = 0
+        # Arrival times of the last pen reports: Wi-Fi power saving shows as
+        # reports arriving in bursts.
+        self.arrivals = collections.deque(maxlen=2000)
         self.pen_states = set()  # pen state bytes logged so far
         self.port = port
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -127,8 +142,9 @@ class UibcServer:
                     log("pen unavailable:", e)
         elif self.pen:
             self.reports += 1
+            self.arrivals.append(time.monotonic())
             if self.reports in (1, 100) or self.reports % 2000 == 0:
-                log(f"UIBC: pen report #{self.reports} {data.hex()}")
+                log(f"UIBC: pen report #{self.reports} {data.hex()}; {arrival_gaps(self.arrivals)}")
             # Byte 1 holds tip, side button, eraser and in-range bits on the
             # Samsung pen: log each combination once, to see what a button sends.
             if len(data) > 1 and data[1] not in self.pen_states:

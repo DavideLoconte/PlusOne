@@ -111,3 +111,11 @@ def test_close_ends_open_connections():
     assert sink.recv(1) == b""  # EOF, not a hang
     sink.close()
     assert wait_for(lambda: not srv.conns)
+
+
+def test_arrival_gaps_leave_out_pauses():
+    from plusone.uibc import arrival_gaps
+    times = [i * 0.0035 for i in range(10)] + [5 + i * 0.0035 for i in range(10)] + [5.1]
+    text = arrival_gaps(times)
+    assert text.startswith("gaps p50 3.5 ms") and "1 over 20 ms" in text  # the 5 s pause is not a gap
+    assert arrival_gaps([1.0]) == "no gaps yet"
