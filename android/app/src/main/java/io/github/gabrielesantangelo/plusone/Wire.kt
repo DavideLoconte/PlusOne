@@ -8,6 +8,8 @@ import java.io.DataOutputStream
 import java.io.EOFException
 import java.io.OutputStream
 import java.net.Socket
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * Messages between the PC and the app (plusone/companion.py): a 4-byte
@@ -15,15 +17,23 @@ import java.net.Socket
  * bytes as the header's "size" says (none without one). Only the PC sends
  * payloads (a PDF), and the app copies them to a file, never into memory.
  */
-class Wire(socket: Socket) {
+class Wire(private val socket: Socket) {
     private val input = DataInputStream(BufferedInputStream(socket.getInputStream()))
     private val output = DataOutputStream(BufferedOutputStream(socket.getOutputStream()))
 
+    /** Sends header; a peer that stops reading gets the connection closed
+     * (a socket write has no timeout of its own, and it would hold this
+     * Wire, and whoever waits to answer on it, for ever). */
     fun send(header: JSONObject) = synchronized(output) {
         val bytes = header.toString().toByteArray()
-        output.writeInt(bytes.size)
-        output.write(bytes)
-        output.flush()
+        val guard = WATCHDOG.schedule({ socket.close() }, WRITE_TIMEOUT, TimeUnit.MILLISECONDS)
+        try {
+            output.writeInt(bytes.size)
+            output.write(bytes)
+            output.flush()
+        } finally {
+            guard.cancel(false)
+        }
     }
 
     /** The next message's header, at most maxHeader bytes; its payload, if
@@ -50,5 +60,9 @@ class Wire(socket: Socket) {
         const val MAX_HEADER = 16 * 1024 * 1024       // signatures, or the marks of a long document
         const val UNPAIRED_HEADER = 4 * 1024          // hello and pairing: small
         const val MAX_PAYLOAD = 256L * 1024 * 1024    // a PDF
+        const val WRITE_TIMEOUT = 30_000L             // ms for a message to go out
+
+        /** Closes sockets whose time is up (writes, handshakes). */
+        val WATCHDOG = Executors.newSingleThreadScheduledExecutor { Thread(it, "plusone-watchdog").apply { isDaemon = true } }
     }
 }

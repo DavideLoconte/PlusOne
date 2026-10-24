@@ -23,10 +23,11 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import android.window.OnBackInvokedDispatcher
-import androidx.core.view.children
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.children
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.progressindicator.CircularProgressIndicator
 import com.google.android.material.slider.LabelFormatter
 import com.google.android.material.slider.Slider
 import com.google.android.material.snackbar.Snackbar
@@ -38,6 +39,7 @@ import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Executors
 import com.google.android.material.R as M
 
 /**
@@ -59,6 +61,10 @@ class SignActivity : AppCompatActivity() {
     private var chromeBottom = 0f           // over the toolbar
     private var bars = Insets.NONE          // system bars and display cutout
     private var signature: Signature? = null  // what "Signature" places: the first saved
+    private var live = false  // view shows current's PDF (not yet, while it opens)
+    private var opening = 0   // the last show(): an older opening's PDF is put away
+    private val opener = Executors.newSingleThreadExecutor()
+    private lateinit var loading: View
 
     private lateinit var top: LinearLayout
     private lateinit var titleText: TextView
@@ -91,11 +97,14 @@ class SignActivity : AppCompatActivity() {
             ?: return finish()
         signature = Signatures.all(this).firstOrNull()
         // The PC's pen, so both sides sign alike; once changed here, this one.
-        val (color, width) = if (savedInstanceState != null) Pen.load(this) else first.pen?.let {
+        val (color, width) = if (savedInstanceState != null) {
+            savedInstanceState.getInt(STATE_COLOR, Ink.COLOR) to savedInstanceState.getFloat(STATE_WIDTH, Ink.WIDTH)
+        } else first.pen?.let {
             Ink.colorOf(it.optJSONArray("color")) to it.optDouble("width", Ink.WIDTH.toDouble()).toFloat()
         } ?: Pen.load(this)
         penColor = color
-        penWidth = width.coerceIn(Ink.MIN_WIDTH, Ink.MAX_WIDTH)
+        // NaN (a PC's "NaN") would pass coerceIn, and fail the answer's JSON.
+        penWidth = if (width.isFinite()) width.coerceIn(Ink.MIN_WIDTH, Ink.MAX_WIDTH) else Ink.WIDTH
         seen = Jobs.waiting().maxOfOrNull { it.order } ?: 0
 
         root = FrameLayout(this)
@@ -111,6 +120,9 @@ class SignActivity : AppCompatActivity() {
             ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
         root.addView(keep, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
+        loading = CircularProgressIndicator(this).apply { isIndeterminate = true }
+        root.addView(loading, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
         root.setOnApplyWindowInsetsListener { _, insets ->
             bars = systemBars(insets)
             placeChrome()
@@ -132,12 +144,14 @@ class SignActivity : AppCompatActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         current?.let { outState.putString(STATE_JOB, it.id) }
+        outState.putInt(STATE_COLOR, penColor)  // the PC's pen, unless changed here
+        outState.putFloat(STATE_WIDTH, penWidth)
     }
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         // Out of sight and memory short: the rendered pages go, to come back as needed.
-        if (level >= TRIM_MEMORY_BACKGROUND && ::view.isInitialized) view.trim()
+        if (level >= TRIM_MEMORY_BACKGROUND && live) view.trim()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -147,18 +161,35 @@ class SignActivity : AppCompatActivity() {
 
     // -- the queue ---------------------------------------------------------------
 
-    /** Opens job's PDF, with what was drawn on it before. */
+    /** Opens job's PDF, with what was drawn on it before: off the UI thread
+     * (reading a long PDF's pages takes a while), the screen waiting meanwhile. */
     private fun show(job: Jobs.Job) {
-        val opened = try {
-            Pdf(job.file)
-        } catch (e: Exception) {
-            Toast.makeText(this, getString(R.string.cannot_open, e.message), Toast.LENGTH_LONG).show()
-            Jobs.finish(job.id, null)  // the PC hears it was not signed
-            if (current == null) next()  // else the one shown stays
-            return
-        }
         leave()
         current = job
+        val token = ++opening
+        titleText.text = job.title
+        subtitle.text = job.pc
+        subtitle.visibility = if (job.pc.isEmpty()) View.GONE else View.VISIBLE
+        setTaskDescription(ActivityManager.TaskDescription.Builder().setLabel(job.title).build())
+        for (v in listOf(hint, selectionBar, keep, pages)) v.visibility = View.GONE
+        tools.visibility = View.INVISIBLE  // no tool for a page not there yet
+        doneButton.isEnabled = false
+        loading.visibility = View.VISIBLE
+        refreshQueue()
+        opener.execute {
+            val opened = runCatching { Pdf(job.file) }
+            runOnUiThread {
+                if (isDestroyed || token != opening) {
+                    opened.getOrNull()?.let(::closeLater)  // another was asked for meanwhile
+                    return@runOnUiThread
+                }
+                loading.visibility = View.GONE
+                opened.onSuccess { attach(job, it) }.onFailure { cannotOpen(job, it) }
+            }
+        }
+    }
+
+    private fun attach(job: Jobs.Job, opened: Pdf) {
         pdf = opened
         val scrolling = Options.scrollPages(this)
         view = SignView(this, opened, continuous = scrolling).apply {
@@ -172,25 +203,29 @@ class SignActivity : AppCompatActivity() {
             onSelection = { on -> selectionBar.visibility = if (on) View.VISIBLE else View.GONE }
         }
         root.addView(view, 0)
+        live = true
         job.draft?.let { view.restore(it) }
         view.showPage(job.draftPage)
-        titleText.text = job.title
-        subtitle.text = job.pc
-        subtitle.visibility = if (job.pc.isEmpty()) View.GONE else View.VISIBLE
         pages.visibility = if (opened.sizes.size > 1) View.VISIBLE else View.GONE
         // Scrolling, the bar only tells the page in the middle of the screen.
         for (arrow in listOf(previousPage, nextPage)) arrow.visibility = if (scrolling) View.GONE else View.VISIBLE
         pageLabel.setPadding(dp(if (scrolling) 12 else 2), 0, dp(if (scrolling) 12 else 2), 0)
-        refreshNav()
-        hint.visibility = View.GONE
-        selectionBar.visibility = View.GONE
-        setTaskDescription(ActivityManager.TaskDescription.Builder().setLabel(job.title).build())
+        tools.visibility = View.VISIBLE
+        doneButton.isEnabled = true
         refresh()
+    }
+
+    private fun cannotOpen(job: Jobs.Job, e: Throwable) {
+        Toast.makeText(this, getString(R.string.cannot_open, e.message), Toast.LENGTH_LONG).show()
+        current = null
+        Jobs.finish(job.id, null)  // the PC hears it was not signed
+        next()
     }
 
     /** Puts the document away: what was drawn waits on its job. */
     private fun leave() {
-        if (!::view.isInitialized) return
+        if (!live) return
+        live = false
         view.deselect()  // the picked marks go back on their page
         current?.takeIf { Jobs.get(it.id) != null }?.let { job ->
             job.draft = view.marks.filterValues { it.isNotEmpty() }.mapValues { it.value.toList() }
@@ -198,12 +233,16 @@ class SignActivity : AppCompatActivity() {
         }
         view.release()
         root.removeView(view)
-        pdf?.close()
+        pdf?.let(::closeLater)
         pdf = null
     }
 
+    /** Closes pdf off the UI thread: it waits for a page being rendered. */
+    private fun closeLater(pdf: Pdf) = Thread { pdf.close() }.start()
+
     private fun switchTo(job: Jobs.Job) {
-        if (job !== current) show(job)
+        // Not one gone meanwhile (expired, or answered from another window).
+        if (job !== current && Jobs.get(job.id) != null) show(job)
     }
 
     /** The next PDF in the queue, or closing when there is none. */
@@ -263,7 +302,7 @@ class SignActivity : AppCompatActivity() {
         })
         for (job in Jobs.waiting()) {
             val shown = job === current
-            val started = if (shown) !view.isEmpty else !job.draft.isNullOrEmpty()
+            val started = if (shown && live) !view.isEmpty else !job.draft.isNullOrEmpty()
             val line = listOfNotNull(job.pc.takeIf { it.isNotEmpty() }, getString(R.string.started).takeIf { started })
             box.addView(row(R.drawable.ic_document, job.title, line.joinToString(" · ").ifEmpty { null },
                             oneLine = true).apply {
@@ -286,14 +325,15 @@ class SignActivity : AppCompatActivity() {
     }
 
     private fun askCancelAll() {
-        val count = Jobs.waiting().size
+        // The PDFs asked about: not one that comes while the question is up.
+        val asked = Jobs.waiting()
         MaterialAlertDialogBuilder(this)
-            .setTitle(resources.getQuantityString(R.plurals.cancel_all_title, count, count))
+            .setTitle(resources.getQuantityString(R.plurals.cancel_all_title, asked.size, asked.size))
             .setMessage(R.string.cancel_all_detail)
             .setPositiveButton(R.string.cancel_all) { _, _ ->
                 current = null
-                Jobs.waiting().forEach { Jobs.finish(it.id, null) }
-                finish()
+                asked.forEach { Jobs.finish(it.id, null) }
+                next()
             }
             .setNegativeButton(R.string.keep_signing, null)
             .show()
@@ -494,11 +534,7 @@ class SignActivity : AppCompatActivity() {
         place(selectionBar, top = top.height + gap)
         chromeTop = top.height.toFloat()
         chromeBottom = (chrome + gap).toFloat()
-        if (top.height > 0 && ::view.isInitialized && (view.topInset != chromeTop || view.bottomInset != chromeBottom)) {
-            view.topInset = chromeTop
-            view.bottomInset = chromeBottom
-            view.fit()
-        }
+        if (top.height > 0 && live) view.setInsets(chromeTop, chromeBottom)
     }
 
     private fun place(v: View, top: Int = 0, bottom: Int = 0, left: Int = 0, right: Int = 0) {
@@ -509,7 +545,7 @@ class SignActivity : AppCompatActivity() {
     }
 
     private fun refresh() {
-        if (!::view.isInitialized) return
+        if (!live) return
         undo.isEnabled = view.canUndo
         eraser.isChecked = view.eraserMode
         lassoButton.isChecked = view.selectMode
@@ -528,6 +564,7 @@ class SignActivity : AppCompatActivity() {
         val count = Jobs.waiting().size
         queueButton.visibility = if (count > 1) View.VISIBLE else View.GONE
         queueButton.text = NumberFormat.getIntegerInstance().format(count)
+        queueButton.contentDescription = resources.getQuantityString(R.plurals.to_sign, count, count)
         refreshNav()
     }
 
@@ -738,17 +775,20 @@ class SignActivity : AppCompatActivity() {
     // -- closing -----------------------------------------------------------------
 
     private fun done() {
+        if (!live) return
         view.deselect()  // the selection goes back on its page, as it is
         answer(resultJson())
     }
 
     /** Close, Back: this PDF is not signed; asks first when something was drawn. */
     private fun askCancel() {
-        if (view.isEmpty) return answer(null)
+        val job = current ?: return finish()
+        if (!live || view.isEmpty) return answer(null)
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.discard_title)
             .setMessage(R.string.discard_detail)
-            .setPositiveButton(R.string.discard) { _, _ -> answer(null) }
+            // Only the PDF asked about: another may be shown by now.
+            .setPositiveButton(R.string.discard) { _, _ -> if (current === job) answer(null) }
             .setNegativeButton(R.string.keep_signing, null)
             .show()
     }
@@ -768,8 +808,15 @@ class SignActivity : AppCompatActivity() {
     // the queue, the PC waits, and what was drawn is there when it opens again.
     override fun onDestroy() {
         Jobs.unlisten(queueChanged)
+        opening++  // a PDF still opening is put away when it comes
         leave()
+        opener.shutdown()
         super.onDestroy()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        signatureChanged()  // saved, removed, or merged from a PC meanwhile
     }
 
     // -- widgets -------------------------------------------------------------
@@ -803,6 +850,7 @@ class SignActivity : AppCompatActivity() {
 
         init {
             background = ripple(borderless = true)
+            isSelected = chosen  // said by TalkBack
         }
 
         override fun onDraw(canvas: Canvas) {
@@ -827,6 +875,8 @@ class SignActivity : AppCompatActivity() {
         const val EXTRA_JOB = "job"
         const val EXTRA_CHOSEN = "chosen"
         private const val STATE_JOB = "job"
+        private const val STATE_COLOR = "pen-color"
+        private const val STATE_WIDTH = "pen-width"
 
         /** The intent that opens the signing screen: on job (or the first waiting);
          * chosen: switch to it even if another is shown. */

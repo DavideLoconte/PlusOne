@@ -47,9 +47,11 @@ object Ink {
     fun colorJson(color: Int) =
         JSONArray(listOf(Color.red(color) / 255.0, Color.green(color) / 255.0, Color.blue(color) / 255.0))
 
-    fun colorOf(json: JSONArray?, default: Int = COLOR) =
-        if (json == null || json.length() != 3) default
-        else rgb(json.optDouble(0), json.optDouble(1), json.optDouble(2))
+    fun colorOf(json: JSONArray?, default: Int = COLOR): Int {
+        val parts = (0 until (json?.length() ?: 0)).map { json!!.optDouble(it) }
+        return if (parts.size != 3 || !parts.all { it.isFinite() }) default
+        else rgb(parts[0].coerceIn(0.0, 1.0), parts[1].coerceIn(0.0, 1.0), parts[2].coerceIn(0.0, 1.0))
+    }
 
     fun distanceToSegment(px: Float, py: Float, ax: Float, ay: Float, bx: Float, by: Float): Float {
         val dx = bx - ax
@@ -205,18 +207,32 @@ class Signature(val width: Float, val strokes: List<FloatArray>,
         }
 
         /** null if it is not a signature with an id. */
+        /** null if it is not a signature with an id: finite numbers, points of
+         * three, no empty stroke, a sane size (it may come from a PC). */
         fun fromJson(json: JSONObject): Signature? = try {
             val id = json.getString("id").takeIf { it.isNotEmpty() && it.length <= 64 }
             val list = json.getJSONArray("strokes")
+            var points = 0
             val strokes = (0 until list.length()).map { i ->
                 val pts = list.getJSONArray(i)
-                FloatArray(pts.length() * 3) { k -> pts.getJSONArray(k / 3).getDouble(k % 3).toFloat() }
-            }.filter { it.isNotEmpty() }
+                points += pts.length()
+                require(points <= MAX_POINTS && pts.length() > 0)
+                FloatArray(pts.length() * 3) { k ->
+                    val point = pts.getJSONArray(k / 3)
+                    require(point.length() == 3)
+                    point.getDouble(k % 3).toFloat().also { require(it.isFinite()) }
+                }
+            }
             val width = json.optDouble("width", 1.0).toFloat()
-            if (id == null || strokes.isEmpty() || !(width > 0f)) null else Signature(width, strokes, id)
+            if (id == null || strokes.isEmpty() || !(width > 0f && width.isFinite())) null
+            else Signature(width, strokes, id)
         } catch (e: org.json.JSONException) {
             null
+        } catch (e: IllegalArgumentException) {
+            null
         }
+
+        const val MAX_POINTS = 20_000  // samples: a long signature has a few thousand
     }
 }
 

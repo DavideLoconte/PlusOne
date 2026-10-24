@@ -83,8 +83,11 @@ object Signatures {
     private fun parse(json: JSONObject): Pair<List<Signature>, List<String>> {
         val list = json.optJSONArray("signatures") ?: JSONArray()
         val removed = json.optJSONArray("removed") ?: JSONArray()
-        return (0 until list.length()).mapNotNull { list.optJSONObject(it)?.let(Signature::fromJson) } to
-            (0 until removed.length()).mapNotNull { removed.opt(it) as? String }
+        // One of each, short ids, no more than are kept anyway.
+        return (0 until list.length()).mapNotNull { list.optJSONObject(it)?.let(Signature::fromJson) }
+            .distinctBy { it.id }.take(MAX) to
+            (0 until removed.length()).mapNotNull { (removed.opt(it) as? String)?.takeIf { s -> s.length in 1..64 } }
+                .distinct().takeLast(KEEP_REMOVED)
     }
 
     private fun save(context: Context, list: List<Signature>, removed: List<String>) {
@@ -235,58 +238,86 @@ class SignaturePad(context: Context, private val color: Int, private val pen: Fl
             onChange()
         }
 
+        private var active = -1  // the pointer drawing (or erasing): the pen's, once there is one
+
+        private fun isPen(e: MotionEvent, i: Int) = e.getToolType(i).let {
+            it == MotionEvent.TOOL_TYPE_STYLUS || it == MotionEvent.TOOL_TYPE_ERASER
+        }
+
         override fun onTouchEvent(event: MotionEvent): Boolean {
-            val stylus = event.getToolType(0).let {
-                it == MotionEvent.TOOL_TYPE_STYLUS || it == MotionEvent.TOOL_TYPE_ERASER
-            }
-            if (stylus) penSeen = true else if (penSeen) return true  // a palm, once the pen wrote here
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    requestUnbufferedDispatch(event)
-                    if (eraserMode || event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER ||
-                        event.isButtonPressed(MotionEvent.BUTTON_STYLUS_PRIMARY) ||
-                        event.isButtonPressed(MotionEvent.BUTTON_STYLUS_SECONDARY)) {
-                        eraser = PointF(event.x, event.y)
-                        erase(event)
-                    } else {
-                        current = FloatArrayBuilder().also { strokes.add(it) }
-                        add(event, stylus)
-                    }
+            val action = event.actionMasked
+            if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
+                val i = event.actionIndex
+                val pen = isPen(event, i)
+                if (pen) penSeen = true
+                // The pen takes over from a palm that landed first; once the
+                // pen wrote here, fingers are palms.
+                val palmDrawing = active >= 0 && event.findPointerIndex(active).let { it >= 0 && !isPen(event, it) }
+                if ((active < 0 && (pen || !penSeen)) || (pen && palmDrawing)) {
+                    if (active >= 0) finish()
+                    begin(event, i)
                 }
-                MotionEvent.ACTION_MOVE -> if (eraser != null) erase(event) else add(event, stylus)
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (eraser == null) add(event, stylus)
-                    current = null
-                    eraser = null
-                    onChange()
-                    if (event.actionMasked == MotionEvent.ACTION_UP) performClick()
+                invalidate()
+                return true
+            }
+            val i = event.findPointerIndex(active)
+            if (i < 0) return true
+            when (action) {
+                MotionEvent.ACTION_MOVE -> if (eraser != null) erase(event.getX(i), event.getY(i)) else add(event, i)
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (action == MotionEvent.ACTION_POINTER_UP && event.actionIndex != i) return true
+                    if (eraser == null && action != MotionEvent.ACTION_CANCEL) add(event, i)
+                    finish()
+                    if (action == MotionEvent.ACTION_UP) performClick()
                 }
             }
             invalidate()
             return true
         }
 
-        /** Removes the strokes the eraser touches on its way. */
-        private fun erase(event: MotionEvent) {
+        private fun begin(event: MotionEvent, i: Int) {
+            active = event.getPointerId(i)
+            requestUnbufferedDispatch(event)
+            if (eraserMode || event.getToolType(i) == MotionEvent.TOOL_TYPE_ERASER ||
+                event.isButtonPressed(MotionEvent.BUTTON_STYLUS_PRIMARY) ||
+                event.isButtonPressed(MotionEvent.BUTTON_STYLUS_SECONDARY)) {
+                eraser = PointF(event.getX(i), event.getY(i))
+                erase(event.getX(i), event.getY(i))
+            } else {
+                current = FloatArrayBuilder().also { strokes.add(it) }
+                add(event, i)
+            }
+        }
+
+        private fun finish() {
+            active = -1
+            current = null
+            eraser = null
+            onChange()
+        }
+
+        /** Removes the strokes the eraser touches on its way to x, y. */
+        private fun erase(x: Float, y: Float) {
             val from = eraser ?: return
             val radius = ERASER_RADIUS * density
             val reach = radius + pen * width / PAD_POINTS / 2
             strokes.removeAll { builder ->
                 val s = builder.toArray()
-                (s.indices step 3).any { i ->
-                    Ink.distanceToSegment(s[i], s[i + 1], from.x, from.y, event.x, event.y) <= reach
+                (s.indices step 3).any { k ->
+                    Ink.distanceToSegment(s[k], s[k + 1], from.x, from.y, x, y) <= reach
                 }
             }
-            from.set(event.x, event.y)
+            from.set(x, y)
         }
 
-        private fun add(event: MotionEvent, stylus: Boolean) {
+        private fun add(event: MotionEvent, i: Int) {
             val stroke = current ?: return
+            val stylus = isPen(event, i)
             for (h in 0 until event.historySize) {
-                stroke.add(event.getHistoricalX(h), event.getHistoricalY(h),
-                    if (stylus) event.getHistoricalPressure(h) else NO_PRESSURE)
+                stroke.add(event.getHistoricalX(i, h), event.getHistoricalY(i, h),
+                    if (stylus) event.getHistoricalPressure(i, h) else NO_PRESSURE)
             }
-            stroke.add(event.x, event.y, if (stylus) event.pressure else NO_PRESSURE)
+            stroke.add(event.getX(i), event.getY(i), if (stylus) event.getPressure(i) else NO_PRESSURE)
         }
 
         override fun onDraw(canvas: Canvas) {

@@ -17,6 +17,7 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.SSLServerSocket
 import javax.net.ssl.SSLSocket
 
@@ -57,7 +58,8 @@ class CompanionService : Service() {
     // Not always ready: stop once nothing has happened for a while.
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     @Volatile private var lastUse = System.currentTimeMillis()
-    private val busy = java.util.concurrent.atomic.AtomicInteger()  // PCs connected
+    private val busy = AtomicInteger()  // PCs connected
+    private val unpaired = AtomicInteger()  // connections not yet known to be a paired PC
 
     private fun idleCheck() {
         // PDFs whose PC stopped looking for the tablet.
@@ -141,25 +143,39 @@ class CompanionService : Service() {
         busy.incrementAndGet()
         lastUse = System.currentTimeMillis()
         var link: Wire? = null
+        var stranger = false  // counted in unpaired: not (yet) a paired PC
         try {
             socket.use {
-                // Nothing waits long for a peer that is not even paired.
+                // Nothing waits long for a peer that is not even paired: the
+                // whole exchange (TLS, hello, pairing's messages) in
+                // HANDSHAKE_DEADLINE, not only each read, and a few such
+                // peers at a time (a paired PC is never turned away for them).
+                val guard = Wire.WATCHDOG.schedule({ socket.close() }, HANDSHAKE_DEADLINE, TimeUnit.MILLISECONDS)
                 socket.soTimeout = HANDSHAKE_TIMEOUT
                 socket.startHandshake()
                 val pc = socket.session.peerCertificates[0].encoded
                 val fingerprint = Identity.fingerprint(pc)
+                val known = Paired.contains(this, fingerprint)
+                if (!known) {
+                    stranger = true
+                    if (unpaired.incrementAndGet() > MAX_UNPAIRED) return
+                }
                 val wire = Wire(socket)
                 val hello = wire.receive(Wire.UNPAIRED_HEADER)
                 require(hello.optString("type") == "hello") { "expected hello" }
                 val pcName = hello.optString("name", "PC").take(64)
-                val known = Paired.contains(this, fingerprint)
                 wire.send(JSONObject().put("type", "hello").put("name", deviceName(this))
                     .put("version", PROTOCOL).put("paired", known))
                 // Another version: the PC sees ours and says so to its user.
                 if (hello.optInt("version") != PROTOCOL) return
-                if (!known || !hello.optBoolean("paired", true)) {
-                    if (!pair(socket, wire, pc, pcName)) return
+                if (!known || !hello.optBoolean("paired")) {
+                    if (!pair(socket, wire, pc, pcName, guard)) return
                     Paired.add(this, fingerprint, pcName)
+                }
+                guard.cancel(false)
+                if (stranger) {
+                    unpaired.decrementAndGet()
+                    stranger = false
                 }
                 // The PC asks "ping" every 15 s while the user signs.
                 socket.soTimeout = PAIRED_TIMEOUT
@@ -170,10 +186,10 @@ class CompanionService : Service() {
                     val size = message.optLong("size", 0)
                     require(size == 0L || type == "sign") { "unexpected payload" }
                     when (type) {
-                        "sign" -> sign(wire, message, size, pcName)
+                        "sign" -> sign(wire, message, size, pcName, fingerprint)
                         "resume" -> {
                             val job = message.optString("job")
-                            if (Jobs.resume(job, wire) { answer(wire, job, it.result) }) {
+                            if (Jobs.resume(job, fingerprint, wire) { answer(wire, job, it.result) }) {
                                 wire.send(JSONObject().put("type", "resumed").put("job", job))
                             } else {
                                 wire.send(JSONObject().put("type", "unknown-job").put("job", job))
@@ -181,16 +197,19 @@ class CompanionService : Service() {
                         }
                         "got" -> {
                             val job = message.optString("job")
-                            if (Jobs.acknowledge(job)) jobFile(job)?.delete()
+                            if (Jobs.acknowledge(job, fingerprint)) jobFile(job)?.delete()
                         }
                         "ping" -> wire.send(JSONObject().put("type", "pong"))
                         "bye" -> return
                     }
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
+            // Errors too: a peer's deeply nested JSON overflows the parser's
+            // stack, and an uncaught Error on a pool thread ends the process.
             Log.i(TAG, "connection ended: $e")
         } finally {
+            if (stranger) unpaired.decrementAndGet()
             link?.let { Jobs.detach(it) }  // its jobs wait for the PC to come back
             busy.decrementAndGet()
             lastUse = System.currentTimeMillis()
@@ -200,19 +219,30 @@ class CompanionService : Service() {
     /** Numeric comparison: the app commits to its random number, learns the
      * PC's, shows its own; both screens then show a code made of the two
      * certificates and the two numbers, and the user confirms it on both. */
-    private fun pair(socket: SSLSocket, wire: Wire, pc: ByteArray, pcName: String): Boolean {
+    private fun pair(socket: SSLSocket, wire: Wire, pc: ByteArray, pcName: String,
+                     guard: java.util.concurrent.ScheduledFuture<*>): Boolean {
         val mine = Identity.certificate.encoded
         val nonce = ByteArray(16).also { SecureRandom().nextBytes(it) }
         wire.send(JSONObject().put("type", "pair-commit").put("commit", Identity.commitment(nonce, mine, pc)))
-        val theirs = wire.receive(Wire.UNPAIRED_HEADER)
-        val pcNonce = hex(theirs.optString("nonce"))
-        require(theirs.optString("type") == "pair-nonce" && pcNonce?.size == 16) { "expected the PC's number" }
+        val number = wire.receive(Wire.UNPAIRED_HEADER)
+        val pcNonce = hex(number.optString("nonce"))
+        require(number.optString("type") == "pair-nonce" && pcNonce?.size == 16) { "expected the PC's number" }
         wire.send(JSONObject().put("type", "pair-nonce").put("nonce", nonce.joinToString("") { "%02x".format(it) }))
         val code = Identity.pairingCode(pc, mine, pcNonce!!, nonce)
+        guard.cancel(false)  // the user takes their time
         socket.soTimeout = PAIRING_TIMEOUT
-        val accepted = Pairing.ask(this, pcName, code)
+        // The PC's answer may come first (refused there): it closes the
+        // question here too, instead of leaving it up for two minutes.
+        val answer = java.util.concurrent.atomic.AtomicReference<String>()
+        val listening = Thread {
+            val type = try { wire.receive(Wire.UNPAIRED_HEADER).optString("type") } catch (e: Throwable) { "" }
+            answer.set(type)
+            if (type != "pair-ok") Pairing.answer(code, false)
+        }.apply { start() }
+        val accepted = Pairing.ask(this, pcName, code) ?: return false  // another question is up
         wire.send(JSONObject().put("type", if (accepted) "pair-ok" else "pair-no"))
-        return accepted && wire.receive(Wire.UNPAIRED_HEADER).optString("type") == "pair-ok"
+        listening.join(PAIRING_TIMEOUT.toLong())
+        return accepted && answer.get() == "pair-ok"
     }
 
     private fun hex(s: String): ByteArray? =
@@ -225,16 +255,27 @@ class CompanionService : Service() {
 
     /** A PDF to sign: it joins the queue, and the signing screen opens on
      * it (or, already open on another, says it came); its answer goes back. */
-    private fun sign(wire: Wire, message: JSONObject, size: Long, pc: String) {
+    private fun sign(wire: Wire, message: JSONObject, size: Long, pc: String, peer: String) {
         val job = message.optString("job")
         val file = jobFile(job)
-        require(file != null && size in 1..Wire.MAX_PAYLOAD) { "bad job" }
-        file.outputStream().use { wire.readPayload(size, it) }
-        // Signatures added or removed on the PC since the last job.
-        message.optJSONObject("signatures")?.let { Signatures.merge(this, it) }
-        val title = message.optString("title", file.name).take(200)
-        // With the PC's pen, so both sides sign alike.
-        Jobs.start(Jobs.Job(job, file, title, pc, message.optJSONObject("pen")), wire) { answer(wire, job, it.result) }
+        require(file != null && size in 1..Wire.MAX_PAYLOAD && job !in Jobs.ids) { "bad job" }
+        // Room for it: a PC, even a paired one, does not get to fill the tablet.
+        require(Jobs.waiting().size < MAX_JOBS && Jobs.bytes() + size <= MAX_JOB_BYTES &&
+            file.parentFile!!.usableSpace > size + FREE_SPACE) { "no room for another PDF" }
+        try {
+            file.outputStream().use { wire.readPayload(size, it) }
+            // Signatures added or removed on the PC since the last job.
+            message.optJSONObject("signatures")?.let { Signatures.merge(this, it) }
+            val title = message.optString("title", file.name).take(200)
+            // With the PC's pen, so both sides sign alike.
+            val added = Jobs.start(Jobs.Job(job, file, title, pc, message.optJSONObject("pen"), peer = peer), wire) {
+                answer(wire, job, it.result)
+            }
+            require(added) { "a job of that id already" }
+        } catch (e: Throwable) {
+            file.delete()  // half a PDF is of no use
+            throw e
+        }
         // Opening over whatever is on screen needs "Display over other apps";
         // without it, the notification (queueChanged) is there to tap.
         if (Settings.canDrawOverlays(this)) startActivity(SignActivity.open(this, job))
@@ -262,6 +303,11 @@ class CompanionService : Service() {
         const val SERVICE_TYPE = "_plusone._tcp"
         const val PROTOCOL = 2
         const val MAX_CONNECTIONS = 32
+        const val MAX_UNPAIRED = 4             // connections of peers not yet known, at a time
+        const val HANDSHAKE_DEADLINE = 20_000L // ms for an unknown peer's whole handshake
+        const val MAX_JOBS = 50                // PDFs waiting at once
+        const val MAX_JOB_BYTES = 1024L * 1024 * 1024
+        const val FREE_SPACE = 200L * 1024 * 1024  // left free on the tablet, at least
         const val HANDSHAKE_TIMEOUT = 20_000   // ms for TLS, hello and the pairing messages
         const val PAIRING_TIMEOUT = 150_000    // ms: the user compares the codes
         const val PAIRED_TIMEOUT = 90_000      // ms without a word from a paired PC

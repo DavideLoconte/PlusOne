@@ -24,14 +24,30 @@ import java.io.File
 import kotlin.math.max
 import kotlin.math.min
 
-/** A PDF opened with Android's own renderer; pages render one at a time. */
+/** A PDF opened with Android's own renderer; pages render one at a time.
+ * Opening reads every page's size: off the UI thread (a long PDF takes a
+ * while). Throws if the PDF cannot be read, or has no page. */
 class Pdf(file: File) : Closeable {
     private val fd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-    private val renderer = PdfRenderer(fd)
+    private val renderer: PdfRenderer
 
     /** Page sizes in points, as shown (the renderer applies crop box and rotation). */
-    val sizes: List<SizeF> = (0 until renderer.pageCount).map { i ->
-        renderer.openPage(i).use { SizeF(it.width.toFloat(), it.height.toFloat()) }
+    val sizes: List<SizeF>
+
+    init {
+        var opened: PdfRenderer? = null
+        try {
+            opened = PdfRenderer(fd)
+            sizes = (0 until opened.pageCount).map { i ->
+                opened.openPage(i).use { SizeF(it.width.toFloat(), it.height.toFloat()) }
+            }
+            require(sizes.isNotEmpty() && sizes.all { it.width > 0 && it.height > 0 }) { "no pages" }
+            renderer = opened
+        } catch (e: Throwable) {
+            opened?.close()
+            fd.close()
+            throw e
+        }
     }
 
     private var closed = false
@@ -45,6 +61,7 @@ class Pdf(file: File) : Closeable {
         if (closed) return
         val page = open?.takeIf { it.index == index } ?: run {
             open?.close()
+            open = null  // should the next one fail to open, this one is not used again
             renderer.openPage(index).also { open = it }
         }
         page.render(bitmap, null, matrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
@@ -110,7 +127,6 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
     private var fingerGrab = false
     private var lasso: FloatArrayBuilder? = null  // screen x, y, 0 while the lasso is drawn
     private val look = SelectionLook(resources.displayMetrics.density)
-    val hasSelection get() = selection != null
 
     /** Marks from the screen this one replaces. */
     fun restore(saved: Map<Int, List<Mark>>) {
@@ -152,13 +168,13 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
     private fun laidOut() = if (continuous) 0 until pageCount else index..index
 
     /** Where page p is on screen, for this zoom and offset. */
-    private fun pageRect(p: Int, z: Float = zoom, x: Float = ox, y: Float = oy) = pdf.sizes[p].let {
-        RectF(x + lefts[p] * z, y + tops[p] * z, x + (lefts[p] + it.width) * z, y + (tops[p] + it.height) * z)
+    private fun pageRect(p: Int) = pdf.sizes[p].let {
+        RectF(ox + lefts[p] * zoom, oy + tops[p] * zoom, ox + (lefts[p] + it.width) * zoom, oy + (tops[p] + it.height) * zoom)
     }
 
     /** The pages laid out that the screen shows (part of). */
-    private fun onScreen(z: Float = zoom, x: Float = ox, y: Float = oy) = laidOut().filter {
-        pageRect(it, z, x, y).let { r -> r.bottom > 0 && r.top < height && r.right > 0 && r.left < width }
+    private fun onScreen() = laidOut().filter {
+        pageRect(it).let { r -> r.bottom > 0 && r.top < height && r.right > 0 && r.left < width }
     }
 
     /** The page at screen height y: under it, or, in the gap between two, the nearer. */
@@ -272,9 +288,10 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
         if (width == 0 || height == 0) return
         stopFling()
         val margin = 24f
-        val room = height - topInset - bottomInset
-        fitZoom = min((width - 2 * margin) / size.width, (room - 2 * margin) / size.height)
+        val room = max(1f, height - topInset - bottomInset)
+        fitZoom = max(MIN_ZOOM, min((width - 2 * margin) / size.width, (room - 2 * margin) / size.height))
         zoom = fitZoom
+        moved = false
         ox = width / 2f - (lefts[index] + size.width / 2) * zoom
         oy = topInset + room / 2 - (tops[index] + size.height / 2) * zoom
         changed()
@@ -302,7 +319,10 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
         if (p !in onScreen()) showPage(p) else changed()
     }
 
+    private var moved = false  // panned or zoomed by the user since the last fit
+
     private fun zoomAt(newZoom: Float, fx: Float, fy: Float) {
+        moved = true
         val z = max(fitZoom * 0.5f, min(fitZoom * 10f, newZoom))
         ox = fx - (fx - ox) * z / zoom
         oy = fy - (fy - oy) * z / zoom
@@ -310,9 +330,10 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
         clamp()
     }
 
-    /** Scrolling, the column stays on screen: its ends go no further than the middle. */
+    /** The page (or, scrolling, the column) stays on screen: its edges go
+     * no further than the middle. */
     private fun clamp() {
-        if (!continuous || width == 0) return
+        if (width == 0) return
         val (x0, x1, y0, y1) = scrollRange()
         ox = ox.coerceIn(x0, x1)
         oy = oy.coerceIn(y0, y1)
@@ -321,8 +342,27 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
     private fun scrollRange(): FloatArray {
         val cx = width / 2f
         val cy = topInset + (height - topInset - bottomInset) / 2
-        return floatArrayOf(cx - columnWidth * zoom, cx, cy - columnHeight * zoom, cy)
+        val (w, h) = if (continuous) columnWidth to columnHeight else pdf.sizes[index].let { it.width to it.height }
+        return floatArrayOf(cx - w * zoom, cx, cy - h * zoom, cy)
     }
+
+    /** The bars' room changed (a taskbar came, say): the page fits it again,
+     * unless the user moved it, which stays as it is. */
+    fun setInsets(top: Float, bottom: Float) {
+        if (top == topInset && bottom == bottomInset) return
+        topInset = top
+        bottomInset = bottom
+        if (moved) {
+            clamp()
+            changed()
+        } else {
+            fit()
+        }
+    }
+
+    /** Whether screen point x, y is on page p (marks are placed only there:
+     * beside it they would be cut off, and still sent). */
+    private fun onPage(p: Int, x: Float, y: Float) = pageRect(p).contains(x, y)
 
     /** The view or the marks changed: draw again, and say what is to render now. */
     private fun changed(eraser: FloatArray? = null) {
@@ -380,7 +420,8 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
         val around = shown.map { it.first }.let { on ->
             if (on.isEmpty()) on else on + listOf(on.min() - 1, on.max() + 1).filter { it in 0 until pageCount }
         }
-        for (p in around) if (pages.whole(p) == null) jobs += Pages.Whole(p)
+        // No more than the cache holds: asking for more would evict, and ask again, for ever.
+        for (p in around.take(pages.wholesThatFit())) if (pages.whole(p) == null) jobs += Pages.Whole(p)
         val level = Pages.level(zoom)
         for (margin in floatArrayOf(0f, Pages.TILE.toFloat())) {
             for ((p, r) in shown) {
@@ -552,7 +593,7 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
         // The pen is whichever pointer it is: a palm may have landed first.
         if (penId >= 0 || (0 until event.pointerCount).any { isPen(event, it) }) {
             penSeen = SystemClock.uptimeMillis()
-            fingersDown = 0  // a pan the palm started ends here
+            endFingers(event)  // a pan or pinch the palm started ends here
             pen(event)
             return true
         }
@@ -582,8 +623,10 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
                 strokePage = pageAt(lastY)
                 val place = pending
                 if (place != null && !erasing) {
-                    // A tap says where the signature, date or text goes.
-                    placeAt(place, strokePage, toPageX(strokePage, lastX), toPageY(strokePage, lastY))
+                    // A tap says where the signature, date or text goes (on a page).
+                    if (onPage(strokePage, lastX, lastY)) {
+                        placeAt(place, strokePage, toPageX(strokePage, lastX), toPageY(strokePage, lastY))
+                    }
                     stroke = null
                     placing = true
                     return
@@ -730,7 +773,7 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
             }
             else -> {
                 val o = (hit + 2) % 4
-                Grab.Scale(c[2 * o], c[2 * o + 1], c[2 * hit], c[2 * hit + 1], Matrix(s.matrix))
+                Grab.Scale(c[2 * o], c[2 * o + 1], px, py, Matrix(s.matrix))
             }
         }
         grabbed = if (hit == 5) -1 else hit
@@ -829,11 +872,14 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
 
     fun undo() {
         val (page, before) = history.removeLastOrNull() ?: return
-        // The step restores the page as a whole: the selection was in it.
-        if (selection != null) {
+        val s = selection
+        if (s != null && s.page == page) {
+            // The step restores the page as a whole: the selection was in it.
             selection = null
             grab = null
             onSelection(false)
+        } else {
+            deselect()  // on another page: back where it is, untouched by this step
         }
         marks[page] = before.toMutableList()
         reveal(page)
@@ -874,7 +920,7 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
                 return true
             }
             val page = pageAt(e.y)
-            placeAt(place, page, toPageX(page, e.x), toPageY(page, e.y))
+            if (onPage(page, e.x, e.y)) placeAt(place, page, toPageX(page, e.x), toPageY(page, e.y))
             return true
         }
 
@@ -896,6 +942,7 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
             scroller.fling(ox.toInt(), oy.toInt(), velocityX.toInt(), velocityY.toInt(),
                 x0.toInt(), x1.toInt(), y0.toInt(), y1.toInt())
             flinging = true
+            moved = true
             postOnAnimation(::flingStep)
             return true
         }
@@ -919,6 +966,22 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
         flinging = false
         scroller.forceFinished(true)
         changed()
+    }
+
+    /** Fingers' gesture interrupted (the pen came): the detectors hear it end. */
+    private fun endFingers(event: MotionEvent) {
+        if (fingersDown > 0 || fingerGrab || scaler.isInProgress) {
+            val cancel = MotionEvent.obtain(event).apply { action = MotionEvent.ACTION_CANCEL }
+            taps.onTouchEvent(cancel)
+            scaler.onTouchEvent(cancel)
+            cancel.recycle()
+            if (fingerGrab) {
+                fingerGrab = false
+                endGrab()
+            }
+            changed()  // the pinch's zoom rendered sharp
+        }
+        fingersDown = 0
     }
 
     private fun fingers(e: MotionEvent) {
@@ -959,6 +1022,7 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
             MotionEvent.ACTION_MOVE -> if (fingersDown > 0) {
                 ox += fx - lastFocusX
                 oy += fy - lastFocusY
+                moved = true
                 clamp()
                 changed()
             }
@@ -988,6 +1052,7 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
         const val DOUBLE_TAP_ZOOM = 2.5f
         const val TAP_SIZE = 10f            // dp: a lasso smaller than this is a tap on a mark
         const val GAP = 12f                 // points between pages, scrolling
+        const val MIN_ZOOM = 0.01f          // pixels per point, on a window too small for a page
         const val MAX_STAND_INS = 60        // tiles of other levels drawn while this level's come
     }
 }

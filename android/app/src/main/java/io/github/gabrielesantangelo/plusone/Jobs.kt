@@ -22,7 +22,9 @@ import java.util.concurrent.atomic.AtomicLong
 object Jobs {
     class Job(val id: String, val file: File, val title: String, val pc: String, val pen: JSONObject?,
               /** The PDF is the job's (deleted with it), not one opened by hand. */
-              val ownsFile: Boolean = true) {
+              val ownsFile: Boolean = true,
+              /** The certificate fingerprint of the PC it came from: only that PC may ask for it again. */
+              val peer: String = "") {
         val order = counter.incrementAndGet()
         var result: JSONObject? = null
         var finished = false
@@ -38,7 +40,9 @@ object Jobs {
 
     private val counter = AtomicLong()
     private val jobs = ConcurrentHashMap<String, Job>()
-    private val network = Executors.newSingleThreadExecutor()  // not on the UI thread
+    // Not on the UI thread; one thread per answer, so a PC that stops
+    // reading does not hold back the others' answers.
+    private val network = Executors.newCachedThreadPool()
     private val listeners = CopyOnWriteArraySet<() -> Unit>()
     private val main = Handler(Looper.getMainLooper())
 
@@ -49,16 +53,21 @@ object Jobs {
 
     fun get(id: String?): Job? = id?.let { jobs[it] }?.takeIf { !it.finished }
 
+    /** Bytes of the PDFs the queue keeps. */
+    fun bytes(): Long = jobs.values.filter { it.ownsFile }.sumOf { it.file.length() }
+
     /** listener runs on the main thread whenever the queue changes. */
     fun listen(listener: () -> Unit) = listeners.add(listener)
     fun unlisten(listener: () -> Unit) = listeners.remove(listener)
     private fun changed() = main.post { listeners.forEach { it() } }
 
-    fun start(job: Job, link: Any?, deliver: (Job) -> Boolean) {
+    /** Adds job to the queue; false if one with its id is there already. */
+    fun start(job: Job, link: Any?, deliver: (Job) -> Boolean): Boolean {
         job.link = link
         job.deliver = deliver
-        jobs[job.id] = job
+        if (jobs.putIfAbsent(job.id, job) != null) return false
         changed()
+        return true
     }
 
     /** The signing screen's answer: the marks, or null if the user cancelled. */
@@ -75,9 +84,9 @@ object Jobs {
         if (deliver != null) network.execute { deliver(job) }
     }
 
-    /** The PC asks again on a new connection; false if the job is unknown. */
-    fun resume(id: String, link: Any, deliver: (Job) -> Boolean): Boolean {
-        val job = jobs[id] ?: return false
+    /** The PC (peer) asks again on a new connection; false if it has no such job. */
+    fun resume(id: String, peer: String, link: Any, deliver: (Job) -> Boolean): Boolean {
+        val job = jobs[id]?.takeIf { it.peer == peer } ?: return false
         val finished = synchronized(job) {
             job.link = link
             job.lostAt = 0
@@ -88,8 +97,9 @@ object Jobs {
         return true
     }
 
-    /** The PC has the answer: the job is over. */
-    fun acknowledge(id: String): Boolean = jobs[id]?.takeIf { it.finished }?.let { jobs.remove(id) } != null
+    /** The PC (peer) has the answer: the job is over. */
+    fun acknowledge(id: String, peer: String): Boolean =
+        jobs[id]?.takeIf { it.finished && it.peer == peer }?.let { jobs.remove(id) } != null
 
     /** A connection ended: its jobs wait for the PC to come back. */
     fun detach(link: Any) {
@@ -119,7 +129,7 @@ object Jobs {
         val job = Job(id, file, file.name, "", null, ownsFile = false)
         start(job, null) {
             it.result?.let { result -> out.writeText(result.toString()) }
-            acknowledge(id)
+            acknowledge(id, "")
             true
         }
         return job

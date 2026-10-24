@@ -45,7 +45,6 @@ fun Context.label(text: CharSequence?, appearance: Int, color: Int = M.attr.colo
 enum class Look(val style: Int) {
     FILLED(M.attr.materialButtonStyle),
     TONAL(M.attr.materialButtonTonalStyle),
-    OUTLINED(M.attr.materialButtonOutlinedStyle),
     TEXT(R.attr.plusTextButtonStyle),
 }
 

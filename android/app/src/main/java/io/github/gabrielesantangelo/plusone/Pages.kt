@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.util.LruCache
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.ceil
 import kotlin.math.ln
 import kotlin.math.pow
@@ -34,7 +35,8 @@ class Pages(private val pdf: Pdf, private val onReady: () -> Unit) {
 
     private val lock = Object()
     private var queue: List<Job> = emptyList()  // under lock
-    @Volatile private var working: Job? = null
+    // Being rendered, or rendered and not yet in the cache: not asked for again.
+    private val inFlight = ConcurrentHashMap.newKeySet<Job>()
     @Volatile private var stopped = false
     private val main = Handler(Looper.getMainLooper())
 
@@ -49,11 +51,13 @@ class Pages(private val pdf: Pdf, private val onReady: () -> Unit) {
     /** Pixels per point of a page rendered whole: as many as WHOLE_PIXELS allow. */
     fun wholeScale(page: Int) = pdf.sizes[page].let { sqrt(WHOLE_PIXELS / (it.width * it.height)) }
 
+    /** How many pages rendered whole the cache holds at least. */
+    fun wholesThatFit() = (WHOLE_BYTES / (WHOLE_PIXELS * 4)).toInt() - 1
+
     /** What to render next, the most wanted first, instead of what was wanted before. */
     fun want(jobs: Collection<Job>) {
-        val now = working
         synchronized(lock) {
-            queue = jobs.filter { it != now }
+            queue = jobs.filter { it !in inFlight }
             lock.notifyAll()
         }
     }
@@ -67,6 +71,9 @@ class Pages(private val pdf: Pdf, private val onReady: () -> Unit) {
     fun release() {
         stopped = true
         synchronized(lock) { lock.notifyAll() }
+        // Up to a few hundred megabytes: not left for the garbage collector to find.
+        tiles.evictAll()
+        wholes.evictAll()
     }
 
     private fun work() {
@@ -74,9 +81,11 @@ class Pages(private val pdf: Pdf, private val onReady: () -> Unit) {
             val job = synchronized(lock) {
                 while (queue.isEmpty() && !stopped) lock.wait()
                 if (stopped) return
-                queue.first().also { queue = queue.drop(1) }
+                queue.first().also {
+                    queue = queue.drop(1)
+                    inFlight += it
+                }
             }
-            working = job
             val bitmap = try {
                 render(job)
             } catch (e: Throwable) {
@@ -85,8 +94,12 @@ class Pages(private val pdf: Pdf, private val onReady: () -> Unit) {
                 Log.w("PlusOne", "$job not rendered: $e")
                 null
             }
-            working = null
-            if (bitmap != null) main.post {
+            if (bitmap == null) {
+                inFlight -= job
+                continue
+            }
+            main.post {
+                inFlight -= job
                 if (stopped) return@post
                 when (job) {
                     is Whole -> wholes.put(job.page, bitmap)

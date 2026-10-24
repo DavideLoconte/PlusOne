@@ -4,6 +4,9 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.graphics.Typeface
 import android.view.Gravity
@@ -11,50 +14,65 @@ import android.view.ViewGroup
 import android.widget.LinearLayout
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.color.DynamicColors
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import com.google.android.material.R as M
 
-/** Asking the user whether to pair with a PC, showing the code both screens show. */
+/** Asking the user whether to pair with a PC, showing the code both screens
+ * show: one question at a time, and none for a little while after one was
+ * not accepted, so nobody on the network can keep the screen covered. */
 object Pairing {
-    private class Request(val pc: String) {
+    private class Request(val code: String, val pc: String) {
         val answered = CountDownLatch(1)
         @Volatile var accepted = false
+        @Volatile var close: (() -> Unit)? = null  // the question's window, when shown
     }
 
-    private val requests = ConcurrentHashMap<String, Request>()
+    @Volatile private var current: Request? = null
+    private var quietUntil = 0L  // under this
+    private val main = Handler(Looper.getMainLooper())
 
     /** Blocks the calling (connection) thread until the user answers, two
-     * minutes at most. Asked again with the same code (the same PC, several
-     * PDFs at once), it waits for the same answer. */
-    fun ask(context: Context, pc: String, code: String): Boolean {
-        var asking = false
-        val request = requests.computeIfAbsent(code) { asking = true; Request(pc) }
-        if (asking) {
-            val open = Intent(context, PairActivity::class.java)
-                .putExtra(PairActivity.EXTRA_CODE, code)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            if (Settings.canDrawOverlays(context)) context.startActivity(open)
-            Notifications.pairing(context, pc, code, open)
+     * minutes at most: whether they accepted; null when no question may be
+     * asked now (another is up, or one was just turned down). */
+    fun ask(context: Context, pc: String, code: String): Boolean? {
+        val request = Request(code, pc)
+        synchronized(this) {
+            if (current != null || SystemClock.elapsedRealtime() < quietUntil) return null
+            current = request
         }
-        val answered = request.answered.await(2, TimeUnit.MINUTES)
-        if (asking) {
-            requests.remove(code)
-            Notifications.cancelPairing(context, code)
+        val open = Intent(context, PairActivity::class.java)
+            .putExtra(PairActivity.EXTRA_CODE, code)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (Settings.canDrawOverlays(context)) context.startActivity(open)
+        Notifications.pairing(context, pc, code, open)
+        val accepted = request.answered.await(2, TimeUnit.MINUTES) && request.accepted
+        synchronized(this) {
+            current = null
+            if (!accepted) quietUntil = SystemClock.elapsedRealtime() + QUIET
         }
-        return answered && request.accepted
+        Notifications.cancelPairing(context, code)
+        main.post { request.close?.invoke() }
+        return accepted
     }
 
     /** The PC's name, while its pairing waits for an answer. */
-    fun pending(code: String): String? = requests[code]?.pc
+    fun pending(code: String): String? = current?.takeIf { it.code == code }?.pc
 
+    /** The user's answer, or the PC's refusal (which ends the question here too). */
     fun answer(code: String, accepted: Boolean) {
-        requests[code]?.let {
+        current?.takeIf { it.code == code }?.let {
             it.accepted = accepted
             it.answered.countDown()
         }
     }
+
+    /** close runs (on the main thread) when the question is over, however it ended. */
+    fun onClose(code: String, close: () -> Unit) {
+        current?.takeIf { it.code == code }?.close = close
+    }
+
+    private const val QUIET = 10_000L  // ms without questions after one was not accepted
 }
 
 /** The pairing question, over whatever is on screen. Its own layout: an
@@ -66,6 +84,7 @@ class PairActivity : AppCompatActivity() {
         setFinishOnTouchOutside(false)
         val code = intent.getStringExtra(EXTRA_CODE) ?: return finish()
         val pc = Pairing.pending(code) ?: return finish()
+        Pairing.onClose(code) { if (!isFinishing) finish() }  // answered elsewhere, or refused on the PC
         fun answer(accept: Boolean) {
             Pairing.answer(code, accept)
             finish()
