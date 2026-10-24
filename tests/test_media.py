@@ -40,7 +40,7 @@ def test_test_pattern_reaches_udp():
         assert pkt[0] >> 6 == 2              # RTP version 2
         assert pkt[1] & 0x7F == 33           # MP2T payload type
         assert pkt[12] == 0x47               # MPEG-TS sync byte right after the header
-        assert (len(pkt) - 12) % 188 == 0    # whole TS packets
+        assert len(pkt) - 12 == 7 * 188      # 7 whole TS packets, as from mpegtsmux alignment=7
 
 
 def test_keyframe_requests_are_rate_limited(monkeypatch):
@@ -79,3 +79,23 @@ def test_keyframe_cap_is_set_on_the_encoder():
         pytest.skip("x264enc not installed")
     media.Streamer._cap_keyframes(enc, 20000, 60)
     assert enc.get_property("vbv-buf-capacity") == int(1000 * media.VBV_FRAMES / 60)
+
+
+def test_each_frame_goes_out_whole_at_once():
+    # mpegtsmux alignment=7 kept a frame's last packets until the next one.
+    rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    rx.bind(("127.0.0.1", 0))
+    rx.settimeout(1)
+    sender = media.RtpSender("127.0.0.1", rx.getsockname()[1], 0)
+    try:
+        frame = b"".join(b"\x47\x01\x00" + bytes([0x10 | i % 16]) + bytes(184) for i in range(9))
+        sender.send(frame, 10**9)
+        first, last = rx.recv(2048), rx.recv(2048)
+    finally:
+        sender.close()
+        rx.close()
+    assert first[1] == 33 and first[12:] == frame[:7 * 188]
+    assert last[12:2 * 188 + 12] == frame[7 * 188:]               # the rest at once,
+    assert last[12 + 2 * 188:] == media.NULL_TS * 5               # padded to 7 packets
+    assert int.from_bytes(last[4:8], "big") == 90000              # 1 s in 90 kHz
+    assert int.from_bytes(last[2:4], "big") == (int.from_bytes(first[2:4], "big") + 1) % 65536

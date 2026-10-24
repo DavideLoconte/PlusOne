@@ -45,6 +45,9 @@ RTP_MP2T = 33
 # Wi-Fi sends packets marked EF (DSCP 46) from its video queue (WMM AC_VI),
 # which waits less for the air than best effort.
 DSCP_EF = 46
+# Pads a frame's last RTP packet to 7 TS packets, the size sinks always got
+# from mpegtsmux alignment=7; demuxers drop PID 0x1FFF.
+NULL_TS = b"\x47\x1f\xff\x10" + b"\xff" * 184
 
 
 class RtpSender:
@@ -68,6 +71,7 @@ class RtpSender:
         """data: whole TS packets; pts: nanoseconds (RTP counts 90 kHz)."""
         stamp = (pts * 9 // 100000) & 0xFFFFFFFF
         size = 188 * TS_PER_RTP
+        data += NULL_TS * (-(len(data) // 188) % TS_PER_RTP)
         for offset in range(0, len(data), size):
             header = struct.pack("!BBHII", 0x80, RTP_MP2T, self.seq, stamp, self.ssrc)
             try:
