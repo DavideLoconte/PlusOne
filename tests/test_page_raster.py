@@ -26,6 +26,8 @@ def raster_for(tmp_path, marks):
 
 
 def pixels(raster):
+    for key in raster.tile_boxes():  # tiles render when first shown
+        raster.tile(*key)
     raster.surface.flush()
     return bytes(raster.surface.get_data())
 
@@ -33,17 +35,16 @@ def pixels(raster):
 def test_erasing_and_undoing_match_a_full_render(tmp_path):
     marks = strokes()
     raster, page = raster_for(tmp_path, marks)
-    for key in raster.tile_boxes():
-        raster.tile(*key)
+    pixels(raster)
     erased = marks[:3] + marks[4:]
     raster.update(erased)
-    fresh = sign.PageRaster(0, 1.5, page, page.get_size())
-    fresh.update(erased)
-    assert pixels(raster) == pixels(fresh)
-    # Only the tiles under the erased stroke were made again.
+    # Only the tiles under the erased stroke are to be made again.
     area = raster.area([marks[3]])
     gone = {key for key in raster.tile_boxes() if key not in raster.tiles}
     assert gone and all(sign._overlap(raster._tile_box(*key), area) for key in gone)
+    fresh = sign.PageRaster(0, 1.5, page, page.get_size())
+    fresh.update(erased)
+    assert pixels(raster) == pixels(fresh)
     raster.update(marks)  # undo
     fresh.update(marks)
     assert pixels(raster) == pixels(fresh)
@@ -56,3 +57,12 @@ def test_bounds_and_quick_rejection():
     assert not touches(stroke, (200, 200), (210, 210), 5)
     assert touches(stroke, (15, 5), (15, 20), 1)
     assert bounds(Text(0, 20, "WWW", size=10))[2] >= 30
+
+
+def test_only_tiles_on_screen_are_rendered(tmp_path):
+    raster, _page = raster_for(tmp_path, strokes())
+    assert raster.rendered == set()
+    shown = raster.tile_boxes((0, 0, 100, 100))
+    assert shown == [(0, 0)]
+    raster.tile(0, 0)
+    assert raster.rendered == {(0, 0)}

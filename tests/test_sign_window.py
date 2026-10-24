@@ -283,6 +283,9 @@ def test_a_long_stroke_is_inked_once(window):
     assert raster.drawn == tuple(win.marks[0])
     fresh = sign.PageRaster(raster.index, raster.scale, win.page(), area.page_size())
     fresh.update(win.marks[0])
+    for key in raster.tile_boxes():
+        raster.tile(*key)
+        fresh.tile(*key)
     raster.surface.flush()
     fresh.surface.flush()
     a, b = bytes(raster.surface.get_data()), bytes(fresh.surface.get_data())

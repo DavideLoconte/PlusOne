@@ -67,6 +67,10 @@ Sign on the tablet.
     segment of every mark took 7 ms per pen sample on a short signature),
     and erasing or undoing redraws only that area of the page, whose
     texture is cut in tiles so only the tiles it covers are uploaded again;
+  - zooming stays smooth: while fingers pinch the page is only magnified
+    (a frame took up to 144 ms rendering it again), only the tiles on
+    screen are rendered, and after the pinch they turn sharp a few per
+    frame instead of in one 100-200 ms go;
   - the first connection after Plus One starts is 1.5 s quicker: the NVENC
     plugin (CUDA probing the GPUs) loads while the tablet is being found,
     not after it connected.

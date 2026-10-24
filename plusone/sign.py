@@ -51,6 +51,7 @@ CHUNK = 24  # settled stroke segments turned into one texture while drawing
 # the 8x zoom is 32 million pixels, 128 MB plus a copy for the texture.
 MAX_PAGE_PIXELS = 16_000_000
 TILE = 512  # device pixels per side of a page texture tile
+TILE_BUDGET = 0.008  # seconds of tile rendering per frame while the old zoom stands in
 PEN_SAVE_DELAY = 500  # ms after the last change of colour, thickness or stabilization
 # cairo's 32-bit pixels are native-endian words: B, G, R, A bytes here.
 LITTLE = sys.byteorder == "little"
@@ -133,18 +134,20 @@ def rect(x, y, w, h):
 
 class PageRaster:
     """A page with its finished marks, rendered at one scale and handed to
-    GTK as tiles of textures. A change (a stroke added, erased, undone)
-    re-renders only its area and makes new textures only for the tiles it
-    covers: one texture for the whole page meant copying and uploading all
-    of it (64 MB at high zoom) after every stroke and every erased one."""
+    GTK as tiles of textures. Tiles are rendered when first shown, so a
+    zoomed-in page costs what is on screen; a change (a stroke added,
+    erased, undone) re-renders only its area and makes new textures only
+    for the tiles it covers. One texture for the whole page meant copying
+    and uploading all of it (64 MB at high zoom) after every stroke and
+    every erased one."""
 
     def __init__(self, index, scale, page, size):
         self.index, self.scale, self.page = index, scale, page
         w, h = size
         self.surface = cairo.ImageSurface(cairo.FORMAT_RGB24, max(1, int(w * scale)), max(1, int(h * scale)))
-        self.drawn = ()   # marks on the surface, in order
-        self.tiles = {}   # (column, row) -> texture, made when first needed
-        self._render(None, ())
+        self.drawn = ()        # marks on the surface (where rendered), in order
+        self.tiles = {}        # (column, row) -> texture, made when first needed
+        self.rendered = set()  # tiles whose pixels are up to date
 
     def area(self, marks):
         """Device pixel box (x0, y0, x1, y1) covering marks' ink, or None."""
@@ -182,23 +185,37 @@ class PageRaster:
             del self.tiles[key]
 
     def update(self, marks):
-        """Bring the surface to these marks."""
+        """Bring the surface to these marks. Only rendered tiles are
+        touched: the others are rendered with all marks when first shown."""
         drawn = self.drawn
         if len(drawn) <= len(marks) and all(a is b for a, b in zip(drawn, marks)):
             new = marks[len(drawn):]  # on top of what is there
-            if new:
+            for box in self._rendered_boxes(self.area(new)):
                 cr = cairo.Context(self.surface)
+                cr.rectangle(box[0], box[1], box[2] - box[0], box[3] - box[1])
+                cr.clip()
                 cr.scale(self.scale, self.scale)
-                draw_marks(cr, new)
-                self.changed(self.area(new))
+                draw_marks(cr, [m for m in new if _overlap(self.area([m]) or box, box)])
+                self.changed(box)
         else:
             # Erased, undone or cleared: render again where something changed.
             before, after = {id(m) for m in drawn}, {id(m) for m in marks}
             area = self.area([m for m in drawn if id(m) not in after]
                              + [m for m in marks if id(m) not in before])
-            if area:
-                self._render(area, marks)
+            for box in self._rendered_boxes(area):
+                self._render(box, marks)
         self.drawn = tuple(marks)
+
+    def _rendered_boxes(self, area):
+        """Parts of area (device pixels) on rendered tiles, a box per tile."""
+        if area is None:
+            return []
+        boxes = []
+        for key in self.tile_boxes(area):
+            if key in self.rendered:
+                t = self._tile_box(*key)
+                boxes.append((max(t[0], area[0]), max(t[1], area[1]), min(t[2], area[2]), min(t[3], area[3])))
+        return boxes
 
     def add(self, mark, paint):
         """mark goes on top, drawn by paint(cairo context in device pixels)."""
@@ -210,13 +227,19 @@ class PageRaster:
         w, h = self.surface.get_width(), self.surface.get_height()
         return column * TILE, row * TILE, min(w, (column + 1) * TILE), min(h, (row + 1) * TILE)
 
-    def tile_boxes(self):
+    def tile_boxes(self, area=None):
+        """Tiles, those overlapping area (device pixels) if given."""
         w, h = self.surface.get_width(), self.surface.get_height()
-        return [(c, r) for r in range(-(-h // TILE)) for c in range(-(-w // TILE))]
+        x0, y0, x1, y1 = area or (0, 0, w, h)
+        return [(c, r) for r in range(max(0, int(y0 // TILE)), min(-(-h // TILE), int(y1 // TILE) + 1))
+                for c in range(max(0, int(x0 // TILE)), min(-(-w // TILE), int(x1 // TILE) + 1))]
 
     def tile(self, column, row):
         """(texture, its device pixel box) for one tile."""
         box = self._tile_box(column, row)
+        if (column, row) not in self.rendered:
+            self._render(box, self.drawn)
+            self.rendered.add((column, row))
         tex = self.tiles.get((column, row))
         if tex is None:
             x0, y0, x1, y1 = box
@@ -297,6 +320,9 @@ class PageArea(Gtk.Widget):
         self.fitted = False
         self._raster = None  # PageRaster of the page shown
         self._origin = (0.0, 0.0)  # where the page is drawn (whole device pixels)
+        self._pinching = False
+        self._stale = False     # render the page again at the current zoom
+        self._previous = None   # the raster before, shown while the new one renders
         self._stroke = None
         self._model = None    # the stroke's modeler, in widget pixels
         self._clock = 0.0     # time of the stroke's last sample, seconds
@@ -368,6 +394,7 @@ class PageArea(Gtk.Widget):
             self.queue_draw()
 
     def _zoom_begin(self, gesture, _seq):
+        self._pinching = True
         ok, x, y = gesture.get_bounding_box_center()
         self._zoom_start = (self.view.zoom, self.view.to_page(x, y))
 
@@ -380,7 +407,8 @@ class PageArea(Gtk.Widget):
 
     def _sharpen(self):
         """After a pinch, the page and its marks at exactly the new zoom."""
-        self._raster = None
+        self._pinching = False
+        self._stale = True
         self.queue_draw()
 
     def _scroll(self, controller, dx, dy):
@@ -675,7 +703,16 @@ class PageArea(Gtk.Widget):
         per point, kept up to date (see PageRaster); another page or a
         different zoom renders it again."""
         index, raster = self.window.index, self._raster
-        if raster is None or raster.index != index or abs(raster.scale / scale - 1) >= 0.15:
+        if self._stale and raster is not None:
+            self._previous, raster = raster, None
+            self._raster = None
+        self._stale = False
+        # While fingers pinch, the page is only magnified: it is rendered
+        # again at the new zoom when they let go (see _sharpen).
+        if raster is None or raster.index != index or (
+                abs(raster.scale / scale - 1) >= 0.15 and not self._pinching):
+            if raster is not None:  # it stands in until the new one's tiles are ready
+                self._previous = raster
             raster = self._raster = PageRaster(index, scale, self.window.page(), self.page_size())
         raster.update(self.window.marks.get(index, []))
         return raster
@@ -698,8 +735,29 @@ class PageArea(Gtk.Widget):
         raster = self._page_raster(min(v.zoom * sf, math.sqrt(MAX_PAGE_PIXELS / (w * h))))
         scale = raster.scale
         k = v.zoom / scale  # widget pixels per page device pixel
-        for key in raster.tile_boxes():
-            tile, (x0, y0, x1, y1) = raster.tile(*key)
+        visible = (-ox / k, -oy / k, (self.get_width() - ox) / k, (self.get_height() - oy) / k)
+        # A new zoom renders its tiles a few per frame, over the old zoom's
+        # (magnified): one go took 100 ms at high zoom, right as the pen came down.
+        deadline = time.perf_counter() + TILE_BUDGET
+        ready, waiting = [], False
+        for key in raster.tile_boxes(visible):
+            if (key in raster.rendered or self._previous is None or self._previous.index != raster.index
+                    or time.perf_counter() < deadline):
+                ready.append(raster.tile(*key))
+            else:
+                waiting = True
+        if waiting:
+            old = self._previous
+            ko = v.zoom / old.scale
+            seen = (-ox / ko, -oy / ko, (self.get_width() - ox) / ko, (self.get_height() - oy) / ko)
+            for key in old.tile_boxes(seen):
+                if key in old.rendered:
+                    tile, (x0, y0, x1, y1) = old.tile(*key)
+                    snapshot.append_texture(tile, rect(ox + x0 * ko, oy + y0 * ko, (x1 - x0) * ko, (y1 - y0) * ko))
+            GLib.idle_add(once(self.queue_draw))  # more next frame (not from inside this one)
+        else:
+            self._previous = None
+        for tile, (x0, y0, x1, y1) in ready:
             snapshot.append_texture(tile, rect(ox + x0 * k, oy + y0 * k, (x1 - x0) * k, (y1 - y0) * k))
         snapshot.push_clip(page_rect)
         if self._stroke is not None:
