@@ -188,3 +188,20 @@ the tablet and read with REA (JADX, objdump); static analysis only.
   whose source is *mouse*, so checking the device's source let it through;
   the event's device tool is what tells a pen. The pen reports themselves
   had none (0 in 5225 through the filter that briefly ran on UIBC).
+
+## Companion app (0.5)
+
+- Android's `PdfRenderer` page space is the PC's display space (poppler's,
+  plusone/pdf.py): points from the crop box's top-left corner, `/Rotate`
+  applied. On a `/Rotate 90` page and on one with a shifted crop box,
+  markers at (650, 150) and (250, 200) came back from the tablet at
+  (650.2, 150.0) and (249.7, 199.8), and the saved PDF had the ink on them.
+- `CanvasFrontBufferedRenderer`'s multi-buffered layer has three buffers:
+  asking for a new scene every frame (erasing, panning) faster than they
+  came back left its render thread waiting forever ("BufferPool: Waiting
+  for buffer to become available") and froze the screen. One scene in
+  flight at a time fixed it.
+- An `AlertDialog` inside a dialog-themed activity started from a service
+  was dismissed as soon as it showed; a plain layout stays.
+- Each container build made a new debug signing key, and Android refused
+  to update the installed app; the key now lives in the Gradle volume.
