@@ -124,6 +124,8 @@ _IT = {
     "Sign {name} on {tablet}": "Firma {name} su {tablet}",
     "{count} PDFs to sign on {tablet}": "{count} PDF da firmare su {tablet}",
     "Tablet for signing": "Tablet per firmare",
+    "It had a digital signature: in the signed copy, it no longer holds":
+        "Aveva una firma digitale: nella copia firmata non vale più",
     "Only this tablet gets the desktop": "Solo questo tablet riceve lo schermo",
     "Forget": "Dimentica",
     "With more than one on the network, Files asks too": "Con più di uno in rete, lo chiede anche File",

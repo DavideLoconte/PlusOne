@@ -275,7 +275,10 @@ def _overlap(a, b):
 
 def open_document(path):
     """A Poppler document, or raise GLib.Error (missing, damaged, password)."""
-    return Poppler.Document.new_from_file(Gio.File.new_for_path(path).get_uri(), None)
+    doc = Poppler.Document.new_from_file(Gio.File.new_for_path(path).get_uri(), None)
+    if doc.get_n_pages() == 0:
+        raise GLib.Error("the PDF has no pages")  # shown as "Cannot open"
+    return doc
 
 
 class Lag:
@@ -429,9 +432,11 @@ class PageArea(Gtk.Widget):
         self.queue_draw()
 
     def _sharpen(self):
-        """After a pinch, the page and its marks at exactly the new zoom."""
+        """After a pinch, the page and its marks at exactly the new zoom (a
+        two-finger pan kept it: nothing to render again)."""
         self._pinching = False
-        self._raster = None
+        if self.view.zoom != self._zoom_start[0]:
+            self._raster = None
         self.queue_draw()
 
     def _scroll(self, controller, dx, dy):
@@ -1001,6 +1006,7 @@ class SignWindow(Adw.ApplicationWindow):
         self.cancel_button.connect("clicked", lambda b: self._cancel())
         header.pack_start(self.cancel_button)
         self._saving = False  # the signed copy is being written: no way out meanwhile
+        self._may_close = False  # closing would not lose marks (answered, saved, nothing drawn)
         self.done = Gtk.Button(label=_("Done"), css_classes=["suggested-action"])
         self.done.connect("clicked", lambda b: self._save())
         header.pack_end(self.done)
@@ -1277,9 +1283,13 @@ class SignWindow(Adw.ApplicationWindow):
 
     def _undo(self):
         if self.history:
-            # The step restores the page as a whole: the selection was in it.
-            self._drop_selection()
-            index, marks = self.history.pop()
+            index, marks = self.history[-1]
+            if self.selection is not None and self.selection.page == index:
+                # The step restores the page as a whole: the selection was in it.
+                self._drop_selection()
+            else:
+                self.deselect()  # on another page: back where it is, untouched by this step
+            self.history.pop()
             self.marks[index] = marks
             if index != self.index:
                 self.show_page(index)
@@ -1448,6 +1458,7 @@ class SignWindow(Adw.ApplicationWindow):
         self._saving = True
         self.cancel_button.set_sensitive(False)
         self.done.set_sensitive(False)
+        self.area.set_sensitive(False)  # what would be drawn now would not be in the copy
         self.done.set_child(Gtk.Spinner(spinning=True))
         marks = {i: list(m) for i, m in self.marks.items() if m}
 
@@ -1462,9 +1473,10 @@ class SignWindow(Adw.ApplicationWindow):
 
     def _saved(self, result, next_to_original):
         self._saving = False
-        if isinstance(result, PermissionError) and next_to_original:
-            # A read-only folder, or a Flatpak that may only touch the file it
-            # was given: ask where to put the signed copy.
+        if isinstance(result, OSError) and next_to_original:
+            # A read-only folder (or file system, or a full one), or a Flatpak
+            # that may only touch the file it was given: ask where to put the
+            # signed copy.
             self._save_as()
             return
         if isinstance(result, Exception):
@@ -1472,9 +1484,11 @@ class SignWindow(Adw.ApplicationWindow):
             self._saving_over()
             return
         self.result = result
+        self._may_close = True
         self.close()
 
     def _saving_over(self):
+        self.area.set_sensitive(True)
         self.cancel_button.set_sensitive(True)
         self.done.set_label(_("Done"))
         self.done.set_sensitive(True)
@@ -1495,10 +1509,14 @@ class SignWindow(Adw.ApplicationWindow):
             self._save(file.get_path())
         dialog.save(self, None, chosen)
 
+    def _drawn(self):
+        return any(self.marks.values()) or self.selection is not None
+
     def _cancel(self):
         if self._saving:
             return
-        if not any(self.marks.values()):
+        if not self._drawn():  # a placed signature comes picked: it counts
+            self._may_close = True
             self.close()
             return
         dialog = Adw.MessageDialog(transient_for=self, heading=_("Discard the signature?"))
@@ -1510,6 +1528,7 @@ class SignWindow(Adw.ApplicationWindow):
 
     def _discard(self):
         self.marks.clear()
+        self._may_close = True
         self.close()
 
     def _alive(self):
@@ -1521,9 +1540,15 @@ class SignWindow(Adw.ApplicationWindow):
     def _on_close(self, _window):
         if self._saving:
             return True  # closing now would lose the result the file is being written for
+        if not self._may_close and self._drawn():
+            self._cancel()  # Alt+F4, the overview's ✕: asked as Cancel asks
+            return True
         self._watching = False
         faulthandler.cancel_dump_traceback_later()
-        self._save_pen()
+        try:
+            self._save_pen()
+        except OSError as e:  # the result still goes to whoever waits for it
+            log("signing: pen not kept:", repr(e))
         pen_feed.unlisten(self.area.raw.reader)
         drawn, desktop = self.area.raw_counts
         if drawn:

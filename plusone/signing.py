@@ -192,13 +192,13 @@ class Signing:
             return
 
         def save():
-            from .pdf import save_signed
+            from .pdf import digitally_signed, save_signed
             try:
                 done = save_signed(path, marks)
             except Exception as e:  # noqa: BLE001 - shown to the user
                 log("signing: could not save:", repr(e))
                 done = e
-            GLib.idle_add(once(self._app_saved, done))
+            GLib.idle_add(once(self._app_saved, done, digitally_signed(path)))
         threading.Thread(target=save, daemon=True).start()
 
     @staticmethod
@@ -220,12 +220,12 @@ class Signing:
             except (KeyError, TypeError, ValueError, OSError) as e:
                 log("signing: pen from the tablet not kept:", repr(e))
 
-    def _app_saved(self, result):
+    def _app_saved(self, result, certified=False):
         if isinstance(result, Exception):
             note = Gio.Notification.new(_("Could not save: {error}").format(error=result))
             self.app.send_notification(NOTIFICATION, note)
             return
-        self._signed(result)
+        self._signed(result, certified)
 
     def _ask_pairing(self, tablet, code):
         """From the app's thread: asks this PC's user to compare the code
@@ -366,12 +366,14 @@ class Signing:
         if window in self.windows:
             self.windows.remove(window)
         if result:
-            self._signed(result)
+            from .pdf import digitally_signed
+            self._signed(result, digitally_signed(path))
         # Let the window go away first; the display it is on may follow.
         GLib.idle_add(once(self._maybe_disconnect))
 
-    def _signed(self, result):
-        """One notification for the PDFs signed in a row."""
+    def _signed(self, result, certified=False):
+        """One notification for the PDFs signed in a row. certified: the
+        original carried a digital signature, which the copy cannot keep."""
         log("signed:", result)
         self.signed.append(result)
         if len(self.signed) > 1:
@@ -380,7 +382,8 @@ class Signing:
             note.set_default_action_and_target("app.show-file", GLib.Variant("s", result))
         else:
             note = Gio.Notification.new(_("Signed"))
-            note.set_body(os.path.basename(result))
+            note.set_body(os.path.basename(result) + ("\n" + _("It had a digital signature: in the signed copy, "
+                                                                 "it no longer holds") if certified else ""))
             note.set_default_action_and_target("app.open-file", GLib.Variant("s", result))
             note.add_button_with_target(_("Open"), "app.open-file", GLib.Variant("s", result))
         note.add_button_with_target(_("Show in folder"), "app.show-file", GLib.Variant("s", result))

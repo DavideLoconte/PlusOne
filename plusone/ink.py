@@ -143,10 +143,18 @@ def normalize(strokes):
                         for s in strokes]}
 
 
+MAX_TALL = 1.0  # a placed signature is at most as tall as its full width
+
+
 def place(signature, x, y, width=SIGNATURE_WIDTH, pen=PEN_WIDTH, color=INK):
     """Strokes of a normalized signature with its left/vertical centre at x,
-    y, drawn with the pen's current width and colour."""
-    height = max((pt[1] for s in signature["strokes"] for pt in s), default=0) * width
+    y, drawn with the pen's current width and colour; width wide, or less
+    when that would make it taller than MAX_TALL times width (narrow
+    initials normalized to a width of 1 would be metres tall)."""
+    tall = max((pt[1] for s in signature["strokes"] for pt in s), default=0)
+    if tall > MAX_TALL:
+        width = MAX_TALL * width / tall
+    height = tall * width
     # Pen width scales with the signature so a small one does not look bold.
     scaled = pen * width / signature.get("width", width)
     return [Stroke([(x + sx * width, y - height / 2 + sy * width, p) for sx, sy, p in s],

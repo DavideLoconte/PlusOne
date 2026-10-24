@@ -167,8 +167,14 @@ class Signature(val width: Float, val strokes: List<FloatArray>,
                 val id: String = java.util.UUID.randomUUID().toString().replace("-", "")) {
 
     /** ink.py place(): its left end and vertical centre at x, y, with the pen's colour. */
-    fun place(x: Float, y: Float, pen: Float, color: Int, size: Float = Ink.SIGNATURE_WIDTH): List<Stroke> {
-        val height = strokes.maxOf { s -> (1 until s.size step 3).maxOfOrNull { s[it] } ?: 0f } * size
+    /** The strokes with their left, vertical centre at x, y: SIGNATURE_WIDTH wide,
+     * or less when that would make them taller than MAX_TALL times it
+     * (narrow initials, normalized to a width of 1, would be metres tall),
+     * as the PC's ink.place(). */
+    fun place(x: Float, y: Float, pen: Float, color: Int): List<Stroke> {
+        val tall = strokes.maxOf { s -> (1 until s.size step 3).maxOfOrNull { s[it] } ?: 0f }
+        val size = if (tall > MAX_TALL) Ink.SIGNATURE_WIDTH * MAX_TALL / tall else Ink.SIGNATURE_WIDTH
+        val height = tall * size
         // A small signature keeps a thin line: the pen scales with it.
         val scaled = max(Ink.MIN_WIDTH, min(pen * size / width, pen * 1.5f))
         return strokes.map { s ->
@@ -233,6 +239,7 @@ class Signature(val width: Float, val strokes: List<FloatArray>,
         }
 
         const val MAX_POINTS = 20_000  // samples: a long signature has a few thousand
+        const val MAX_TALL = 1f        // a placed signature at most as tall as its full width
     }
 }
 

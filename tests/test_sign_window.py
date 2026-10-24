@@ -359,3 +359,30 @@ def test_select_move_turn_and_undo(window):
     win._place_date()
     win.place_at(300, 500)
     assert win.selection is not None and isinstance(win.selection.originals[0], Text)
+
+
+def test_undo_on_another_page_keeps_the_selection(window):
+    # A step of another page undone: the marks picked on this page go back
+    # where they are, not away for good.
+    win, _results, _src = window
+    picked = Stroke([(100, 100, 0.5), (200, 100, 0.5)])
+    win.show_page(1)
+    win.add_mark(Text(80, 300, "page two"))
+    win.show_page(0)
+    win.add_mark(picked)
+    win.select([picked])
+    win.history.insert(0, win.history.pop())  # page two's step last, as if drawn after
+    win._undo()
+    assert win.selection is None and win.marks[0] == [picked]
+
+
+def test_a_picked_mark_is_something_to_discard(window):
+    # A placed signature or date comes picked: Cancel and closing the window
+    # still ask before throwing it away.
+    win, results, _src = window
+    stroke = Stroke([(100, 100, 0.5), (200, 100, 0.5)])
+    win.add_mark(stroke)
+    win.select([stroke])
+    asked = []
+    win._cancel = lambda: asked.append(True)
+    assert win._on_close(win) is True and asked and not results

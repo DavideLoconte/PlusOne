@@ -4,15 +4,23 @@ Marks live in display space: PDF points with the origin at the top-left of
 the page as a viewer shows it (crop box, /Rotate applied), y downwards. That
 is the space poppler renders into, so the signing window can store what the
 pen draws as is. Saving draws the marks into a transparent PDF with cairo and
-stamps it onto the original pages with pypdf, so the original text, forms and
-metadata stay as they are.
+adds it to the original pages with pypdf, as a form drawn after their own
+content: the original content streams are left as they are (not decoded and
+written again, which bloated files and, in pypdf 4.0, could let their
+graphics state leak into the ink), and so are text, forms and metadata.
 """
 import io
 import math
 import os
+import tempfile
 from dataclasses import dataclass, field
 
 import cairo
+import gi
+
+gi.require_version("Pango", "1.0")
+gi.require_version("PangoCairo", "1.0")
+from gi.repository import Pango, PangoCairo  # noqa: E402
 
 INK = (0.05, 0.1, 0.35)  # dark blue, reads as a pen signature
 PEN_WIDTH = 1.6          # points at full pressure
@@ -97,29 +105,64 @@ def draw_marks(cr, marks):
                 continue
             draw_segments(cr, mark, segments)
         elif isinstance(mark, Text):
-            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
-            cr.set_font_size(mark.size)
-            cr.save()
-            cr.translate(mark.x, mark.y)
-            cr.rotate(mark.angle)
-            cr.move_to(0, 0)
-            cr.show_text(mark.text)
-            cr.restore()
+            draw_text(cr, mark)
+
+
+def draw_text(cr, mark):
+    """A text mark with Pango: any script, shaped, with font fallback (cairo's
+    own text drew boxes for Chinese and did not join Arabic)."""
+    layout = PangoCairo.create_layout(cr)
+    font = Pango.FontDescription.from_string("Sans")
+    font.set_absolute_size(mark.size * Pango.SCALE)  # points, whatever the screen's dpi
+    layout.set_font_description(font)
+    layout.set_text(mark.text, -1)
+    cr.save()
+    cr.translate(mark.x, mark.y)
+    cr.rotate(mark.angle)
+    cr.move_to(0, -layout.get_baseline() / Pango.SCALE)  # x, y is the baseline's left end
+    PangoCairo.show_layout(cr, layout)
+    cr.restore()
+
+
+def _box(page, name):
+    """A page box as (left, bottom, right, top), corners in any order put
+    right; None if missing or empty."""
+    try:
+        values = [float(v) for v in page[name]]
+    except (KeyError, TypeError, ValueError):
+        return None
+    if len(values) != 4:
+        return None
+    x0, x1 = sorted(values[0::2])
+    y0, y1 = sorted(values[1::2])
+    return (x0, y0, x1, y1) if x1 > x0 and y1 > y0 else None
+
+
+def visible_box(page):
+    """The part of a pypdf page a viewer shows, as poppler takes it: the crop
+    box within the media box (US Letter when the media box makes no sense)."""
+    media = _box(page, "/MediaBox") or (0.0, 0.0, 612.0, 792.0)
+    crop = _box(page, "/CropBox")
+    if crop:
+        x0, y0 = max(crop[0], media[0]), max(crop[1], media[1])
+        x1, y1 = min(crop[2], media[2]), min(crop[3], media[3])
+        if x1 > x0 and y1 > y0:
+            return x0, y0, x1, y1
+    return media
 
 
 def display_size(page):
     """(width, height) of a pypdf page as a viewer shows it."""
-    box = page.cropbox
-    w, h = float(box.width), float(box.height)
+    x0, y0, x1, y1 = visible_box(page)
+    w, h = x1 - x0, y1 - y0
     return (h, w) if page.rotation % 180 else (w, h)
 
 
 def display_to_user(page):
     """Matrix (a, b, c, d, e, f) from a display-space overlay page (PDF
     coordinates, origin bottom-left) to the page's own user space."""
-    box = page.cropbox
-    x0, y0 = float(box.left), float(box.bottom)
-    w, h = float(box.width), float(box.height)
+    x0, y0, x1, y1 = visible_box(page)
+    w, h = x1 - x0, y1 - y0
     rotation = page.rotation % 360
     if rotation == 90:
         return (0, 1, -1, 0, w + x0, y0)
@@ -139,27 +182,108 @@ def output_path(src):
     return candidate
 
 
+def digitally_signed(src):
+    """Whether src carries a digital signature (or a certification): the
+    signed copy is a new file, where it no longer holds."""
+    from pypdf import PdfReader
+    try:
+        root = PdfReader(src).trailer["/Root"].get_object()
+        form = root.get("/AcroForm")
+        form = form.get_object() if form is not None else {}
+        return "/Perms" in root or bool(int(form.get("/SigFlags", 0)) & 1)
+    except Exception:  # noqa: BLE001 - a PDF pypdf cannot read this far: none known
+        return False
+
+
+def _ink_form(writer, marks, width, height):
+    """The marks as a form XObject of the writer, in display space."""
+    from pypdf import PdfReader
+    from pypdf.generic import ArrayObject, FloatObject, NameObject, StreamObject
+
+    buf = io.BytesIO()
+    surface = cairo.PDFSurface(buf, width, height)
+    draw_marks(cairo.Context(surface), marks)
+    surface.finish()
+    overlay = PdfReader(buf).pages[0]
+    form = StreamObject()
+    form[NameObject("/Type")] = NameObject("/XObject")
+    form[NameObject("/Subtype")] = NameObject("/Form")
+    form[NameObject("/BBox")] = ArrayObject([FloatObject(0), FloatObject(0), FloatObject(width), FloatObject(height)])
+    form[NameObject("/Resources")] = overlay["/Resources"].clone(writer)
+    form.set_data(overlay.get_contents().get_data())
+    return writer._add_object(form.flate_encode())
+
+
+def _page_resources(page):
+    """The page's own resources dictionary, copied from its page tree when
+    inherited (adding to a shared one would touch other pages)."""
+    from pypdf.generic import DictionaryObject, NameObject
+    node = page
+    while "/Resources" not in node and "/Parent" in node:
+        node = node["/Parent"].get_object()
+    found = node.get("/Resources")
+    resources = DictionaryObject(found.get_object()) if found is not None else DictionaryObject()
+    page[NameObject("/Resources")] = resources
+    return resources
+
+
+def _stamp(writer, page, form):
+    """Draws form on top of page, its content left as it is: wrapped in q/Q
+    (whatever state it leaves), then the form through the display matrix."""
+    from pypdf.generic import ArrayObject, DictionaryObject, IndirectObject, NameObject, StreamObject
+    resources = _page_resources(page)
+    forms = resources.get("/XObject")
+    forms = DictionaryObject(forms.get_object()) if forms is not None else DictionaryObject()
+    resources[NameObject("/XObject")] = forms
+    n = 0
+    while NameObject(f"/PlusOneInk{n}") in forms:
+        n += 1
+    name = NameObject(f"/PlusOneInk{n}")
+    forms[name] = form
+    before, after = StreamObject(), StreamObject()
+    before.set_data(b"q\n")
+    matrix = " ".join(f"{v:.6f}" for v in display_to_user(page))
+    after.set_data(f"\nQ\nq {matrix} cm {name} Do Q\n".encode())
+    contents = page.get("/Contents")
+    contents = contents.get_object() if contents is not None else ArrayObject()
+    original = list(contents) if isinstance(contents, ArrayObject) else [page["/Contents"]]
+    # Each content stream an indirect object, as the format wants in an array.
+    original = [c if isinstance(c, IndirectObject) else writer._add_object(c) for c in original]
+    page[NameObject("/Contents")] = ArrayObject([writer._add_object(before), *original, writer._add_object(after)])
+
+
 def save_signed(src, marks_by_page, dst=None):
-    """Write src with marks_by_page ({page index: [Stroke | Text]}) on top.
-    Returns the path written."""
-    from pypdf import PdfReader, PdfWriter, Transformation
+    """Write src with marks_by_page ({page index: [Stroke | Text]}) on top;
+    marks for a page it does not have are left out. Returns the path
+    written (never over an existing file unless dst says so)."""
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.generic import DictionaryObject
 
     reader = PdfReader(src)
     writer = PdfWriter(clone_from=reader)
+    if "/Info" not in reader.trailer:
+        # pypdf 4.0 pointed the trailer's /Info at another object (the page
+        # tree) when the original had none: Ghostscript then saw no pages.
+        writer._info = writer._add_object(DictionaryObject())
+    pages = writer.pages
     for index, marks in sorted(marks_by_page.items()):
-        if not marks:
+        if not marks or not 0 <= index < len(pages):
             continue
-        page = writer.pages[index]
-        width, height = display_size(page)
-        buf = io.BytesIO()
-        surface = cairo.PDFSurface(buf, width, height)
-        draw_marks(cairo.Context(surface), marks)
-        surface.finish()
-        overlay = PdfReader(buf).pages[0]
-        page.merge_transformed_page(overlay, Transformation(display_to_user(page)))
+        page = pages[index]
+        _stamp(writer, page, _ink_form(writer, marks, *display_size(page)))
     dst = dst or output_path(src)
-    tmp = dst + ".part"
-    with open(tmp, "wb") as f:
-        writer.write(f)
-    os.replace(tmp, dst)
+    # A temporary file of our own next to dst, then the signed copy in one
+    # step, with the original's permissions (not the umask's).
+    fd, tmp = tempfile.mkstemp(prefix=".plus-one-", suffix=".part", dir=os.path.dirname(dst) or ".")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            writer.write(f)
+        os.chmod(tmp, os.stat(src).st_mode & 0o777)
+        os.replace(tmp, dst)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return dst

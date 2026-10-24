@@ -103,3 +103,75 @@ def test_read_only_folder_raises_permission_error(tmp_path):
             save_signed(str(src), {0: [Text(80, 400, "x")]})
     finally:
         folder.chmod(0o755)
+
+
+def test_a_crop_box_beyond_the_media_box(tmp_path):
+    # Poppler shows the crop box within the media box; the ink goes where it
+    # was drawn on what poppler showed.
+    src, dst = tmp_path / "a.pdf", tmp_path / "b.pdf"
+    make_pdf(src)
+    writer = pypdf.PdfWriter(clone_from=pypdf.PdfReader(str(src)))
+    writer.pages[0].cropbox = pypdf.generic.RectangleObject([-100, -100, 695, 942])
+    with open(src, "wb") as f:
+        writer.write(f)
+    save_signed(str(src), {0: [blob(300, 400)]}, str(dst))
+    assert ink_at(dst, 0, 300, 400) > 0.5 and ink_at(dst, 0, 200, 300) < 0.1
+
+
+def test_the_original_content_is_left_as_it_is(tmp_path):
+    # No re-encoding (a big scanned page doubled in size), and no state of
+    # it leaking into the ink: its streams are the same objects, only wrapped.
+    src, dst = tmp_path / "a.pdf", tmp_path / "b.pdf"
+    make_pdf(src)
+    original = pypdf.PdfReader(str(src)).pages[0].get_contents().get_data()
+    save_signed(str(src), {0: [blob(100, 100)], 7: [blob(1, 1)]}, str(dst))  # page 7: none, left out
+    page = pypdf.PdfReader(str(dst)).pages[0]
+    streams = [s.get_object().get_data() for s in page["/Contents"]]
+    assert streams[0] == b"q\n" and original in streams and streams[-1].rstrip().endswith(b"Do Q")
+
+
+def test_no_info_dictionary(tmp_path):
+    # pypdf 4.0 pointed /Info at the page tree when the original had none.
+    src, dst = tmp_path / "a.pdf", tmp_path / "b.pdf"
+    make_pdf(src)
+    # cairo's PDFs carry /Info; one without: the trailer rewritten by hand.
+    data = src.read_bytes()
+    reader = pypdf.PdfReader(str(src))
+    assert "/Info" in reader.trailer
+    info_ref = reader.trailer.raw_get("/Info")
+    data = data.replace(f"/Info {info_ref.idnum} {info_ref.generation} R".encode(), b"")
+    src.write_bytes(data)
+    assert "/Info" not in pypdf.PdfReader(str(src)).trailer
+    save_signed(str(src), {0: [blob(100, 100)]}, str(dst))
+    info = pypdf.PdfReader(str(dst)).trailer.get("/Info")
+    assert info is None or info.get_object().get("/Type") != "/Pages"
+
+
+def test_any_script_as_text(tmp_path):
+    src, dst = tmp_path / "a.pdf", tmp_path / "b.pdf"
+    make_pdf(src)
+    save_signed(str(src), {0: [Text(72, 300, "名前 مرحبا Ελληνικά", size=14)]}, str(dst))
+    assert os.path.getsize(dst) > 0  # drawn without boxes is for the eye; here: it saves
+
+
+def test_the_copy_keeps_the_originals_permissions(tmp_path):
+    src, dst = tmp_path / "a.pdf", tmp_path / "b.pdf"
+    make_pdf(src)
+    os.chmod(src, 0o600)
+    save_signed(str(src), {0: [blob(100, 100)]}, str(dst))
+    assert os.stat(dst).st_mode & 0o777 == 0o600
+    assert not [p for p in os.listdir(tmp_path) if p.endswith(".part")]
+
+
+def test_a_digital_signature_is_noticed(tmp_path):
+    from plusone.pdf import digitally_signed
+    src = tmp_path / "a.pdf"
+    make_pdf(src)
+    assert not digitally_signed(str(src))
+    writer = pypdf.PdfWriter(clone_from=pypdf.PdfReader(str(src)))
+    writer._root_object[pypdf.generic.NameObject("/AcroForm")] = pypdf.generic.DictionaryObject(
+        {pypdf.generic.NameObject("/SigFlags"): pypdf.generic.NumberObject(3),
+         pypdf.generic.NameObject("/Fields"): pypdf.generic.ArrayObject()})
+    with open(src, "wb") as f:
+        writer.write(f)
+    assert digitally_signed(str(src))

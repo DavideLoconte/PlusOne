@@ -209,3 +209,13 @@ def test_marks_move_turn_and_scale():
     assert not touches(text, (25, 0), (35, 0), 1)
     x0, y0, x1, y1 = bounds(text)
     assert x1 - x0 < y1 - y0
+
+
+def test_narrow_initials_are_not_metres_tall():
+    from plusone.ink import MAX_TALL, SIGNATURE_WIDTH, place
+    initials = {"width": 1.0, "strokes": [[[0, 0, 0.5], [0, 20, 0.5]]]}  # 1 pt wide, 20 tall
+    ys = [p[1] for s in place(initials, 100, 100) for p in s.points]
+    assert max(ys) - min(ys) <= MAX_TALL * SIGNATURE_WIDTH + 1e-6
+    wide = {"width": 1.0, "strokes": [[[0, 0, 0.5], [1, 0.2, 0.5]]]}
+    xs = [p[0] for s in place(wide, 100, 100) for p in s.points]
+    assert abs(max(xs) - min(xs) - SIGNATURE_WIDTH) < 1e-6  # an ordinary signature as before
