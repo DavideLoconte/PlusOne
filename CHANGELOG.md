@@ -55,6 +55,18 @@ Sign on the tablet.
 - Asking again to sign a PDF that is waiting for the tablet, or already open,
   no longer opens it twice: *Done* closed one window, and the others kept the
   tablet connected.
+- Less lag:
+  - each frame reaches the tablet a frame sooner: the MPEG-TS muxer and RTP
+    payloader held every frame's last packets until the next frame came
+    (16 ms at 60 Hz, up to 100 ms for the last change on a still screen);
+    Plus One now sends each frame whole as soon as it is encoded;
+  - the stream carries 60 frames a second where it carried about 47: the
+    virtual monitor runs at 120 Hz, because at 60 Hz Mutter skipped frames
+    that came a little early;
+  - the signing window draws 60 frames a second while you write (it managed
+    33-40): the page is a texture made once, and a frame only draws the
+    newest bit of the stroke (3.5 ms a frame instead of 10);
+  - video packets are marked for Wi-Fi's video queue (DSCP EF).
 - New dependencies: `gir1.2-poppler-0.18`, `python3-pypdf` (`.deb`); the
   Flatpak builds poppler 25.12 and pypdf.
 

@@ -4,6 +4,9 @@ Video-only MPEG-TS: without an audio track the sink renders frames as they
 arrive instead of syncing them to an audio clock (measured ~90 ms -> ~50 ms).
 """
 import collections
+import random
+import socket
+import struct
 import time
 
 from gi.repository import Gst
@@ -31,6 +34,51 @@ ENCODERS = {
 # Mutter hands out BGRA as readily as BGRx; asking for it makes the colour
 # conversion a no-op for NVENC (it cost ~2.3 ms of CPU per 1920x1200 frame).
 CAPTURE_FORMAT = "BGRA"
+# Mutter gives the virtual monitor the stream's max-framerate as its refresh
+# rate, and skips frames that come a little early for it: at 60 Hz, a window
+# drawing 60 frames a second reached the encoder at about 47 (frames 21 ms
+# apart, often 30). At 120 Hz it records them all, 6.5 ms from capture to
+# encoded; pacing them back to 60 here cost 3-4 ms more on average.
+CAPTURE_RATE_FACTOR = 2
+TS_PER_RTP = 7  # 7 x 188 bytes of MPEG-TS per RTP packet, as WFD sinks expect
+RTP_MP2T = 33
+# Wi-Fi sends packets marked EF (DSCP 46) from its video queue (WMM AC_VI),
+# which waits less for the air than best effort.
+DSCP_EF = 46
+
+
+class RtpSender:
+    """MPEG-TS over RTP to the sink, each frame sent whole as soon as it is
+    muxed. mpegtsmux alignment=7 kept a frame's last packets until the next
+    frame came, and rtpmp2tpay does the same with single TS packets: every
+    frame reached the sink a frame late, and the last change on a still
+    screen only with the next keepalive frame (100 ms)."""
+
+    def __init__(self, host, port, bind_port):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, DSCP_EF << 2)
+        self.sock.bind(("0.0.0.0", bind_port))
+        self.sock.connect((host, port))
+        self.seq = random.getrandbits(16)
+        self.ssrc = random.getrandbits(32)
+        self.packets = 0
+
+    def send(self, data, pts):
+        """data: whole TS packets; pts: nanoseconds (RTP counts 90 kHz)."""
+        stamp = (pts * 9 // 100000) & 0xFFFFFFFF
+        size = 188 * TS_PER_RTP
+        for offset in range(0, len(data), size):
+            header = struct.pack("!BBHII", 0x80, RTP_MP2T, self.seq, stamp, self.ssrc)
+            try:
+                self.sock.send(header + data[offset:offset + size])
+            except OSError:
+                pass  # the sink is not listening (yet): ICMP port unreachable
+            self.seq = (self.seq + 1) & 0xFFFF
+            self.packets += 1
+
+    def close(self):
+        self.sock.close()
 
 
 def pick_encoder(preferred="auto"):
@@ -60,16 +108,17 @@ class Streamer:
             # one so the sink keeps receiving data on a static screen.
             video = (f"pipewiresrc path={source} do-timestamp=true always-copy=false keepalive-time=100 ! "
                      f"video/x-raw,format={CAPTURE_FORMAT},width={width},height={height},"
-                     f"max-framerate={fps}/1")
+                     f"max-framerate={fps * CAPTURE_RATE_FACTOR}/1")
         element, options, raw_format = ENCODERS[encoder]
         enc = f"{element} name=enc " + options.format(bitrate=bitrate, gop=fps * KEYFRAME_SECONDS)
         self.pipeline = Gst.parse_launch(
             f"{video} ! queue max-size-buffers=1 leaky=downstream ! "
             f"videoconvert n-threads=4 ! video/x-raw,format={raw_format} ! "
             f"{enc} ! video/x-h264,profile=high ! h264parse config-interval=-1 ! "
-            f"queue max-size-buffers=2 ! mpegtsmux alignment=7 ! "
-            f"rtpmp2tpay pt=33 mtu=1400 ! "
-            f"udpsink host={host} port={port} bind-port={bind_port} sync=false async=false")
+            f"queue max-size-buffers=2 ! mpegtsmux alignment=-1 ! "
+            f"appsink name=out emit-signals=true sync=false async=false buffer-list=true max-buffers=0")
+        self.sender = RtpSender(host, port, bind_port)
+        self.pipeline.get_by_name("out").connect("new-sample", self._send)
         self._cap_keyframes(self.pipeline.get_by_name("enc"), bitrate, fps)
         self._last_keyframe = 0.0
         # Encoded frames of the last seconds, (time, bytes, keyframe): when
@@ -90,6 +139,24 @@ class Streamer:
 
     def stop(self):
         self.pipeline.set_state(Gst.State.NULL)
+        self.sender.close()
+
+    def _send(self, appsink):
+        """Streaming thread: what the muxer made of one frame, out at once."""
+        sample = appsink.emit("pull-sample")
+        if sample is None:
+            return Gst.FlowReturn.EOS
+        buffers = sample.get_buffer_list()
+        if buffers is None:
+            buffers = [sample.get_buffer()]
+        else:
+            buffers = [buffers.get(i) for i in range(buffers.length())]
+        data = b"".join(b.extract_dup(0, b.get_size()) for b in buffers)
+        pts = next((b.pts for b in buffers if b.pts != Gst.CLOCK_TIME_NONE), None)
+        if pts is None:
+            pts = time.monotonic_ns()
+        self.sender.send(data, pts)
+        return Gst.FlowReturn.OK
 
     @staticmethod
     def _cap_keyframes(enc, bitrate, fps):

@@ -51,6 +51,28 @@ picture even though M3 does not advertise it.
 `wfd_sec_low_latency_mode` and LLWFD are source-side (phone → TV) only. UIBC
 input sets `UIBCDetected` and `DirectRenderer::setNonAVSyncMode(true)`.
 
+### PC side (2026-10-24, GNOME 46, GStreamer 1.24, PipeWire 1.0.7)
+
+- `mpegtsmux alignment=7` keeps a frame's last TS packets until it has 7,
+  i.e. until the next frame; `rtpmp2tpay` does the same with the single-packet
+  buffers of `alignment=0/-1` (it flushes at once only for buffers of 2+
+  packets). Measured at 4 fps: the PES of most frames was complete 250 ms
+  after encoding (one frame later), and ~1 ms with Plus One's own RTP
+  sender. The video PES carry their length, so a sink can finish a frame
+  without waiting for the next PES.
+- Mutter makes a virtual monitor's refresh rate the stream's
+  `max-framerate` and skips frames that come a little early: a window
+  drawing at 60 fps reached the encoder at ~47 fps (frames 21 ms apart, p90
+  30). With `max-framerate=120/1` (a 120 Hz monitor) the same window arrived
+  at 60 fps (gaps p50 16.8, p90 19). Capture to encoded frame with NVENC:
+  6.5 ms. A token-bucket pacer back to 60 fps added 3-4 ms on average.
+- `pipewiresrc` 1.0.7 cannot negotiate DMA-BUF caps, so Mutter copies each
+  frame to shared memory; the VA-API encoder gets no zero-copy path.
+- The signing window as one `GtkDrawingArea`: GTK spent ~10 ms a frame
+  (p90 17) painting and uploading the whole window, so it ran at 33-40 fps
+  with the pen; as a texture for the page plus a cairo node for the newest
+  segments, 3.5 ms a frame and a steady 60 fps.
+
 ## Starting the receiver
 
 - `adb shell cmd statusbar click-tile com.samsung.android.secondscreen/.tile.ScreenSharingTile`
