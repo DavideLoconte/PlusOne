@@ -60,3 +60,26 @@ def test_sign_entry_of_a_per_user_install_comes_back(tmp_path):
     entry.load_from_file(str(path), GLib.KeyFileFlags.KEEP_TRANSLATIONS)
     assert "Hidden" not in entry.get_keys("Desktop Entry")[0]
     assert entry.get_locale_string("Desktop Entry", "Name", "it") == "Firma sul tablet"
+
+
+def test_a_broken_settings_file_is_not_trusted(tmp_path):
+    from plusone.engine import Settings
+    path = tmp_path / "settings.json"
+    for content in ("[]", "null", "3"):
+        path.write_text(content)
+        assert load_settings(str(path)) == Settings()
+    path.write_text('{"background": "no", "bitrate": "9999; rm", "fps": true, "encoder": 3, '
+                    '"known_sinks": ["Tab", 1], "sign_tablet": "abcd", "touch": false}')
+    settings = load_settings(str(path))
+    assert settings.background is True and settings.bitrate == Settings().bitrate and settings.fps == 60
+    assert settings.encoder == "auto" and settings.known_sinks == []
+    assert settings.sign_tablet == "abcd" and settings.touch is False
+
+
+def test_settings_are_private(tmp_path, monkeypatch):
+    import os
+    from plusone import app
+    from plusone.engine import Settings
+    monkeypatch.setattr(app, "CONFIG", str(tmp_path / "plus-one" / "settings.json"))
+    app.save_settings(Settings())
+    assert os.stat(app.CONFIG).st_mode & 0o077 == 0

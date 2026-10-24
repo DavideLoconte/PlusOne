@@ -12,6 +12,7 @@ The Intel AX211 firmware sometimes crashes while joining the tablet's group
 half-made group for a minute or more, deaf to new attempts, until Second
 Screen is closed and reopened on it.
 """
+import ipaddress
 import time
 
 from gi.repository import GLib, NM
@@ -25,6 +26,7 @@ ATTEMPT_DEADLINE = 55  # seconds; only if NetworkManager never fails the attempt
 # never dials our RTSP port; drop such a group and try again.
 RTSP_DEADLINE = 8
 MAX_FIND = 600  # seconds, NetworkManager's limit; a find ends after 30 s unless told
+GIVE_UP_RECHECK = 5  # seconds, while an attempt runs past the time to give up
 
 
 def _path(obj):
@@ -42,7 +44,8 @@ def is_wfd_sink(peer):
 
 class P2PLink:
     def __init__(self, match=None, on_found=None, on_hint=None, give_up_after=None, on_give_up=None):
-        """match: peer MAC or substring of its name; None picks the first WFD sink.
+        """match: peer MACs or names (a list), or one MAC or substring of a name;
+        None picks the first WFD sink.
 
         on_found(name) fires when the tablet shows up; on_hint() after repeated
         failed attempts or a Wi-Fi driver reset, to ask the user to reopen
@@ -64,17 +67,30 @@ class P2PLink:
         self._reset = False  # the Wi-Fi device was recreated while we looked
         self.client = NM.Client.new(None)
         self.device = next(d for d in self.client.get_devices() if isinstance(d, NM.DeviceWifiP2P))
-        self.match = match.lower() if match else None
+        if isinstance(match, str):
+            match = [match]
+        self.match = [m.lower() for m in match] if match else None
         self.peer = None
+        # The group's IPv4 networks once it is up: where the tablet's RTSP
+        # connection may come from (read from other threads: replaced whole).
+        self.networks = ()
         self.ac = None
         self.attempt = 0
         self.connected = False
 
     def _matches(self, peer):
         if self.match:
-            return (self.match == (peer.get_hw_address() or "").lower()
-                    or self.match in (peer.get_name() or "").lower())
+            mac, name = (peer.get_hw_address() or "").lower(), (peer.get_name() or "").lower()
+            return any(m == mac or (m and m in name) for m in self.match)
         return is_wfd_sink(peer)
+
+    def owns(self, address):
+        """Whether address is on the group's network: the tablet's, not the LAN's."""
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError:
+            return False
+        return any(ip in network for network in self.networks)
 
     def start(self):
         # An Intel firmware crash makes NetworkManager drop the P2P device and
@@ -103,8 +119,10 @@ class P2PLink:
                 NM.DeviceState.PREPARE, NM.DeviceState.CONFIG, NM.DeviceState.NEED_AUTH,
                 NM.DeviceState.IP_CONFIG, NM.DeviceState.IP_CHECK, NM.DeviceState.ACTIVATED):
             # Never cut an attempt short: it ends within a minute, and no new
-            # one starts once it is time to give up (see _retry).
-            return True
+            # one starts once it is time to give up (see _retry). Look again
+            # soon, not a whole window later.
+            self._give_up_source = GLib.timeout_add_seconds(GIVE_UP_RECHECK, self._give_up)
+            return False
         self._give_up_source = None
         self._stop_trying()
         return False
@@ -247,14 +265,19 @@ class P2PLink:
             # A recreated device becomes usable here: search again.
             self._find()
         elif new == NM.DeviceState.ACTIVATED:
-            log("Wi-Fi Direct group up")
+            config = dev.get_ip4_config()
+            self.networks = tuple(
+                ipaddress.ip_network(f"{a.get_address()}/{a.get_prefix()}", strict=False)
+                for a in (config.get_addresses() if config else []))
+            log("Wi-Fi Direct group up", ", ".join(map(str, self.networks)))
             GLib.timeout_add_seconds(RTSP_DEADLINE, self._rtsp_deadline, self.attempt)
         elif new == NM.DeviceState.FAILED and not self.connected and self.peer and not self.stopped:
             log(f"Wi-Fi Direct attempt {self.attempt} failed (reason {reason})")
             self._retry()
 
-    def stop(self, done=None):
+    def stop(self):
         self.stopped = True
+        self.networks = ()
         if self._give_up_source:
             GLib.source_remove(self._give_up_source)
             self._give_up_source = None
@@ -267,8 +290,5 @@ class P2PLink:
                 self._handler = None
             self.device.stop_find(None, None, None)
         if self.ac is not None:
-            self.client.deactivate_connection_async(self.ac, None,
-                                                    lambda *a: done and done())
+            self.client.deactivate_connection_async(self.ac, None, None)
             self.ac = None
-        elif done:
-            done()

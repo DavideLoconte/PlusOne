@@ -3,16 +3,19 @@
 Second Screen sends the pen as a UIBC HIDC "Gesture" device: first its HID
 report descriptor (digitizer pen, report ID 0x14: tip/barrel/invert/eraser/
 in-range bits, X/Y 0..32767, pressure 0..4096, X/Y tilt -90..90), then
-10-byte input reports. If /dev/uhid is writable we replay that descriptor
-and those reports into a virtual HID device, so the kernel creates a proper
-tablet (pressure and tilt reach Krita, GIMP, Xournal++...). Otherwise the pen
-drives the pointer through Mutter's remote desktop session.
+10-byte input reports. If /dev/uhid is writable we create a virtual HID
+device with that same descriptor (S_PEN, never the one received: whatever
+reaches the UIBC port must not get to describe a keyboard) and replay the
+reports that fit it, so the kernel creates a proper tablet (pressure and
+tilt reach Krita, GIMP, Xournal++...). Otherwise the pen drives the pointer
+through Mutter's remote desktop session.
 
 The reports are also published, all of them, to readers in this process
 (`feed`): the signing window draws with those.
 """
 import collections
 import os
+import select
 import struct
 import threading
 import time
@@ -31,6 +34,19 @@ BTN_LEFT, BTN_RIGHT = 0x110, 0x111
 TIP, BARREL, IN_RANGE = 0x01, 0x02, 0x10
 AXIS_MAX = 32767
 PRESSURE_MAX = 4096
+REPORT_ID, REPORT_SIZE = 0x14, 10
+# The Galaxy Tab's S Pen as Second Screen describes it (one report, 0x14):
+# Digitizer / Pen / Stylus with tip, barrel, invert, eraser and in-range
+# bits, X and Y 0..32767, tip pressure 0..4096, X and Y tilt -90..90.
+S_PEN = bytes.fromhex(
+    "050d0902a10185140920a10009420944093c0945093215002501750195058102950381030501"
+    "093075109501a4550d65133500463a2027ff7f000081020931462c1827ff7f00008102b4050d"
+    "093026001081027508093d15a6255a8102093e8102c0c0")
+
+
+def is_report(data):
+    """Whether data is a pen report that fits S_PEN."""
+    return len(data) == REPORT_SIZE and data[0] == REPORT_ID
 
 
 def parse_report(data):
@@ -88,29 +104,38 @@ class UhidPen:
         """struct uhid_event { u32 type; struct uhid_input2_req { u16 size; data } }."""
         return struct.pack("<IH", UHID_INPUT2, len(data)) + data
 
-    def __init__(self, descriptor):
-        self.fd = os.open(UHID_PATH, os.O_RDWR | os.O_CLOEXEC)
-        os.write(self.fd, self.create_event(descriptor))
+    def __init__(self):
+        self.fd = os.open(UHID_PATH, os.O_RDWR | os.O_CLOEXEC | os.O_NONBLOCK)
+        self.closing = False
+        os.write(self.fd, self.create_event(S_PEN))
         # The kernel queues start/open notifications; drain them so the queue
-        # never fills up.
+        # never fills up. The drain thread closes the fd, once told to: closed
+        # here, its number could be another file's by the time it reads.
         threading.Thread(target=self._drain, daemon=True).start()
         log("pen: virtual HID tablet created (pressure and tilt)")
 
     def _drain(self):
         try:
-            while os.read(self.fd, 4380):
-                pass
+            while not self.closing:
+                if select.select([self.fd], [], [], 0.5)[0]:
+                    os.read(self.fd, 4380)
         except OSError:
             pass
-
-    def report(self, data):
-        os.write(self.fd, self.input_event(data))
-
-    def close(self):
-        try:
-            os.write(self.fd, struct.pack("<I", UHID_DESTROY))
         finally:
             os.close(self.fd)
+
+    def report(self, data):
+        if is_report(data) and not self.closing:
+            os.write(self.fd, self.input_event(data))
+
+    def close(self):
+        if self.closing:
+            return
+        try:
+            os.write(self.fd, struct.pack("<I", UHID_DESTROY))
+        except OSError:
+            pass
+        self.closing = True
 
 
 class PointerPen:
@@ -123,7 +148,7 @@ class PointerPen:
         log("pen: no access to /dev/uhid, the pen drives the pointer (no pressure)")
 
     def report(self, data):
-        if len(data) < 6 or data[0] != 0x14:
+        if not is_report(data):
             return
         bits = data[1]
         x, y = struct.unpack("<HH", data[2:6])

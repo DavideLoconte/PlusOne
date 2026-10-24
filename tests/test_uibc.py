@@ -41,9 +41,8 @@ def hidc(usage, data, hid_type=6):
 def server():
     injector, pens = Recorder(), []
 
-    def factory(descriptor):
+    def factory():
         pen = Recorder()
-        pen.descriptor = descriptor
         pens.append(pen)
         return pen
 
@@ -79,8 +78,28 @@ def test_pen_descriptor_then_reports(server):
     sink.sendall(packet(1, hidc(1, PEN_DESCRIPTOR)))
     sink.sendall(packet(1, hidc(0, PEN_REPORT)))
     assert wait_for(lambda: pens and pens[0].calls)
-    assert pens[0].descriptor == PEN_DESCRIPTOR
     assert pens[0].calls == [("report", PEN_REPORT)]
+
+
+def test_the_pen_is_always_the_s_pen():
+    # Whatever reaches the UIBC port, the virtual device is the S Pen: a
+    # descriptor of a keyboard must not become one.
+    from plusone import pen
+    assert pen.S_PEN == PEN_DESCRIPTOR
+    assert pen.UhidPen.create_event(pen.S_PEN).endswith(PEN_DESCRIPTOR)
+    assert pen.is_report(PEN_REPORT)
+    assert not pen.is_report(b"\x01" + PEN_REPORT[1:])  # another report id
+    assert not pen.is_report(PEN_REPORT + b"\x00")      # another size
+
+
+def test_only_the_tablet_reaches_the_input(monkeypatch):
+    srv = UibcServer(Recorder(), port=0, peer="10.9.9.9")
+    stranger = socket.create_connection(srv.sock.getsockname())
+    stranger.settimeout(2)
+    assert stranger.recv(1) == b""  # hung up on: 127.0.0.1 is not the tablet
+    stranger.close()
+    assert not srv.conns
+    srv.close()
 
 
 def test_pen_report_without_descriptor_is_dropped(server):

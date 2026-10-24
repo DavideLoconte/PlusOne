@@ -67,8 +67,14 @@ class Window(Adw.ApplicationWindow):
             else 1 + MODE_LIST.index(current)
         self.bitrate_row = Adw.SpinRow.new_with_range(5, 60, 1)
         self.bitrate_row.set_value(self.settings.bitrate / 1000)
+        # Once a tablet streamed, only it gets the desktop: forget it to use another.
+        self.known_row = Adw.ActionRow(visible=False)
+        self.forget_button = Gtk.Button(valign=Gtk.Align.CENTER, css_classes=["flat"])
+        self.forget_button.connect("clicked", lambda b: self._forget_displays())
+        self.known_row.add_suffix(self.forget_button)
         self.display_group.add(self.mode_row)
         self.display_group.add(self.bitrate_row)
+        self.display_group.add(self.known_row)
         page.add(self.display_group)
 
         self.options_group = Adw.PreferencesGroup()
@@ -134,6 +140,8 @@ class Window(Adw.ApplicationWindow):
         self.mode_row.set_title(_("Resolution"))
         self.bitrate_row.set_title(_("Quality"))
         self.bitrate_row.set_subtitle(_("Mbit/s: higher is sharper but uses more bandwidth"))
+        self.known_row.set_title(_("Only this tablet gets the desktop"))
+        self.forget_button.set_label(_("Forget"))
         self.options_group.set_title(_("Options"))
         self.touch_row.set_title(_("Touch and S Pen"))
         self.sign_row.set_title(_("Sign on Tablet"))
@@ -220,6 +228,16 @@ class Window(Adw.ApplicationWindow):
             self.background_row.set_active(self.settings.background)
         self.sign_row.set_subtitle(self._sign_subtitle())
         self._refresh_tablets()
+        known = self.settings.known_sinks
+        self.known_row.set_visible(bool(known))
+        self.known_row.set_subtitle(", ".join(k for k in known if ":" not in k) or ", ".join(known))
+        self.known_row.set_sensitive(not in_session)
+
+    def _forget_displays(self):
+        """The next tablet streamed to becomes the only one."""
+        self.settings.known_sinks = []
+        self.app.save_settings()
+        self._refresh()
 
     def _refresh_tablets(self):
         """The tablets to choose from: the paired ones, by name, after

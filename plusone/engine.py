@@ -6,7 +6,8 @@ happens on helper threads and reports back through GLib.idle_add.
 """
 import socket
 import threading
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 
 from gi.repository import Gio, GLib
 
@@ -36,7 +37,10 @@ class Settings:
     use_adb: bool = False
     touch: bool = True
     test_pattern: bool = False
-    peer: str | None = None
+    peer: str | None = None  # the command line's --peer
+    # The tablets used as a display (Wi-Fi Direct names and MACs): once there
+    # is one, no other screen (a TV that mirrors, say) gets the desktop.
+    known_sinks: list = field(default_factory=list)
     reconnect: bool = True  # look for the tablet again for a while after it disconnects
     # The app (not the engine): keep running without a window and start at
     # login, so the Quick Settings toggle connects at once.
@@ -89,6 +93,9 @@ class Controller:
         self.encoder = None
         self.mode = None  # (width, height, fps) of the current session
         self._running = False
+        # No session (or its teardown done): the next connection may start one.
+        self._idle = threading.Event()
+        self._idle.set()
 
     @property
     def running(self):
@@ -124,7 +131,7 @@ class Controller:
             self.srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.srv.bind(("0.0.0.0", RTSP_PORT))
             self.srv.listen(1)
-        except (OSError, RuntimeError) as e:
+        except (OSError, RuntimeError, KeyError) as e:  # KeyError: an encoder not known
             self._set_state(State.ERROR, "{error}", error=str(e))
             return
         self._running = True
@@ -166,7 +173,8 @@ class Controller:
             return
         self._set_state(State.WAITING, "Tap “Second screen” on the tablet")
         try:
-            self.link = P2PLink(self.settings.peer, on_found=self._on_found, on_hint=self._on_link_hint,
+            match = self.settings.peer or self.settings.known_sinks or None
+            self.link = P2PLink(match, on_found=self._on_found, on_hint=self._on_link_hint,
                                 give_up_after=window, on_give_up=self._on_give_up)
         except StopIteration:
             self._fail("This PC's Wi-Fi cannot do Wi-Fi Direct")
@@ -197,34 +205,68 @@ class Controller:
                 conn, addr = self.srv.accept()
             except OSError:
                 return
-            if not self._running:  # stopped while the tablet dialled in
+            try:
+                self._serve(conn, addr)
+            except Exception as e:  # noqa: BLE001 - one bad connection must not end the listening
+                log("RTSP connection dropped:", repr(e))
                 conn.close()
-                return
-            if self.link:
-                self.link.connected = True
-            log("sink connected from", addr[0])
-            s = self.settings
-            if s.touch and self.monitor:
-                try:
-                    self.uibc = UibcServer(self.monitor, UIBC_PORT, pen_factory=self._make_pen)
-                except OSError as e:
-                    log("touch disabled:", e)
-            this = []  # the session, for on_close
-            self.session = WfdSession(conn, self._on_play, self._on_idr,
-                                      on_close=lambda: self._from_thread(self._on_session_closed, this[0]),
-                                      mode=None if s.auto_mode else (s.width, s.height, s.fps),
-                                      uibc_port=UIBC_PORT if self.uibc else None)
-            this.append(self.session)
-            this[0].run()
+            # The session's teardown runs on the main loop: the next
+            # connection waits for it, so two sessions never overlap.
+            self._idle.wait(10)
 
-    def _make_pen(self, descriptor):
-        # Called on the UIBC thread once the tablet describes its pen.
+    def _from_tablet(self, address):
+        """Whether address is the tablet's: on the Wi-Fi Direct group's
+        network, which NetworkManager reports a moment after the group is up.
+        Port 7236 listens on every interface; the LAN must not get the desktop."""
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            link = self.link
+            if link and link.owns(address):
+                return True
+            if link and link.networks:
+                return False
+            time.sleep(0.1)
+        return False
+
+    def _serve(self, conn, addr):
+        if not self._running:  # stopped while the tablet dialled in
+            conn.close()
+            return
+        if not self._from_tablet(addr[0]):
+            log("RTSP: hung up on", addr[0], "(not on the Wi-Fi Direct group)")
+            conn.close()
+            return
+        self._idle.clear()
+        if self.link:
+            self.link.connected = True
+        log("sink connected from", addr[0])
+        s = self.settings
+        if s.touch and self.monitor:
+            try:
+                self.uibc = UibcServer(self.monitor, UIBC_PORT, pen_factory=self._make_pen, peer=addr[0])
+            except OSError as e:
+                log("touch disabled:", e)
+        this = []  # the session, for on_close
+        self.session = WfdSession(conn, self._on_play, self._on_idr,
+                                  on_close=lambda: self._from_thread(self._on_session_closed, this[0]),
+                                  mode=None if s.auto_mode else (s.width, s.height, s.fps),
+                                  uibc_port=UIBC_PORT if self.uibc else None)
+        this.append(self.session)
+        this[0].run()
+
+    def _make_pen(self):
+        # Called on the UIBC thread once the tablet says it has a pen.
         if pen.uhid_available():
-            device = pen.UhidPen(descriptor)
-            edid = virtual_monitor_edid()
-            if edid:
-                pen.map_to_monitor(edid)
+            device = pen.UhidPen()
+            try:
+                edid = virtual_monitor_edid()
+                if edid:
+                    pen.map_to_monitor(edid)
+            except Exception as e:  # noqa: BLE001 - the pen works, mapped or not
+                log("pen: not mapped to the monitor:", repr(e))
             return device
+        if self.mode is None:
+            raise RuntimeError("no mode yet")
         return pen.PointerPen(self.monitor, self.mode[:2])
 
     def _on_play(self, session):
@@ -244,20 +286,31 @@ class Controller:
         self._from_thread(go)
 
     def _start_stream(self, source):
-        if not self._running or self.session is None:
+        if not self._running or self.session is None or self.mode is None:
             return
         width, height, fps = self.mode
         try:
             self.streamer = media.Streamer(source, self.session.sink_ip, width, height, fps,
                                            self.settings.bitrate, self.encoder,
                                            on_error=lambda message: self._fail("{error}", error=message))
-        except (GLib.Error, OSError) as e:
+        except Exception as e:  # noqa: BLE001 - said to the user, not left half-started
             self._fail("{error}", error=getattr(e, "message", None) or str(e))
             return
         self.streamer.start()
-        name = self.link.peer.get_name() if self.link and self.link.peer else "tablet"
+        peer = self.link.peer if self.link else None
+        name = peer.get_name() if peer else "tablet"
+        if peer:
+            self._learn(peer)
         self._set_state(State.STREAMING, "{name} · {width}×{height} @ {fps} Hz",
                         name=name, width=width, height=height, fps=fps)
+
+    def _learn(self, peer):
+        """The tablet streamed to is a known display from now on (its name, and
+        its MAC, which Android may change); the owner saves the settings."""
+        known = self.settings.known_sinks
+        for value in (peer.get_name(), (peer.get_hw_address() or "").lower()):
+            if value and value.lower() not in [k.lower() for k in known]:
+                known.append(value)
 
     def _on_idr(self):
         if self.streamer:
@@ -278,6 +331,7 @@ class Controller:
         if self.link:
             self.link.stop()
             self.link = None
+        self._idle.set()
 
     def _on_session_closed(self, session):
         if session is not self.session:

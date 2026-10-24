@@ -63,7 +63,6 @@ class RtpSender:
         self.dest = (host, port)
         self.seq = random.getrandbits(16)
         self.ssrc = random.getrandbits(32)
-        self.packets = 0
         self.errors = set()  # kinds of send errors logged already
 
     def send(self, data, pts):
@@ -84,7 +83,6 @@ class RtpSender:
                     log("RTP: cannot send:", e.strerror)
                 continue
             self.seq = (self.seq + 1) & 0xFFFF
-            self.packets += 1
 
     def close(self):
         self.sock.close()
@@ -142,8 +140,8 @@ class Streamer:
         # Encoded frames of the last seconds, (time, bytes, keyframe): when
         # the tablet loses data, the log says what was being sent.
         self._sent = collections.deque()
-        self.pipeline.get_by_name("enc").get_static_pad("src").add_probe(
-            Gst.PadProbeType.BUFFER, self._count)
+        self._probe_pad = self.pipeline.get_by_name("enc").get_static_pad("src")
+        self._probe = self._probe_pad.add_probe(Gst.PadProbeType.BUFFER, self._count)
         bus = self.pipeline.get_bus()
         bus.add_signal_watch()
         self._bus_handler = bus.connect("message::error", self._on_error)
@@ -166,6 +164,7 @@ class Streamer:
         bus.disconnect(self._bus_handler)
         bus.remove_signal_watch()
         self._sink.disconnect(self._sink_handler)
+        self._probe_pad.remove_probe(self._probe)
 
     def _send(self, appsink):
         """Streaming thread: what the muxer made of one frame, out at once."""

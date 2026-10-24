@@ -22,6 +22,9 @@ MODES = {
 
 
 DEFAULT_MODE = (1920, 1080, 60)
+MAX_HEAD = 8192       # bytes: a request line and its headers
+MAX_BODY = 65536      # bytes: parameters, an EDID among them
+IDLE_TIMEOUT = 45     # seconds without a word from the sink (keepalives come every 20)
 
 
 def parse_edid(value):
@@ -45,6 +48,8 @@ def parse_edid(value):
     width = dtd[2] | (dtd[4] & 0xF0) << 4
     height = dtd[5] | (dtd[7] & 0xF0) << 4
     total = (width + (dtd[3] | (dtd[4] & 0x0F) << 8)) * (height + (dtd[6] | (dtd[7] & 0x0F) << 8))
+    if not total:
+        return None
     return width, height, round(clock_khz * 1000 / total)
 
 
@@ -53,7 +58,10 @@ def advertised_modes(value):
     fields = value.split(",")[0].split()
     if len(fields) < 6:
         return []
-    bitmaps = {"CEA": int(fields[4], 16), "VESA": int(fields[5], 16)}
+    try:
+        bitmaps = {"CEA": int(fields[4], 16), "VESA": int(fields[5], 16)}
+    except ValueError:
+        return []
     return [mode for mode, (table, bit) in MODES.items() if bitmaps[table] >> bit & 1]
 
 
@@ -89,7 +97,11 @@ class Rtsp:
         self.buf += chunk
 
     def read(self):
+        """(first line, headers, body) of the next message; ValueError if it
+        is too big or malformed."""
         while b"\r\n\r\n" not in self.buf:
+            if len(self.buf) > MAX_HEAD:
+                raise ValueError("RTSP headers too long")
             self._fill()
         head, self.buf = self.buf.split(b"\r\n\r\n", 1)
         lines = head.decode("latin1").split("\r\n")
@@ -97,7 +109,9 @@ class Rtsp:
         for line in lines[1:]:
             k, _, v = line.partition(":")
             headers[k.strip().lower()] = v.strip()
-        length = int(headers.get("content-length", "0"))
+        length = int(headers.get("content-length", "0"))  # ValueError if not a number
+        if not 0 <= length <= MAX_BODY:
+            raise ValueError(f"RTSP body of {length} bytes")
         while len(self.buf) < length:
             self._fill()
         body, self.buf = self.buf[:length], self.buf[length:]
@@ -142,6 +156,7 @@ class WfdSession:
                  sink_ip=None, rtcp_port=19001):
         """mode: (width, height, fps), or None to pick it from the sink's caps."""
         self.conn = conn
+        conn.settimeout(IDLE_TIMEOUT)  # a sink gone silent (out of range) ends the session
         self.rtsp = Rtsp(conn)
         self.on_play = on_play
         self.on_idr = on_idr
@@ -191,9 +206,11 @@ class WfdSession:
         last_lost = 0
         while not self.stop_event.is_set():
             try:
-                pkt, _ = sock.recvfrom(2048)
+                pkt, sender = sock.recvfrom(2048)
             except socket.timeout:
                 continue
+            if sender[0] != self.sink_ip:
+                continue  # only the tablet's reports count
             if len(pkt) >= 32 and pkt[1] == 201:
                 lost = int.from_bytes(pkt[13:16], "big", signed=True)
                 if 0 <= last_lost < lost:
@@ -216,7 +233,8 @@ class WfdSession:
             while not self.stop_event.is_set():
                 first, headers, body = rtsp.read()
                 if first.startswith("RTSP/1.0"):
-                    step = self.pending.pop(int(headers.get("cseq", "-1")), "?")
+                    cseq = headers.get("cseq", "")
+                    step = self.pending.pop(int(cseq) if cseq.isdigit() else -1, "?")
                     if not first.startswith("RTSP/1.0 200"):
                         log(f"{step} rejected: {first}")
                     if step == "M1":
@@ -235,7 +253,7 @@ class WfdSession:
                                                   "wfd_trigger_method: SETUP\r\n")] = "M5"
                     continue
 
-                method = first.split()[0]
+                method = (first.split() or [""])[0]
                 reply = {"CSeq": headers.get("cseq", "0")}
                 if method == "OPTIONS":
                     reply["Public"] = ("org.wfa.wfd1.0, SETUP, TEARDOWN, PLAY, PAUSE, "
@@ -252,6 +270,10 @@ class WfdSession:
                 if method == "SETUP":
                     reply["Session"] = f"{self.session_id};timeout=30"
                     reply["Transport"] = "RTP/AVP/UDP;unicast;client_port=19000;server_port=19000-19001"
+                elif method == "PLAY" and self.mode is None:
+                    # Not before the mode is settled (M3/M4): nothing to play yet.
+                    rtsp.send("RTSP/1.0 455 Method Not Valid in This State", reply)
+                    continue
                 elif method == "PLAY":
                     reply["Session"] = self.session_id
                     rtsp.send("RTSP/1.0 200 OK", reply)
@@ -269,6 +291,8 @@ class WfdSession:
                 rtsp.send("RTSP/1.0 200 OK", reply)
         except (EOFError, ConnectionError, OSError) as e:
             log("session ended:", e)
+        except Exception as e:  # noqa: BLE001 - a malformed message ends this session, not the app's listening
+            log("session ended by a bad message:", repr(e))
         finally:
             self.stop_event.set()
             self.on_close()

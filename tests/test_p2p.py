@@ -51,10 +51,30 @@ def test_gives_up_when_idle():
 
 
 def test_never_gives_up_during_an_attempt():
-    from gi.repository import NM
+    from gi.repository import GLib, NM
     for state in (NM.DeviceState.CONFIG, NM.DeviceState.ACTIVATED):
         link = link_in(state)
-        assert link._give_up() is True and not link.gave_up  # checks again later
+        assert link._give_up() is False and not link.gave_up
+        # It checks again in a few seconds, not a whole window later.
+        assert link._give_up_source
+        GLib.source_remove(link._give_up_source)
+
+
+def test_the_group_network_is_the_tablets():
+    import ipaddress
+    link = link_in(None)
+    link.networks = (ipaddress.ip_network("192.168.49.0/24"),)
+    assert link.owns("192.168.49.1") and not link.owns("192.168.1.20") and not link.owns("nonsense")
+
+
+def test_a_known_display_by_name_or_mac():
+    from plusone.p2p import P2PLink
+    link = link_in(None)
+    link.match = ["tab s10 fe+", "aa:bb:cc:dd:ee:ff"]
+    peer = FakePeer("/p/1")
+    assert P2PLink._matches(link, peer)
+    link.match = ["living room tv"]
+    assert not P2PLink._matches(link, peer)
 
 
 def test_no_give_up_once_connected():

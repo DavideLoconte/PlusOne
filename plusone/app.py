@@ -72,19 +72,39 @@ NOTIFICATION = "status"
 
 
 def load_settings(path=CONFIG):
+    """The settings saved, each of the type it should be (others left at
+    their defaults: a hand-edited or broken file must not stop the app)."""
     try:
         with open(path) as f:
             data = json.load(f)
-        known = Settings.__dataclass_fields__
-        return Settings(**{k: v for k, v in data.items() if k in known})
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError):
         return Settings()
+    if not isinstance(data, dict):
+        return Settings()
+    defaults = Settings()
+    kept = {}
+    for name, value in data.items():
+        if name not in Settings.__dataclass_fields__:
+            continue
+        default = getattr(defaults, name)
+        if isinstance(default, bool) or isinstance(default, str):
+            ok = type(value) is type(default)
+        elif isinstance(default, int):
+            ok = type(value) is int and value > 0
+        elif isinstance(default, list):
+            ok = isinstance(value, list) and all(isinstance(v, str) for v in value)
+        else:  # str or None
+            ok = value is None or isinstance(value, str)
+        if ok:
+            kept[name] = value
+    return Settings(**kept)
 
 
 def save_settings(settings):
-    os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
-    # Replaced whole: the Files extension may read it meanwhile.
-    with open(CONFIG + ".part", "w") as f:
+    os.makedirs(os.path.dirname(CONFIG), mode=0o700, exist_ok=True)
+    # Replaced whole: the Files extension may read it meanwhile. Only ours to read.
+    fd = os.open(CONFIG + ".part", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
         json.dump(asdict(settings), f, indent=2)
     os.replace(CONFIG + ".part", CONFIG)
 
@@ -303,6 +323,8 @@ class PlusOneApp(Adw.Application):
         return _(TITLES[state]), detail
 
     def _on_state(self, state, template, args):
+        if state == State.STREAMING:
+            save_settings(self.settings)  # the tablet is a known display now
         self._update_hold()
         if not self.signing.on_state(state):
             self._notify(state, template)
@@ -437,12 +459,18 @@ def _owner_pid(bus):
         return None
 
 
+BUSY = object()  # the running instance did not answer in time
+
+
 def _running_property(bus, name):
     try:
         return bus.call_sync(APP_ID, OBJECT_PATH, "org.freedesktop.DBus.Properties", "Get",
                              GLib.Variant("(ss)", (INTERFACE, name)), None,
                              Gio.DBusCallFlags.NO_AUTO_START, 2000, None).unpack()[0]
-    except GLib.Error:
+    except GLib.Error as e:
+        if e.matches(Gio.io_error_quark(), Gio.IOErrorEnum.TIMED_OUT) or \
+                e.matches(Gio.dbus_error_quark(), Gio.DBusError.NO_REPLY):
+            return BUSY
         return None  # 0.3 had no Version; older releases no interface at all
 
 
@@ -450,6 +478,8 @@ def replace_older_instance():
     """After an upgrade the previous version may still run in the background,
     and GApplication would hand it requests it does not know (like --sign).
     Stop it, unless it is in the middle of a connection."""
+    if IN_FLATPAK:
+        return  # its PID would be the host's: not one to signal from here
     bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
     pid = _owner_pid(bus)
     if pid is None:
@@ -457,7 +487,11 @@ def replace_older_instance():
     version = _running_property(bus, "Version")
     if version == __version__:
         return
-    if _running_property(bus, "State") in ("connecting", "streaming"):
+    state = _running_property(bus, "State")
+    if BUSY in (version, state):
+        log("Plus One is running but busy; leaving it running")
+        return
+    if state in ("connecting", "streaming"):
         log(f"Plus One {version or '(older)'} is connected; leaving it running")
         return
     log(f"replacing Plus One {version or '(older)'} (pid {pid}) with {__version__}")
@@ -465,7 +499,7 @@ def replace_older_instance():
         os.kill(pid, signal.SIGTERM)
     except OSError:
         return
-    for _ in range(30):
+    for _attempt in range(30):
         if _owner_pid(bus) is None:
             return
         time.sleep(0.1)

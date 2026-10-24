@@ -179,3 +179,22 @@ def test_no_uibc_when_sink_lacks_it():
     session.mode, session.uibc_port, session.our_ip = (1920, 1200, 60), 50000, "1.2.3.4"
     session.caps = {"wfd_uibc_capability": "none"}
     assert "wfd_uibc" not in session._m4()
+
+
+def test_what_the_sink_sends_is_bounded():
+    # Anything that reaches port 7236 is a stranger until proved otherwise:
+    # no endless headers, no body of any size, no crash on a bad number.
+    from plusone import rtsp
+    left, right = socket.socketpair()
+    with left, right:
+        reader = Rtsp(left)
+        right.sendall(b"X" * (rtsp.MAX_HEAD + 2))
+        with pytest.raises(ValueError):
+            reader.read()
+    left, right = socket.socketpair()
+    with left, right:
+        right.sendall(b"OPTIONS * RTSP/1.0\r\nContent-Length: 999999999999\r\n\r\n")
+        with pytest.raises(ValueError):
+            Rtsp(left).read()
+    assert rtsp.parse_edid("0001 00ffffffffffff00" + "00" * 64) is None  # all zero timings
+    assert advertised_modes("00 00 02 10 zz yy 00 00") == []

@@ -12,6 +12,7 @@ import threading
 import time
 
 from . import log
+from .pen import S_PEN
 from .pen import feed as pen_feed
 
 TOUCH_DOWN, TOUCH_UP, TOUCH_MOVE = 0, 1, 2
@@ -28,14 +29,17 @@ def arrival_gaps(times):
 
 
 class UibcServer:
-    def __init__(self, injector, port=50000, pen_factory=None):
+    def __init__(self, injector, port=50000, pen_factory=None, peer=None):
         """injector: object with touch_down/touch_motion/touch_up(slot, x, y).
 
-        pen_factory(descriptor) returns an object with report(data)/close()
-        for the S Pen, which arrives as an HIDC device.
+        pen_factory() returns an object with report(data)/close() for the S
+        Pen, which arrives as an HIDC device. peer: the only address taken
+        (the tablet's); another is hung up on.
         """
         self.injector = injector
         self.pen_factory = pen_factory
+        self.peer = peer
+        self.unknown = 0  # generic events logged that are not touches
         self.pen = None
         self.reports = 0
         # Arrival times of the last pen reports: Wi-Fi power saving shows as
@@ -56,6 +60,10 @@ class UibcServer:
                 conn, addr = self.sock.accept()
             except OSError:
                 return
+            if self.peer and addr[0] != self.peer:
+                log("UIBC: hung up on", addr[0], "(not the tablet)")
+                conn.close()
+                continue
             log("UIBC: sink connected from", addr)
             self.conns.add(conn)
             threading.Thread(target=self._handle, args=(conn, addr), daemon=True).start()
@@ -119,8 +127,9 @@ class UibcServer:
                     elif ie_id == TOUCH_UP:
                         self.down.discard(pid)
                         self.injector.touch_up(pid)
-            else:
-                log(f"UIBC: generic event {ie_id} {desc.hex()}")
+            elif self.unknown < 20:  # a few, to see what they are; not a flood
+                self.unknown += 1
+                log(f"UIBC: generic event {ie_id} {desc[:32].hex()}")
 
     def _hidc(self, body):
         # HIDC (WFD 4.11.4): input path, HID type, usage (0 report, 1 descriptor),
@@ -131,12 +140,16 @@ class UibcServer:
         length = struct.unpack(">H", body[3:5])[0]
         data = body[5:5 + length]
         if usage == 1:
-            log(f"UIBC: HID descriptor for type {hid_type}: {data.hex()}")
+            # Only the S Pen's own descriptor is ever used (pen.S_PEN): the
+            # one received only says a pen is there.
+            if data != S_PEN:
+                log(f"UIBC: an unknown HID descriptor for type {hid_type} ({len(data)} bytes), "
+                    "taken as the S Pen's")
             self.pen_states = set()
             self._close_pen()
             if self.pen_factory:
                 try:
-                    self.pen = self.pen_factory(data)
+                    self.pen = self.pen_factory()
                 except Exception as e:  # noqa: BLE001 - touch keeps working without the pen
                     log("pen unavailable:", repr(e))
         elif self.pen:
