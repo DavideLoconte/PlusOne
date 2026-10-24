@@ -125,6 +125,18 @@ def test_date_and_save(window):
     assert time.strftime("%d/%m/%Y") in text and "Original text page 1" in text
 
 
+def test_no_way_out_while_saving(window):
+    # Cancel, Escape or the window manager closing the window while the copy
+    # is written would report nothing although the file appears.
+    win, results, src = window
+    win.add_mark(Stroke([(200, 600, 0.9), (260, 640, 0.9)]))
+    win._save()
+    win._escape()
+    win.close()
+    assert spin(lambda: results, timeout=10)
+    assert results == [str(src).replace(".pdf", "-signed.pdf")]
+
+
 def test_cancel_without_marks_reports_nothing(window):
     win, results, _src = window
     win._cancel()

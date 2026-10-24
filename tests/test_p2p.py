@@ -40,6 +40,7 @@ def link_in(state, connected=False):
     link.device = Device(state)
     link.gave_up = False
     link.on_give_up = lambda: setattr(link, "gave_up", True)
+    link._give_up_at = link._give_up_source = None
     return link
 
 
@@ -101,6 +102,9 @@ def searching_link(monkeypatch, device, window=120):
     link.found, link.hints = [], 0
     link.on_found = link.found.append
     link.on_hint = lambda: setattr(link, "hints", link.hints + 1)
+    link._give_up_at = link._give_up_source = None
+    link.gave_up = False
+    link.on_give_up = lambda: setattr(link, "gave_up", True)
     return link
 
 
@@ -149,3 +153,23 @@ def test_after_a_driver_reset_the_user_is_asked_to_reopen_second_screen(monkeypa
     link.peer = None
     link._poll_peers()
     assert link.hints == 1  # once
+
+
+def test_no_new_attempt_once_it_is_time_to_give_up(monkeypatch):
+    # The tablet stays listed but never answers: attempts follow each other,
+    # and the radio must not keep searching for an hour.
+    import time
+    device = P2PDevice("/Devices/171")
+    link = searching_link(monkeypatch, device)
+    link.peer = FakePeer("/WifiP2PPeer/15")
+    device.peers = [link.peer]
+    link._give_up_at = time.monotonic() - 1
+    assert link._activate() is False
+    assert link.gave_up and link.attempt == 0
+
+
+def test_nothing_after_stop(monkeypatch):
+    link = searching_link(monkeypatch, P2PDevice("/Devices/171"))
+    link.attempt, link.stopped = 3, True
+    link._retry()
+    assert link.hints == 0  # no "reopen Second Screen" once the user stopped

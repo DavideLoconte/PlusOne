@@ -255,8 +255,11 @@ class WfdSession:
                 elif method == "PLAY":
                     reply["Session"] = self.session_id
                     rtsp.send("RTSP/1.0 200 OK", reply)
-                    self.on_play(self)
-                    threading.Thread(target=self._keepalive, daemon=True).start()
+                    # PLAY again (after a PAUSE) resumes what already runs.
+                    if not state.get("playing"):
+                        state["playing"] = True
+                        self.on_play(self)
+                        threading.Thread(target=self._keepalive, daemon=True).start()
                     continue
                 elif method == "SET_PARAMETER" and "wfd_idr_request" in body:
                     self.on_idr()

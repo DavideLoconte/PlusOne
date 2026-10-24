@@ -85,3 +85,16 @@ def test_not_answering_reaches_the_notification(monkeypatch, tmp_path):
     app.controller.state, app.controller.detail = State.CONNECTING, (NOT_ANSWERING, {})
     assert signing.on_state(State.CONNECTING) is True
     assert notes[-1] == (path, i18n._(NOT_ANSWERING))
+
+
+def test_a_start_that_fails_at_once_keeps_its_notification(monkeypatch, tmp_path):
+    # GNOME Network Displays running, say: "sign on this PC instead" must
+    # not be replaced by "tap Second screen".
+    app, signing, _, notes = make(monkeypatch)
+
+    def failing_start():
+        app.controller.state = State.ERROR
+        signing.on_state(State.ERROR)
+    app.controller.start = failing_start
+    signing.request(str(tmp_path / "form.pdf"))
+    assert notes == [] and signing.queue == []

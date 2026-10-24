@@ -124,6 +124,11 @@ def run_sink(sock, log):
     session = headers["session"].split(";")[0]
     rtsp.request("PLAY", "rtsp://src/wfd1.0/streamid=0", extra={"Session": session})
     rtsp.read()
+    # Paused and resumed: still one stream.
+    rtsp.request("PAUSE", "rtsp://src/wfd1.0/streamid=0", extra={"Session": session})
+    rtsp.read()
+    rtsp.request("PLAY", "rtsp://src/wfd1.0/streamid=0", extra={"Session": session})
+    rtsp.read()
     rtsp.request("SET_PARAMETER", "rtsp://localhost/wfd1.0", "wfd_idr_request\r\n",
                  {"Session": session})
     rtsp.read()

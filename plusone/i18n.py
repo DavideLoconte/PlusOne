@@ -97,6 +97,7 @@ _IT = {
     # Engine states
     "Mode {mode} is not supported": "La modalità {mode} non è supportata",
     "Close {apps}: it also uses Wi-Fi Direct": "Chiudi {apps}: usa anche lui il Wi-Fi Direct",
+    "This PC's Wi-Fi cannot do Wi-Fi Direct": "Il Wi-Fi di questo PC non supporta il Wi-Fi Direct",
     "Opening Second Screen on the tablet…": "Apro Second Screen sul tablet…",
     "Tap “Second screen” on the tablet": "Tocca «Second screen» sul tablet",
     "The tablet did not answer: open Second Screen on it and connect again":

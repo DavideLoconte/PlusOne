@@ -101,8 +101,10 @@ def warm_up(name):
 
 class Streamer:
     def __init__(self, source, host, width, height, fps, bitrate, encoder,
-                 port=19000, bind_port=19000, preview=True):
-        """source: a PipeWire node id, or "test" for a moving test pattern."""
+                 port=19000, bind_port=19000, preview=True, on_error=None):
+        """source: a PipeWire node id, or "test" for a moving test pattern.
+        on_error(message) runs on the main loop if the pipeline fails."""
+        self.on_error = on_error or (lambda message: None)
         if source == "test":
             video = (f"videotestsrc is-live=true pattern=ball ! "
                      f"video/x-raw,format={CAPTURE_FORMAT},width={width},height={height},"
@@ -143,6 +145,7 @@ class Streamer:
     def _on_error(self, bus, msg):
         err, dbg = msg.parse_error()
         log("pipeline error:", err.message, dbg or "")
+        self.on_error(err.message)
 
     def start(self):
         self.pipeline.set_state(Gst.State.PLAYING)

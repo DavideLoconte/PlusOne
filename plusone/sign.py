@@ -668,9 +668,10 @@ class SignWindow(Adw.ApplicationWindow):
         self.pen_color, self.pen_width, self.pen_smoothing = load_pen(PEN)
 
         header = Adw.HeaderBar(show_end_title_buttons=False)
-        cancel = Gtk.Button(label=_("Cancel"))
-        cancel.connect("clicked", lambda b: self._cancel())
-        header.pack_start(cancel)
+        self.cancel_button = Gtk.Button(label=_("Cancel"))
+        self.cancel_button.connect("clicked", lambda b: self._cancel())
+        header.pack_start(self.cancel_button)
+        self._saving = False  # the signed copy is being written: no way out meanwhile
         self.done = Gtk.Button(label=_("Done"), css_classes=["suggested-action"])
         self.done.connect("clicked", lambda b: self._save())
         header.pack_end(self.done)
@@ -1000,6 +1001,8 @@ class SignWindow(Adw.ApplicationWindow):
 
     # -- closing ---------------------------------------------------------------
     def _save(self, dst=None):
+        self._saving = True
+        self.cancel_button.set_sensitive(False)
         self.done.set_sensitive(False)
         self.done.set_child(Gtk.Spinner(spinning=True))
         marks = {i: list(m) for i, m in self.marks.items() if m}
@@ -1014,6 +1017,7 @@ class SignWindow(Adw.ApplicationWindow):
         threading.Thread(target=work, daemon=True).start()
 
     def _saved(self, result, next_to_original):
+        self._saving = False
         if isinstance(result, PermissionError) and next_to_original:
             # A read-only folder, or a Flatpak that may only touch the file it
             # was given: ask where to put the signed copy.
@@ -1027,6 +1031,7 @@ class SignWindow(Adw.ApplicationWindow):
         self.close()
 
     def _saving_over(self):
+        self.cancel_button.set_sensitive(True)
         self.done.set_label(_("Done"))
         self.done.set_sensitive(True)
 
@@ -1047,6 +1052,8 @@ class SignWindow(Adw.ApplicationWindow):
         dialog.save(self, None, chosen)
 
     def _cancel(self):
+        if self._saving:
+            return
         if not any(self.marks.values()):
             self.close()
             return
@@ -1068,6 +1075,8 @@ class SignWindow(Adw.ApplicationWindow):
         return self._watching
 
     def _on_close(self, _window):
+        if self._saving:
+            return True  # closing now would lose the result the file is being written for
         self._watching = False
         faulthandler.cancel_dump_traceback_later()
         pen_feed.unlisten(self.area.raw.reader)

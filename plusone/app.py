@@ -218,7 +218,7 @@ class PlusOneApp(Adw.Application):
 
     def do_activate(self):
         from .gui import Window
-        window = self.get_active_window() or Window(self)
+        window = next((w for w in self.get_windows() if isinstance(w, Window)), None) or Window(self)
         window.present()
 
     def do_command_line(self, cmdline):
@@ -383,15 +383,17 @@ class PlusOneApp(Adw.Application):
                                    GLib.Variant("(sa{sv}as)", (INTERFACE, self._properties(), [])))
 
     def _dbus_method(self, connection, sender, path, interface, method, params, invocation):
-        if method == "Connect":
-            self.controller.start()
-        elif method == "Disconnect":
-            self.controller.stop()
-        elif method == "ShowWindow":
-            self.activate()
-        elif method == "SignDocument":
-            self.signing.request(params.unpack()[0])
-        invocation.return_value(None)
+        try:
+            if method == "Connect":
+                self.controller.start()
+            elif method == "Disconnect":
+                self.controller.stop()
+            elif method == "ShowWindow":
+                self.activate()
+            elif method == "SignDocument":
+                self.signing.request(params.unpack()[0])
+        finally:
+            invocation.return_value(None)  # the caller waits for it, whatever happened
 
     def _dbus_get(self, connection, sender, path, interface, prop):
         return self._properties()[prop]

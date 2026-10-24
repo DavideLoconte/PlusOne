@@ -22,6 +22,8 @@ def strings_in(filename):
             found.add(args[0].value)
         if name == "_set_state" and len(args) > 1 and isinstance(args[1], ast.Constant):
             found.add(args[1].value)
+        if name == "_fail" and args and isinstance(args[0], ast.Constant):
+            found.add(args[0].value)
     return found
 
 

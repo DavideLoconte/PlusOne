@@ -17,17 +17,20 @@ CONFIG = "sink_latency_mode low\n"
 
 
 def _adb(*args, timeout=10):
-    return subprocess.run(["adb", *args], capture_output=True, text=True, timeout=timeout)
+    """The finished command; one that hangs (an unreachable wireless device)
+    counts as failed with no output."""
+    try:
+        return subprocess.run(["adb", *args], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        log("adb timed out:", " ".join(args))
+        return subprocess.CompletedProcess(args, 1, "", "")
 
 
 def device():
     """Serial of the first connected Samsung tablet, or None."""
     if not shutil.which("adb"):
         return None
-    try:
-        out = _adb("devices", "-l").stdout
-    except subprocess.TimeoutExpired:
-        return None
+    out = _adb("devices", "-l").stdout
     for line in out.splitlines()[1:]:
         fields = line.split()
         if len(fields) > 1 and fields[1] == "device":

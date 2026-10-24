@@ -50,6 +50,8 @@ class Signing:
         if not controller.running:
             self.connected_for_us = True
             controller.start()
+            if path not in self.queue:
+                return  # it could not start, and on_state() said so
         self._notify_waiting(path, _("Tap “Second screen” on the tablet to sign {name}")
                              .format(name=os.path.basename(path)))
 

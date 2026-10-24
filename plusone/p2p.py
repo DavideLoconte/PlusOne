@@ -12,6 +12,8 @@ The Intel AX211 firmware sometimes crashes while joining the tablet's group
 half-made group for a minute or more, deaf to new attempts, until Second
 Screen is closed and reopened on it.
 """
+import time
+
 from gi.repository import GLib, NM
 
 from . import log
@@ -57,6 +59,7 @@ class P2PLink:
         self._handler = None
         self._client_handlers = []
         self._give_up_source = None
+        self._give_up_at = None
         self._polling = False
         self._reset = False  # the Wi-Fi device was recreated while we looked
         self.client = NM.Client.new(None)
@@ -84,9 +87,13 @@ class P2PLink:
     def _arm_give_up(self):
         if self._give_up_source:
             GLib.source_remove(self._give_up_source)
-        self._give_up_source = None
+        self._give_up_source = self._give_up_at = None
         if self.give_up_after:
+            self._give_up_at = time.monotonic() + self.give_up_after
             self._give_up_source = GLib.timeout_add_seconds(self.give_up_after, self._give_up)
+
+    def _overdue(self):
+        return self._give_up_at is not None and time.monotonic() >= self._give_up_at
 
     def _give_up(self):
         if self.stopped or self.connected:
@@ -95,11 +102,19 @@ class P2PLink:
         if self.device is not None and self.device.get_state() in (
                 NM.DeviceState.PREPARE, NM.DeviceState.CONFIG, NM.DeviceState.NEED_AUTH,
                 NM.DeviceState.IP_CONFIG, NM.DeviceState.IP_CHECK, NM.DeviceState.ACTIVATED):
-            return True  # never cut an attempt short; look again in a while
-        log("Wi-Fi Direct: no tablet, giving up")
+            # Never cut an attempt short: it ends within a minute, and no new
+            # one starts once it is time to give up (see _retry).
+            return True
         self._give_up_source = None
-        self.on_give_up()
+        self._stop_trying()
         return False
+
+    def _stop_trying(self):
+        if self._give_up_source:
+            GLib.source_remove(self._give_up_source)
+            self._give_up_source = None
+        log("Wi-Fi Direct: no tablet, giving up")
+        self.on_give_up()
 
     def _watch(self, device):
         self.device = device
@@ -157,6 +172,11 @@ class P2PLink:
     def _activate(self):
         if self.stopped or self.connected or self.device is None or self.peer is None:
             return False
+        if self._overdue():
+            # Attempts follow each other while the tablet stays listed: the
+            # last one may end, but no new one starts after the time is up.
+            self._stop_trying()
+            return False
         if _path(self.peer) not in {_path(p) for p in self.device.get_peers()}:
             # Lost while the last attempt ran: activating it would only fail.
             log("Wi-Fi Direct: the tablet is no longer in sight, looking for it again")
@@ -205,6 +225,8 @@ class P2PLink:
         return False
 
     def _retry(self):
+        if self.stopped or self.connected:
+            return
         if self.attempt >= 2:
             self.on_hint()
         GLib.timeout_add_seconds(1, self._activate)

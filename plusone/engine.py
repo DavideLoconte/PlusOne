@@ -162,9 +162,22 @@ class Controller:
         if not self._running or self.link is not None or self.session is not None:
             return
         self._set_state(State.WAITING, "Tap “Second screen” on the tablet")
-        self.link = P2PLink(self.settings.peer, on_found=self._on_found, on_hint=self._on_link_hint,
-                            give_up_after=window, on_give_up=self._on_give_up)
+        try:
+            self.link = P2PLink(self.settings.peer, on_found=self._on_found, on_hint=self._on_link_hint,
+                                give_up_after=window, on_give_up=self._on_give_up)
+        except StopIteration:
+            self._fail("This PC's Wi-Fi cannot do Wi-Fi Direct")
+            return
+        except GLib.Error as e:
+            self._fail("{error}", error=e.message)
+            return
         self.link.start()
+
+    def _fail(self, template, **args):
+        """Stop, and say why (an English template, see i18n)."""
+        log("failed:", template.format(**args))
+        self.stop()
+        self._set_state(State.ERROR, template, **args)
 
     def _on_give_up(self):
         self.stop("The tablet did not answer: open Second Screen on it and connect again")
@@ -211,16 +224,28 @@ class Controller:
         self.mode = session.mode
 
         def go():
-            if self.monitor:
-                self.monitor.start()
-            else:
-                self._start_stream("test")
+            if not self._running:
+                return
+            try:
+                if self.monitor:
+                    self.monitor.start()
+                else:
+                    self._start_stream("test")
+            except GLib.Error as e:
+                self._fail("{error}", error=e.message)
         self._from_thread(go)
 
     def _start_stream(self, source):
+        if not self._running or self.session is None:
+            return
         width, height, fps = self.mode
-        self.streamer = media.Streamer(source, self.session.sink_ip, width, height, fps,
-                                       self.settings.bitrate, self.encoder)
+        try:
+            self.streamer = media.Streamer(source, self.session.sink_ip, width, height, fps,
+                                           self.settings.bitrate, self.encoder,
+                                           on_error=lambda message: self._fail("{error}", error=message))
+        except (GLib.Error, OSError) as e:
+            self._fail("{error}", error=getattr(e, "message", None) or str(e))
+            return
         self.streamer.start()
         name = self.link.peer.get_name() if self.link and self.link.peer else "tablet"
         self._set_state(State.STREAMING, "{name} · {width}×{height} @ {fps} Hz",
