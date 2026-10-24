@@ -219,3 +219,32 @@ the tablet and read with REA (JADX, objdump); static analysis only.
   someone in the middle (a certificate whose code matches, about 10^6
   tries); each side's random number, the app's committed to first, takes
   that away (Bluetooth's numeric comparison does the same).
+
+## How a note app selects (studied with REA, its version 4.1.7)
+
+The note app is a native Android app; its own code was
+decompiled with JADX (through REA) and read, never run. What the
+selection does, which Plus One follows on the tablet and the PC
+(android/.../Selection.kt, plusone/selection.py):
+
+- Lasso tool settings (protobuf `lassoTool_`): `lassoType` FREEFORM or
+  RECTANGLE, `allowFullSelectionOnly` (default off: the lasso picks what
+  its area touches, by intersecting regions; on: only what is wholly
+  inside), `allowSnapToAlign`, `selectedBlockTypes`. Selection triggers:
+  single tap, lasso, double tap; a "circle to lasso" gesture.
+- The lasso: a dotted path (6 px round dots, dash 4/20) in #0B99FF over
+  the same dots in white at 20 % alpha, offset; freeform closes as drawn.
+- The box: four corners joined by 4 px #0B99FF lines, turning with the
+  selection; on screen, a side shorter than 120 px (2x density) is widened
+  to 120 so handles never crowd. Corner handles: circles of 10 px, white
+  with the blue ring, filled blue while dragged; hit within 20 px.
+- Turn handle: a 24 px circle with a rotate icon, 50 px out of the
+  bottom-right corner along both edges; blue with a white icon while
+  turning, the angle shown as "%5.1f°" in #FF4631. It turns about the box
+  centre, the angle kept within -180..180.
+- Operations (`NORMAL_MODE_OPERATION_MOVING/RESIZING/ROTATING`): down on a
+  corner resizes from the opposite corner, keeping proportions
+  (`shouldKeepAspectRatioWhenResizing`); on the turn handle turns; inside
+  moves (with snapping guides); outside ends the selection.
+- The eraser (`eraserTool_`) has pixel and object modes and an option to
+  deselect itself after use.

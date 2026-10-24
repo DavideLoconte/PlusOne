@@ -26,6 +26,12 @@ The companion app: ink under the nib.
   one on a pad). Kept in step between PC and tablet at each signing: what
   either side added is kept, what either side removed stays removed. 0.4's
   single saved signature becomes the first.
+- **Select, move, turn and scale** what is on the page, on the tablet and
+  on the PC, as note apps do: a lasso picks what it touches, a tap picks
+  one mark; a box with a handle at each corner (scale) and a turn handle
+  (the angle shown, snapping to right angles); drag from inside; Delete.
+  A placed signature, date or text comes picked, to adjust it at once.
+- The eraser works in the new-signature pad too.
 - The app fits phones too (Android 13 or later): icons in the toolbar,
   clear of the system bars and cutouts, popups sized to the screen.
 - When the app is not there, Second Screen as before.

@@ -24,7 +24,7 @@ gi.require_version("Gsk", "4.0")
 gi.require_version("Poppler", "0.18")
 from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gsk, Gtk, Poppler  # noqa: E402
 
-from . import log, once, signatures  # noqa: E402
+from . import log, once, selection as picking, signatures  # noqa: E402
 from .i18n import _  # noqa: E402
 from .ink import (RawPen, View, bounds, load_pen, normalize, pen_width, place,  # noqa: E402
                   save_pen, thickness, touches)
@@ -86,6 +86,23 @@ button.swatch, button.swatch:hover, button.swatch:checked, button.swatch:active 
   background: none; box-shadow: none; min-width: 38px; min-height: 38px; padding: 0;
 }
 """
+
+
+def draw_lasso_icon(area, cr, width, height):
+    """Select: a lasso, its loop and a bit of rope."""
+    color = area.get_color()
+    cr.set_source_rgba(color.red, color.green, color.blue, color.alpha)
+    cr.set_line_width(1.6)
+    cr.set_line_cap(cairo.LINE_CAP_ROUND)
+    cr.save()
+    cr.translate(width / 2, height / 2 - 2)
+    cr.scale(8, 5)
+    cr.arc(0, 0, 1, math.radians(150), math.radians(150 + 340))
+    cr.restore()
+    cr.stroke()
+    cr.move_to(width / 2 - 6, height / 2 + 1)
+    cr.curve_to(width / 2 - 8, height / 2 + 4, width / 2 - 6, height / 2 + 7, width / 2 - 3, height / 2 + 8)
+    cr.stroke()
 
 
 def load_css():
@@ -343,6 +360,10 @@ class PageArea(Gtk.Widget):
         self._raw_tick = None
         self.raw_counts = [0, 0]  # samples drawn from the tablet, desktop events meanwhile
         self._hover = None  # pen or mouse position while something waits to be placed
+        self._grab = None     # what the pen or mouse holds of the selection (see _grab_at)
+        self._grabbed = -1    # its handle, for the look
+        self._lasso = None    # widget points of the lasso being drawn
+        self._stepped = False  # the drag's undo step is taken
 
         stylus = Gtk.GestureStylus()
         stylus.connect("down", self._pen_down)
@@ -358,7 +379,7 @@ class PageArea(Gtk.Widget):
         self.add_controller(mouse)
 
         tap = Gtk.GestureClick(touch_only=True)
-        tap.connect("released", lambda g, n, x, y: self.window.place_at(*self.view.to_page(x, y)))
+        tap.connect("released", lambda g, n, x, y: self._tapped(x, y))
         self.add_controller(tap)
 
         zoom = Gtk.GestureZoom()
@@ -612,7 +633,10 @@ class PageArea(Gtk.Widget):
             self.raw.drawing = False
 
     def _pen_down(self, gesture, x, y):
-        if self._is_eraser(gesture):
+        erasing = self._is_eraser(gesture)
+        if self._select_down(x, y, erasing):
+            return
+        if erasing:
             self._erased = False
             self._erase_to(x, y)
             return
@@ -630,6 +654,8 @@ class PageArea(Gtk.Widget):
         self._raw_tick = self.add_tick_callback(self._raw_more)
 
     def _pen_motion(self, gesture, x, y):
+        if self._select_move(x, y):
+            return
         if self._eraser is not None:
             for sx, sy, _pressure in self._backlog(gesture):
                 self._erase_to(sx, sy)
@@ -644,6 +670,8 @@ class PageArea(Gtk.Widget):
         self._extend(x, y, self._pressure(gesture))
 
     def _pen_up(self, gesture, x, y):
+        if self._select_up():
+            return
         if self._eraser is not None:
             self._erase_to(x, y)
             self._eraser = None
@@ -656,6 +684,7 @@ class PageArea(Gtk.Widget):
         self._finish()
 
     def _pen_cancel(self):
+        self._select_up(cancelled=True)
         self._raw_stop()
         self._eraser = None
         self._finish()
@@ -676,6 +705,8 @@ class PageArea(Gtk.Widget):
             gesture.set_state(Gtk.EventSequenceState.DENIED)
             return
         self._mouse_origin = (x, y)
+        if self._select_down(x, y, self.window.erasing()):
+            return
         if self.window.erasing():
             self._erased = False
             self._erase_to(x, y)
@@ -687,17 +718,125 @@ class PageArea(Gtk.Widget):
     # never feed the same stroke.
     def _mouse_update(self, gesture, dx, dy):
         x, y = self._mouse_origin
+        if self._select_move(x + dx, y + dy):
+            return
         if self._eraser is not None:
             self._erase_to(x + dx, y + dy)
         elif self._by_mouse:
             self._extend(x + dx, y + dy, NO_PRESSURE, time.monotonic())
 
     def _mouse_end(self, gesture, dx, dy):
+        if self._select_up():
+            return
         self._eraser = None
         if self._by_mouse:
             self._by_mouse = False
             self._finish()
         self.queue_draw()
+
+    # -- selection -------------------------------------------------------------
+    def _visible(self):
+        """Where a handle can be touched: the widget less the toolbar."""
+        return 0, 0, self.get_width(), self.get_height() - TOOLBAR_SPACE
+
+    def _shape(self, chosen):
+        return picking.shape([self.view.to_widget(*p) for p in chosen.corners()], self._visible())
+
+    def _select_down(self, x, y, erasing):
+        """Pen or mouse down: the selection's handles and inside take it,
+        elsewhere the selection ends and the lasso, if chosen, starts. True
+        if the selection took it."""
+        window, chosen = self.window, self.window.selection
+        if window.pending is not None:
+            return False  # a tap places the signature, date or text first
+        if chosen is not None and chosen.page == window.index and not erasing:
+            quad, turn = self._shape(chosen)
+            part = picking.hit(quad, turn, x, y)
+            if part >= 0:
+                point = self.view.to_page(x, y)
+                corners = chosen.corners()
+                if part == 5:
+                    self._grab = ("move", point)
+                elif part == 4:
+                    centre = ((corners[0][0] + corners[2][0]) / 2, (corners[0][1] + corners[2][1]) / 2)
+                    start = math.degrees(math.atan2(point[1] - centre[1], point[0] - centre[0]))
+                    self._grab = ("turn", centre, start, chosen.matrix, chosen.angle)
+                else:
+                    self._grab = ("scale", corners[(part + 2) % 4], corners[part], chosen.matrix)
+                self._grabbed = -1 if part == 5 else part
+                self._stepped = False
+                self.queue_draw()
+                return True
+        window.deselect()
+        if window.select_mode and not erasing:
+            self._lasso = [(x, y)]
+            self.queue_draw()
+            return True
+        return False
+
+    def _select_move(self, x, y):
+        chosen = self.window.selection
+        if self._grab is not None and chosen is not None:
+            if not self._stepped:  # one undo step per drag, once it moves
+                self.window.step(chosen)
+                self._stepped = True
+            point = self.view.to_page(x, y)
+            kind = self._grab[0]
+            if kind == "move":
+                last = self._grab[1]
+                chosen.matrix = picking.multiply(chosen.matrix, picking.translation(point[0] - last[0],
+                                                                                     point[1] - last[1]))
+                self._grab = ("move", point)
+            elif kind == "scale":
+                _, anchor, start, matrix = self._grab
+                k = picking.scale_along(anchor, start, point)
+                chosen.matrix = picking.multiply(matrix, picking.scaling(k, *anchor))
+            else:
+                _, centre, start, matrix, angle = self._grab
+                now = math.degrees(math.atan2(point[1] - centre[1], point[0] - centre[0]))
+                target = picking.snap_angle(angle + now - start)
+                chosen.matrix = picking.multiply(matrix, picking.rotation(target - angle, *centre))
+            self.queue_draw()
+            return True
+        if self._lasso is not None:
+            self._lasso.append((x, y))
+            self.queue_draw()
+            return True
+        return False
+
+    def _select_up(self, cancelled=False):
+        if self._grab is not None:
+            self._grab, self._grabbed = None, -1
+            self.queue_draw()
+            return True
+        if self._lasso is not None:
+            points, self._lasso = self._lasso, None
+            if not cancelled:
+                self._pick(points)
+            self.queue_draw()
+            return True
+        return False
+
+    def _pick(self, points):
+        """The lasso closes: the marks its area touches; a tap: the mark under it."""
+        window = self.window
+        marks = window.marks.get(window.index, [])
+        xs, ys = [p[0] for p in points], [p[1] for p in points]
+        if max(xs) - min(xs) < picking.TAP and max(ys) - min(ys) < picking.TAP:
+            point = self.view.to_page(*points[0])
+            reach = picking.TAP / self.view.zoom
+            picked = [m for m in marks if touches(m, point, point, reach)][-1:]
+        else:
+            polygon = [self.view.to_page(x, y) for x, y in points]
+            picked = [m for m in marks if picking.picks(m, polygon)]
+        window.select(picked)
+
+    def _tapped(self, x, y):
+        """A finger's tap: places what waits to be placed, or ends the selection."""
+        if not self.window.place_at(*self.view.to_page(x, y)):
+            chosen = self.window.selection
+            if chosen is not None and picking.hit(*self._shape(chosen), x, y) < 0:
+                self.window.deselect()
 
     # -- drawing ---------------------------------------------------------------
     def _page_raster(self, scale):
@@ -804,7 +943,21 @@ class PageArea(Gtk.Widget):
             cr.scale(v.zoom, v.zoom)
             draw_marks(cr, self.window.pending(*v.to_page(*self._hover)))
             snapshot.pop()
+        chosen = self.window.selection
+        if chosen is not None and chosen.page == self.window.index:
+            # Picked marks are off the page's list (and its tiles): drawn here, as they move.
+            marks = chosen.marks()
+            reach = max((m.width for m in marks if isinstance(m, Stroke)), default=1)
+            cr = self._cairo(snapshot, [p for m in marks for p in (bounds(m)[:2], bounds(m)[2:])], reach)
+            draw_marks(cr, marks)
         snapshot.pop()
+        whole = rect(0, 0, self.get_width(), self.get_height())
+        if chosen is not None and chosen.page == self.window.index:
+            quad, turn = self._shape(chosen)
+            turned = chosen.angle if self._grab is not None and self._grab[0] == "turn" else None
+            picking.draw(snapshot.append_cairo(whole), quad, turn, self._grabbed, turned)
+        if self._lasso:
+            picking.draw_lasso(snapshot.append_cairo(whole), self._lasso)
 
     def _cairo(self, snapshot, points, reach):
         """A cairo context in page points for drawing around points (and
@@ -837,6 +990,7 @@ class SignWindow(Adw.ApplicationWindow):
         self.marks = {}       # page index -> [Stroke | Text]
         self.history = []     # (page index, its marks before a change), for undo
         self.pending = None   # marks waiting for a tap to be placed
+        self.selection = None  # picking.Selection: marks picked off their page's list
         self.result = None
         self.signature = self._first_signature()  # what "My signature" places
         self.pen_color, self.pen_width, self.pen_smoothing = load_pen(PEN)
@@ -859,6 +1013,7 @@ class SignWindow(Adw.ApplicationWindow):
         overlay.add_overlay(self._tools())
         overlay.add_overlay(self._pages())
         overlay.add_overlay(self._hint())
+        overlay.add_overlay(self._selection_bar())
         overlay.add_overlay(self._keep_chip())
         self.toasts = Adw.ToastOverlay(child=overlay)
 
@@ -869,6 +1024,8 @@ class SignWindow(Adw.ApplicationWindow):
         keys = Gtk.ShortcutController()
         keys.add_shortcut(Gtk.Shortcut.new(Gtk.ShortcutTrigger.parse_string("<Control>z"),
                                            Gtk.CallbackAction.new(lambda *a: self._undo() or True)))
+        keys.add_shortcut(Gtk.Shortcut.new(Gtk.ShortcutTrigger.parse_string("Delete"),
+                                           Gtk.CallbackAction.new(lambda *a: self.delete_selection() or True)))
         keys.add_shortcut(Gtk.Shortcut.new(Gtk.ShortcutTrigger.parse_string("Escape"),
                                            Gtk.CallbackAction.new(lambda *a: self._escape() or True)))
         self.add_controller(keys)
@@ -888,6 +1045,13 @@ class SignWindow(Adw.ApplicationWindow):
         eraser_icon.set_draw_func(draw_eraser_icon)
         self.eraser = Gtk.ToggleButton(child=eraser_icon, tooltip_text=_("Eraser"), css_classes=["flat"])
         bar.append(self.eraser)
+        lasso_icon = Gtk.DrawingArea(content_width=20, content_height=20)
+        lasso_icon.set_draw_func(draw_lasso_icon)
+        self.lasso = Gtk.ToggleButton(child=lasso_icon, tooltip_text=_("Select"), css_classes=["flat"])
+        bar.append(self.lasso)
+        # One tool at a time: pen (neither), eraser or lasso.
+        self.eraser.connect("toggled", lambda b: b.get_active() and self.lasso.set_active(False))
+        self.lasso.connect("toggled", lambda b: b.get_active() and self.eraser.set_active(False))
         bar.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
         self.undo = self._tool(bar, "edit-undo-symbolic", _("Undo"), self._undo)
         self._tool(bar, "user-trash-symbolic", _("Clear page"), self._clear_page)
@@ -941,6 +1105,21 @@ class SignWindow(Adw.ApplicationWindow):
         self.hint = Gtk.Revealer(child=box, halign=Gtk.Align.CENTER, valign=Gtk.Align.START, margin_top=14,
                                  transition_type=Gtk.RevealerTransitionType.SLIDE_DOWN)
         return self.hint
+
+    def _selection_bar(self):
+        """While marks are picked: what can be done, Delete, and Done."""
+        label = Gtk.Label(label=_("Drag it, turn it, or resize from a corner"))
+        delete = Gtk.Button(icon_name="user-trash-symbolic", tooltip_text=_("Delete"), css_classes=["flat"])
+        delete.connect("clicked", lambda b: self.delete_selection())
+        close = Gtk.Button(icon_name="window-close-symbolic", tooltip_text=_("Done with the selection"),
+                           css_classes=["flat"])
+        close.connect("clicked", lambda b: self.deselect())
+        box = Gtk.Box(spacing=6, css_classes=["hint-bar"])
+        for widget in (label, delete, close):
+            box.append(widget)
+        self.selection_bar = Gtk.Revealer(child=box, halign=Gtk.Align.CENTER, valign=Gtk.Align.START,
+                                          margin_top=14, transition_type=Gtk.RevealerTransitionType.SLIDE_DOWN)
+        return self.selection_bar
 
     def _keep_chip(self):
         """Offered once something is drawn and no signature is saved yet."""
@@ -1067,6 +1246,7 @@ class SignWindow(Adw.ApplicationWindow):
         return self.doc.get_page(self.index)
 
     def show_page(self, index):
+        self.deselect()
         n = self.doc.get_n_pages()
         self.index = max(0, min(n - 1, index))
         self.page_label.set_label(f"{self.index + 1} / {n}")
@@ -1097,6 +1277,8 @@ class SignWindow(Adw.ApplicationWindow):
 
     def _undo(self):
         if self.history:
+            # The step restores the page as a whole: the selection was in it.
+            self._drop_selection()
             index, marks = self.history.pop()
             self.marks[index] = marks
             if index != self.index:
@@ -1104,6 +1286,7 @@ class SignWindow(Adw.ApplicationWindow):
         self._update()
 
     def _clear_page(self):
+        self.deselect()
         marks = self.marks.pop(self.index, [])
         if marks:
             self.history.append((self.index, marks))
@@ -1113,8 +1296,52 @@ class SignWindow(Adw.ApplicationWindow):
         strokes = [m for m in self.marks.get(self.index, []) if isinstance(m, Stroke)]
         self.undo.set_sensitive(bool(self.history))
         self.keep_button.set_visible(self.signature is None and bool(strokes))
-        self.done.set_sensitive(any(self.marks.values()))
+        self.done.set_sensitive(any(self.marks.values()) or self.selection is not None)
         self.area.queue_draw()
+
+    # -- selection -------------------------------------------------------------
+    @property
+    def select_mode(self):
+        return self.lasso.get_active()
+
+    def select(self, marks):
+        """Picks marks of the page shown: off its list while picked."""
+        self.deselect()
+        current = self.marks.get(self.index, [])
+        mine = [m for m in marks if any(m is c for c in current)]
+        if not mine:
+            self.area.queue_draw()
+            return
+        self.marks[self.index] = [c for c in current if not any(c is m for m in mine)]
+        self.selection = picking.Selection(self.index, mine)
+        self.selection_bar.set_reveal_child(True)
+        self._update()
+
+    def deselect(self):
+        """Puts the selection back on its page, as it is now."""
+        chosen = self._drop_selection()
+        if chosen is not None:
+            self.marks.setdefault(chosen.page, []).extend(chosen.marks())
+            self._update()
+
+    def _drop_selection(self):
+        chosen, self.selection = self.selection, None
+        if chosen is not None:
+            self.selection_bar.set_reveal_child(False)
+            self.area._grab = None
+        return chosen
+
+    def step(self, chosen):
+        """An undo step before the selection changes: its page as it is now."""
+        self.history.append((chosen.page, self.marks.get(chosen.page, []) + chosen.marks()))
+        self.undo.set_sensitive(True)
+
+    def delete_selection(self):
+        chosen = self.selection
+        if chosen is not None:
+            self.step(chosen)
+            self._drop_selection()
+            self._update()
 
     # -- placing ---------------------------------------------------------------
     def _arm(self, make_marks, message):
@@ -1130,15 +1357,22 @@ class SignWindow(Adw.ApplicationWindow):
         self.area.queue_draw()
 
     def place_at(self, x, y):
-        """Called by the page on a tap; True if it placed something."""
+        """Called by the page on a tap; True if it placed something. What
+        it places comes picked: placed a little off, it moves, turns or
+        scales right away."""
         if self.pending is None:
             return False
-        self.add_mark(*self.pending(x, y))
+        self.deselect()
+        placed = self.pending(x, y)
+        self.add_mark(*placed)
         self._disarm()
+        self.select(placed)
         return True
 
     def _escape(self):
-        if self.pending:
+        if self.selection is not None:
+            self.deselect()
+        elif self.pending:
             self._disarm()
         else:
             self._cancel()
@@ -1181,6 +1415,7 @@ class SignWindow(Adw.ApplicationWindow):
         self._update()
 
     def _keep_signature(self):
+        self.deselect()
         strokes = [m for m in self.marks.get(self.index, []) if isinstance(m, Stroke)]
         if strokes:
             signatures.add(normalize(strokes))
@@ -1209,6 +1444,7 @@ class SignWindow(Adw.ApplicationWindow):
 
     # -- closing ---------------------------------------------------------------
     def _save(self, dst=None):
+        self.deselect()  # picked marks go back on their page, as they are
         self._saving = True
         self.cancel_button.set_sensitive(False)
         self.done.set_sensitive(False)

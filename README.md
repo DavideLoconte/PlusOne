@@ -167,6 +167,12 @@ pad (with the pen or the mouse). The first time, **Keep as my signature**
 also saves what you just drew. **Options → My signatures** in the Plus One
 window manages them too. **Date** and **Text** add a date or a few words
 where you tap; **Undo**, **Clear page**, page arrows and **Fit**.
+
+What you place comes selected, in a blue box: drag it from inside, turn it
+with the round handle, resize it from a corner; tap elsewhere when it is
+right. The **lasso** button selects anything on the page the same way:
+draw around it, or tap a stroke; **Delete** (or the Delete key) removes
+the selection.
 If the tablet does not connect, the notification offers *Sign on this PC*
 (mouse or a pen tablet). The signature is drawn into the page (a simple
 electronic signature), not a cryptographic digital signature.

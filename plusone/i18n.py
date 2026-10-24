@@ -54,6 +54,10 @@ _IT = {
     "Clear page": "Pulisci pagina",
     "My signature": "La mia firma",
     "My signatures": "Le mie firme",
+    "Select": "Seleziona",
+    "Drag it, turn it, or resize from a corner": "Trascina, ruota o ridimensiona dagli angoli",
+    "Delete": "Elimina",
+    "Done with the selection": "Fine selezione",
     "Placed with one tap when signing, here and on the tablet":
         "Si mettono con un tocco quando firmi, qui e sul tablet",
     "New signature": "Nuova firma",

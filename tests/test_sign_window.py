@@ -108,6 +108,8 @@ def test_keep_and_place_signature(window):
     win._place_signature()
     assert win.place_at(300, 500)              # the tap places it
     assert not win.place_at(310, 510)          # and only once
+    assert win.selection is not None           # picked, to move it if it is off
+    win.deselect()
     assert len(win.marks[0]) == 2
 
 
@@ -326,3 +328,34 @@ def test_signature_pad_and_list(window):
     signatures.remove(saved[0]["id"])
     listing.reload()
     assert isinstance(rows.get_first_child(), Gtk.Label)  # "No signature saved yet"
+
+
+def test_select_move_turn_and_undo(window):
+    win, _results, _src = window
+    stroke = Stroke([(100, 100, 0.5), (200, 100, 0.5)])
+    win.add_mark(stroke)
+    area = win.area
+    # The lasso, around the stroke.
+    win.lasso.set_active(True)
+    corners = [area.view.to_widget(x, y) for x, y in ((80, 80), (220, 80), (220, 120), (80, 120))]
+    assert area._select_down(*corners[0], erasing=False)
+    for point in corners[1:]:
+        area._select_move(*point)
+    area._select_up()
+    assert win.selection is not None and win.marks[0] == []
+    assert win.selection_bar.get_reveal_child()
+    # Drag it 50 points right, from inside.
+    start = area.view.to_widget(150, 100)
+    assert area._select_down(*start, erasing=False)
+    area._select_move(*area.view.to_widget(200, 100))
+    area._select_up()
+    win.deselect()
+    moved = win.marks[0][0]
+    assert moved.points[0][0] == pytest.approx(150, abs=0.01)
+    # Undo puts it back where it was.
+    win._undo()
+    assert win.marks[0][0].points[0][0] == pytest.approx(100, abs=0.01)
+    # A placed date comes picked.
+    win._place_date()
+    win.place_at(300, 500)
+    assert win.selection is not None and isinstance(win.selection.originals[0], Text)
