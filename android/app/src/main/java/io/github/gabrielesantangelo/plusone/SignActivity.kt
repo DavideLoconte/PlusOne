@@ -66,6 +66,8 @@ class SignActivity : AppCompatActivity() {
     private lateinit var pages: LinearLayout
     private lateinit var pageLabel: TextView
     private lateinit var queueButton: MaterialButton
+    private lateinit var queueGap: View
+    private lateinit var nav: LinearLayout
     private lateinit var doneButton: MaterialButton
     private lateinit var tools: HorizontalScrollView
     private lateinit var undo: MaterialButton
@@ -167,6 +169,7 @@ class SignActivity : AppCompatActivity() {
         subtitle.text = job.pc
         subtitle.visibility = if (job.pc.isEmpty()) View.GONE else View.VISIBLE
         pages.visibility = if (opened.sizes.size > 1) View.VISIBLE else View.GONE
+        refreshNav()
         hint.visibility = View.GONE
         selectionBar.visibility = View.GONE
         setTaskDescription(ActivityManager.TaskDescription.Builder().setLabel(job.title).build())
@@ -301,37 +304,61 @@ class SignActivity : AppCompatActivity() {
         pages = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = surface(M.attr.colorSurfaceContainerHigh)
-            addView(iconButton(R.drawable.ic_chevron_left, R.string.previous_page) { view.showPage(view.index - 1) })
+            addView(toolButton(R.drawable.ic_chevron_left, R.string.previous_page) { view.showPage(view.index - 1) })
             addView(pageLabel)
-            addView(iconButton(R.drawable.ic_chevron_right, R.string.next_page) { view.showPage(view.index + 1) })
+            addView(toolButton(R.drawable.ic_chevron_right, R.string.next_page) { view.showPage(view.index + 1) })
         }
         queueButton = button("", Look.TONAL, R.drawable.ic_documents) { showQueue(it) }.apply {
             contentDescription = getString(R.string.queue_title)
             tooltipText = contentDescription
         }
-        doneButton = button(getString(R.string.done), Look.FILLED, R.drawable.ic_check) { done() }
+        queueGap = separator()
+        doneButton = button(getString(R.string.done), Look.FILLED, R.drawable.ic_check) { done() }.apply {
+            insetTop = 0  // as tall as the bars beside it
+            insetBottom = 0
+            cornerRadius = dp(32)
+            elevation = dp(3f)
+        }
+        // No bar across the screen: floating bars, as the toolbar under the
+        // page. The title's gives way on a narrow screen, never Done.
+        nav = floatingBar().apply {
+            addView(pages)
+            addView(queueGap)
+            addView(queueButton)
+        }
         top = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(themeColor(M.attr.colorSurface))
-            addView(iconButton(R.drawable.ic_close, R.string.cancel) { askCancel() })
-            // The title gives way on a narrow screen, never Done.
-            addView(LinearLayout(context).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(8), 0, dp(8), 0)
-                addView(titleText)
-                addView(subtitle)
+            addView(FrameLayout(context).apply {
+                addView(floatingBar().apply {
+                    addView(toolButton(R.drawable.ic_close, R.string.cancel) { askCancel() })
+                    addView(LinearLayout(context).apply {
+                        orientation = LinearLayout.VERTICAL
+                        setPadding(dp(4), 0, dp(16), 0)
+                        addView(titleText)
+                        addView(subtitle)
+                    })
+                }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.START or Gravity.CENTER_VERTICAL))
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(pages, gap())
-            addView(queueButton, gap())
-            addView(doneButton, gap())
+            addView(nav, gap())
+            addView(doneButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.MATCH_PARENT).apply { marginStart = dp(12) })
         }
         compact()
     }
 
     private fun gap() = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
-        ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) }
+        ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(12) }
+
+    /** A bar floating over the page, as the toolbar under it. */
+    private fun floatingBar() = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        background = surface(M.attr.colorSurfaceContainer)
+        elevation = dp(3f)
+        setPadding(dp(8), dp(8), dp(8), dp(8))
+    }
 
     /** On a phone, Done is its tick alone. */
     private fun compact() {
@@ -445,7 +472,7 @@ class SignActivity : AppCompatActivity() {
     private fun placeChrome() {
         val m = dp(16)
         val gap = dp(12)
-        top.setPadding(dp(4) + bars.left, dp(8) + bars.top, dp(12) + bars.right, dp(8))
+        top.setPadding(m + bars.left, gap + bars.top, m + bars.right, 0)
         place(tools, bottom = m + bars.bottom, left = m + bars.left, right = m + bars.right)
         val chrome = m + bars.bottom + tools.height
         place(keep, bottom = chrome + gap)
@@ -487,6 +514,15 @@ class SignActivity : AppCompatActivity() {
         val count = Jobs.waiting().size
         queueButton.visibility = if (count > 1) View.VISIBLE else View.GONE
         queueButton.text = NumberFormat.getIntegerInstance().format(count)
+        refreshNav()
+    }
+
+    /** Pages and queue share a bar, gone when neither has anything to show. */
+    private fun refreshNav() {
+        val paged = pages.visibility == View.VISIBLE
+        val queued = queueButton.visibility == View.VISIBLE
+        queueGap.visibility = if (paged && queued) View.VISIBLE else View.GONE
+        nav.visibility = if (paged || queued) View.VISIBLE else View.GONE
     }
 
     // -- popups ------------------------------------------------------------------

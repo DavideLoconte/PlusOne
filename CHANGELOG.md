@@ -41,8 +41,10 @@ The companion app: ink under the nib.
   notification ("5 PDFs to sign on…", "Signed 5 PDFs"); its file chooser
   takes several PDFs. A PDF whose PC stopped waiting leaves the queue.
 - **Material 3 Expressive** look for the app, in the wallpaper's colours,
-  light or dark as the system: grouped settings as in Android 16, a floating
-  toolbar, Material dialogs, sliders and switches, a new icon.
+  light or dark as the system: grouped settings as in Android 16; signing
+  under floating bars only (close and title, pages and queue, Done, the
+  tools), no bar across the screen; Material dialogs, sliders and
+  switches; a new icon.
 - The app fits phones too (Android 13 or later): icons in the toolbar,
   clear of the system bars and cutouts, popups sized to the screen.
 - When the app is not there, Second Screen as before.
