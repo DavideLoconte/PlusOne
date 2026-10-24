@@ -93,7 +93,55 @@ Acceptance: from a fresh login, tablet as a monitor = 1 click + 1 tap.
 Acceptance: right-click → *Sign on tablet* → 1 tap → sign → *Done*: no other
 step, less than 10 s of overhead.
 
-### 0.5 — Tablet modes and picture quality
+### 0.5 — Companion app: instant ink, and a display of its own
+
+Measured in 0.4: from the pen to its ink on the tablet takes about 70-100 ms
+through Second Screen. Plus One's own drawing is 3-4 ms of that; the rest is
+the round trip: the pen's reports over Wi-Fi, Mutter compositing and
+capturing the virtual monitor (~20 ms), encoding (5 ms), the stream, and the
+tablet's player decoding and showing it. Only code on the tablet can remove
+the round trip. A small Plus One app on the tablet, optional and installed
+once, does that for signing first, then for the display, then for the rest
+of the tablet's hardware.
+
+- **Signing in the app, ink under the nib**: the PC hands the app the PDF;
+  the app shows its pages (Android's `PdfRenderer`) and draws the ink itself
+  with Android's low-latency front-buffer rendering (androidx.graphics) and
+  motion prediction (androidx.input), from every pen sample, with pressure
+  and palm rejection. Strokes go back to the PC, which stamps them into the
+  PDF as in 0.4 (`name-signed.pdf`, notification). No Second Screen and no
+  Wi-Fi Direct for this: it runs over the home Wi-Fi, starts in about a
+  second and avoids the Intel firmware crashes. Target: ink within 20 ms.
+- **A display of its own** (Second Screen stays the no-install way): H.264
+  from Plus One decoded with `MediaCodec` in low-latency mode and shown as
+  each frame arrives, with no jitter buffer; touch and pen sent back as
+  Android motion events with all their samples (no UIBC bursts); quick
+  recovery from loss. Target: below Second Screen's ~45-50 ms.
+- **Then the rest of the tablet's hardware**, on demand:
+  - **Camera as a webcam**: front or rear camera, encoded on the tablet
+    (MediaCodec H.264), decoded on the PC and published as a PipeWire camera,
+    so it appears in GNOME Snapshot, Firefox, OBS, browser meetings. For apps
+    that only know V4L2 (some Chrome/Zoom builds) an optional v4l2loopback
+    device, set up once like the pen permission.
+  - **Microphone**: a PipeWire input "Tablet microphone".
+  - **Speakers**: a PipeWire output "Tablet speakers" with its own low-latency
+    audio stream (Opus/PCM), independent of the video, so it does not slow the
+    display down.
+- **On demand, one tap at most**: when the PC needs the app (a PDF to sign,
+  a camera in use), the app shows one notification on the tablet (Android
+  needs a visible start for camera and microphone). Nothing runs while
+  unused.
+- **Transport**: the home Wi-Fi (found with mDNS, as 0.4 already finds the
+  tablet), or the Wi-Fi Direct link while the display uses it; encrypted
+  and paired once with a code.
+- **Install**: the APK is attached to the GitHub release; no developer
+  options needed. Kotlin, no Google services, built by CI.
+
+Acceptance: right-click a PDF → *Sign on tablet* → the app opens on the
+tablet (one tap on its notification at most) → the ink is under the nib →
+*Done* → `name-signed.pdf` on the PC.
+
+### 0.6 — Tablet modes and picture quality
 
 - **Mirror** an existing monitor (presentations, teaching).
 - **Graphics tablet**: the pen drives a chosen PC monitor like a Wacom while
@@ -106,10 +154,10 @@ step, less than 10 s of overhead.
 - Optional **audio on the tablet through Second Screen**, no app needed: the
   tablet appears as a speaker in GNOME Sound; picking it reconnects with an
   audio track. Video latency goes from ~50 to ~90 ms (the sink syncs video to
-  audio), so this suits films more than desktop work. The companion app (0.7)
+  audio), so this suits films more than desktop work. The companion app (0.5)
   removes that cost.
 
-### 0.6 — Quick Share
+### 0.7 — Quick Share
 
 - Our own Python implementation of the Quick Share (Nearby Share) protocol:
   mDNS, UKEY2 handshake, protobuf frames, AES-CBC and HMAC. Written from the
@@ -126,34 +174,6 @@ step, less than 10 s of overhead.
 
 Acceptance: send = right-click → *Send to tablet*; receive = share on the
 tablet → notification on the PC.
-
-### 0.7 — Companion app: camera, microphone, speakers
-
-Second Screen only carries the picture, touch, pen and (at a latency cost)
-audio. The rest of the tablet's hardware needs a small Plus One app on the
-tablet: optional, installed once, and it stays out of the way.
-
-- **Camera as a webcam**: front or rear camera, encoded on the tablet
-  (MediaCodec H.264), decoded on the PC and published as a PipeWire camera,
-  so it appears in GNOME Snapshot, Firefox, OBS, browser meetings. For apps
-  that only know V4L2 (some Chrome/Zoom builds) an optional v4l2loopback
-  device, set up once like the pen permission.
-- **Microphone**: a PipeWire input "Tablet microphone".
-- **Speakers**: a PipeWire output "Tablet speakers" with its own low-latency
-  audio stream (Opus/PCM), independent of the video, so it does not slow the
-  display down.
-- **On demand, one tap at most**: the devices are always listed on the PC;
-  when an app starts using one, Plus One wakes the companion, which shows one
-  notification on the tablet (Android needs a visible start for camera and
-  microphone). Nothing runs while unused.
-- **Transport**: the Wi-Fi Direct link when the display is connected, else the
-  home Wi-Fi (mDNS); encrypted and paired once with a code.
-- **Install**: the APK is in the GitHub release, sent to the tablet with
-  Plus One's own *Send to tablet* (0.6); no developer options.
-- Kotlin, no Google services; built and attached to releases by CI.
-
-Acceptance: in a meeting app pick "Tablet camera" → 1 tap on the tablet →
-video, nothing else to start.
 
 ### 0.8 — Polish
 
@@ -179,10 +199,6 @@ video, nothing else to start.
   a zero-app camera for people who can plug the tablet in.
 - Whether the companion app can start the display too (fewer apps involved
   when it is installed).
-- Ink drawn on the tablet itself while signing, so it sits under the nib
-  instead of a video frame behind (note apps such as Samsung Notes draw in the
-  front buffer). It needs the pen's events next to Second Screen's window;
-  plain overlay windows do not get them.
 
 ## Not planned
 

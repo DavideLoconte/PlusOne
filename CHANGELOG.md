@@ -74,7 +74,24 @@ Sign on the tablet.
     200 ms after a pinch, 44 ms frames while zooming out);
   - the first connection after Plus One starts is 1.5 s quicker: the NVENC
     plugin (CUDA probing the GPUs) loads while the tablet is being found,
-    not after it connected.
+    not after it connected;
+  - far fewer lost packets: on a still screen, 1 in two minutes instead of
+    35 in a side-by-side test, and each one made the tablet ask for a whole
+    new frame (black flashes, ghost cursors).
+- No more getting stuck:
+  - no Wi-Fi Direct device, NetworkManager unreachable, the virtual monitor
+    or the pipeline failing, or adb timing out now end with an error instead
+    of waiting (or showing "Connected") forever;
+  - searching for the tablet gives up on time even when it stays listed
+    but never answers (it could keep the radio busy for an hour);
+  - the tablet resuming a paused session no longer starts a second
+    virtual monitor and stream;
+  - fingers held down are released whatever ends the touch connection;
+  - each session's pipeline is freed when it ends;
+  - the Wi-Fi Direct group no longer comes up after *Disconnect* when the
+    two crossed.
+- *Settings* opens the settings window even while a signing window is open;
+  *Cancel* and closing wait while the signed copy is being saved.
 - New dependencies: `gir1.2-poppler-0.18`, `python3-pypdf` (`.deb`); the
   Flatpak builds poppler 25.12 and pypdf.
 
