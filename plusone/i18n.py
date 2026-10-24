@@ -69,7 +69,6 @@ _IT = {
     "Date": "Data",
     "Text": "Testo",
     "Fit": "Adatta",
-    "Page {n} of {total}": "Pagina {n} di {total}",
     "Tap where your signature goes": "Tocca dove va la firma",
     "Saved: next time, “My signature” places it with one tap":
         "Salvata: la prossima volta «La mia firma» la mette con un tocco",
@@ -77,7 +76,6 @@ _IT = {
     "Text to add": "Testo da aggiungere",
     "Place": "Inserisci",
     "Tap where the text goes": "Tocca dove va il testo",
-    "Saving…": "Salvataggio…",
     "Could not save: {error}": "Impossibile salvare: {error}",
     "Discard the signature?": "Scartare la firma?",
     "Choose where to save the signed copy": "Scegli dove salvare la copia firmata",

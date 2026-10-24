@@ -42,7 +42,6 @@ class UibcServer:
         # reports arriving in bursts.
         self.arrivals = collections.deque(maxlen=2000)
         self.pen_states = set()  # pen state bytes logged so far
-        self.port = port
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(("0.0.0.0", port))
@@ -72,35 +71,35 @@ class UibcServer:
 
     def _handle(self, conn, addr):
         try:
-            self._loop(conn, addr)
+            self._loop(conn)
+        except (EOFError, OSError) as e:
+            log("UIBC: sink disconnected", addr, e)
         except Exception as e:  # noqa: BLE001 - report and keep the app alive
             log("UIBC: handler crashed:", repr(e))
         finally:
-            self.conns.discard(conn)
-            conn.close()
-
-    def _loop(self, conn, addr):
-        try:
-            while True:
-                head = self._recv(conn, 4)
-                has_ts = head[0] & 0x10
-                category = head[1] & 0x0F
-                length = struct.unpack(">H", head[2:4])[0]
-                body = self._recv(conn, length - 4)
-                if has_ts:
-                    body = body[2:]
-                if category == 0:
-                    self._generic(body)
-                elif category == 1:
-                    self._hidc(body)
-                else:
-                    log(f"UIBC: ignoring category {category} ({len(body)} bytes)")
-        except (EOFError, OSError) as e:
-            log("UIBC: sink disconnected", addr, e)
+            # Fingers still down would stay held in the desktop.
             for slot in list(self.down):
                 self.injector.touch_up(slot)
             self.down.clear()
             self._close_pen()
+            self.conns.discard(conn)
+            conn.close()
+
+    def _loop(self, conn):
+        while True:
+            head = self._recv(conn, 4)
+            has_ts = head[0] & 0x10
+            category = head[1] & 0x0F
+            length = struct.unpack(">H", head[2:4])[0]
+            body = self._recv(conn, length - 4)
+            if has_ts:
+                body = body[2:]
+            if category == 0:
+                self._generic(body)
+            elif category == 1:
+                self._hidc(body)
+            else:
+                log(f"UIBC: ignoring category {category} ({len(body)} bytes)")
 
     def _generic(self, body):
         while len(body) >= 3:
@@ -138,8 +137,8 @@ class UibcServer:
             if self.pen_factory:
                 try:
                     self.pen = self.pen_factory(data)
-                except OSError as e:
-                    log("pen unavailable:", e)
+                except Exception as e:  # noqa: BLE001 - touch keeps working without the pen
+                    log("pen unavailable:", repr(e))
         elif self.pen:
             self.reports += 1
             self.arrivals.append(time.monotonic())

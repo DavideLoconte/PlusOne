@@ -234,6 +234,9 @@ class P2PLink:
     def _activated(self, client, res):
         try:
             self.ac, _ = client.add_and_activate_connection2_finish(res)
+            if self.stopped:  # stop() came first: no group after Disconnect
+                client.deactivate_connection_async(self.ac, None, None)
+                self.ac = None
         except GLib.Error as e:
             log("Wi-Fi Direct activation failed:", e.message)
             if not self.stopped and not self.connected and self.device is not None:

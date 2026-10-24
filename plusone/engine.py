@@ -194,6 +194,9 @@ class Controller:
                 conn, addr = self.srv.accept()
             except OSError:
                 return
+            if not self._running:  # stopped while the tablet dialled in
+                conn.close()
+                return
             if self.link:
                 self.link.connected = True
             log("sink connected from", addr[0])
@@ -203,11 +206,13 @@ class Controller:
                     self.uibc = UibcServer(self.monitor, UIBC_PORT, pen_factory=self._make_pen)
                 except OSError as e:
                     log("touch disabled:", e)
+            this = []  # the session, for on_close
             self.session = WfdSession(conn, self._on_play, self._on_idr,
-                                      on_close=lambda: self._from_thread(self._on_session_closed),
+                                      on_close=lambda: self._from_thread(self._on_session_closed, this[0]),
                                       mode=None if s.auto_mode else (s.width, s.height, s.fps),
                                       uibc_port=UIBC_PORT if self.uibc else None)
-            self.session.run()
+            this.append(self.session)
+            this[0].run()
 
     def _make_pen(self, descriptor):
         # Called on the UIBC thread once the tablet describes its pen.
@@ -271,7 +276,9 @@ class Controller:
             self.link.stop()
             self.link = None
 
-    def _on_session_closed(self):
+    def _on_session_closed(self, session):
+        if session is not self.session:
+            return  # ended by stop(), or a newer session runs already
         log("tablet disconnected")
         self._end_session()
         if self._running and self.settings.reconnect:

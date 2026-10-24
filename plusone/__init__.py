@@ -25,6 +25,3 @@ def add_log_handler(handler):
     """handler(line) is called from whichever thread logged; marshal as needed."""
     _handlers.append(handler)
 
-
-def remove_log_handler(handler):
-    _handlers.remove(handler)

@@ -78,8 +78,10 @@ def load_settings(path=CONFIG):
 
 def save_settings(settings):
     os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
-    with open(CONFIG, "w") as f:
+    # Replaced whole: the Files extension may read it meanwhile.
+    with open(CONFIG + ".part", "w") as f:
         json.dump(asdict(settings), f, indent=2)
+    os.replace(CONFIG + ".part", CONFIG)
 
 
 def launcher():
@@ -169,13 +171,12 @@ def shell_extension_state(callback):
                            GLib.VariantType("(a{sv})"), got)
 
 
-def set_shell_extension(enabled, callback=None):
+def set_shell_extension(enabled):
     """Only ever on the user's explicit request: Plus One never turns shell
     extensions on by itself."""
     log("Quick Settings toggle", "on" if enabled else "off")
     _shell_extensions_call("EnableExtension" if enabled else "DisableExtension",
-                           GLib.Variant("(s)", (EXTENSION,)), GLib.VariantType("(b)"),
-                           callback)
+                           GLib.Variant("(s)", (EXTENSION,)), GLib.VariantType("(b)"), None)
 
 
 class PlusOneApp(Adw.Application):

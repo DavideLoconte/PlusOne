@@ -119,3 +119,13 @@ def test_arrival_gaps_leave_out_pauses():
     text = arrival_gaps(times)
     assert text.startswith("gaps p50 3.5 ms") and "1 over 20 ms" in text  # the 5 s pause is not a gap
     assert arrival_gaps([1.0]) == "no gaps yet"
+
+
+def test_a_garbled_packet_lets_go_of_held_fingers(server):
+    # Whatever ends the connection, a finger left down would stay held.
+    srv, sink, injector, _ = server
+    sink.sendall(packet(0, touch(TOUCH_DOWN, (3, 100, 200))))
+    assert wait_for(lambda: ("touch_down", 3, 100, 200) in injector.calls)
+    garbled = struct.pack(">BH", TOUCH_MOVE, 6) + bytes([2, 3, 0, 1, 0, 2])  # says 2 points, has 1
+    sink.sendall(packet(0, garbled))
+    assert wait_for(lambda: ("touch_up", 3) in injector.calls)

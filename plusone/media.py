@@ -130,7 +130,8 @@ class Streamer:
             f"queue max-size-buffers=2 ! mpegtsmux alignment=-1 ! "
             f"appsink name=out emit-signals=true sync=false async=false buffer-list=true max-buffers=0")
         self.sender = RtpSender(host, port, bind_port)
-        self.pipeline.get_by_name("out").connect("new-sample", self._send)
+        self._sink = self.pipeline.get_by_name("out")
+        self._sink_handler = self._sink.connect("new-sample", self._send)
         self._cap_keyframes(self.pipeline.get_by_name("enc"), bitrate, fps)
         self._last_keyframe = 0.0
         # Encoded frames of the last seconds, (time, bytes, keyframe): when
@@ -138,8 +139,9 @@ class Streamer:
         self._sent = collections.deque()
         self.pipeline.get_by_name("enc").get_static_pad("src").add_probe(
             Gst.PadProbeType.BUFFER, self._count)
-        self.pipeline.get_bus().add_signal_watch()
-        self.pipeline.get_bus().connect("message::error", self._on_error)
+        bus = self.pipeline.get_bus()
+        bus.add_signal_watch()
+        self._bus_handler = bus.connect("message::error", self._on_error)
         log(f"pipeline: {width}x{height}@{fps} {encoder} {bitrate} kbit/s -> {host}:{port}")
 
     def _on_error(self, bus, msg):
@@ -153,6 +155,12 @@ class Streamer:
     def stop(self):
         self.pipeline.set_state(Gst.State.NULL)
         self.sender.close()
+        # The bus watch and the handlers hold this Streamer, and it holds the
+        # pipeline: without this, every session left one behind.
+        bus = self.pipeline.get_bus()
+        bus.disconnect(self._bus_handler)
+        bus.remove_signal_watch()
+        self._sink.disconnect(self._sink_handler)
 
     def _send(self, appsink):
         """Streaming thread: what the muxer made of one frame, out at once."""
