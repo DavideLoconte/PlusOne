@@ -108,7 +108,7 @@ _IT = {
     "Signed": "Firmato",
     "Open": "Apri",
     "Show in folder": "Mostra nella cartella",
-    "Choose the PDF to sign": "Scegli il PDF da firmare",
+    "Choose the PDFs to sign": "Scegli i PDF da firmare",
     # Engine states
     "Mode {mode} is not supported": "La modalità {mode} non è supportata",
     "Close {apps}: it also uses Wi-Fi Direct": "Chiudi {apps}: usa anche lui il Wi-Fi Direct",
@@ -122,6 +122,8 @@ _IT = {
         "Controlla che il tablet mostri lo stesso codice: {code}",
     "Pair": "Abbina",
     "Sign {name} on {tablet}": "Firma {name} su {tablet}",
+    "{count} PDFs to sign on {tablet}": "{count} PDF da firmare su {tablet}",
+    "Signed {count} PDFs": "{count} PDF firmati",
     "Update Plus One": "Aggiorna Plus One",
     "The app on the tablet and Plus One on this PC are different versions: signing with Second Screen instead":
         "L'app sul tablet e Plus One su questo PC sono versioni diverse: si firma con Second Screen",

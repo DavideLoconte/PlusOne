@@ -10,6 +10,7 @@ import android.content.Intent
 object Notifications {
     private const val SERVICE = "service"
     private const val ASK = "ask"
+    private const val QUEUE = "queue"
     const val SERVICE_ID = 1
 
     fun channels(context: Context) {
@@ -18,6 +19,8 @@ object Notifications {
             context.getString(R.string.channel_service), NotificationManager.IMPORTANCE_MIN))
         manager.createNotificationChannel(NotificationChannel(ASK,
             context.getString(R.string.channel_ask), NotificationManager.IMPORTANCE_HIGH))
+        manager.createNotificationChannel(NotificationChannel(QUEUE,
+            context.getString(R.string.channel_queue), NotificationManager.IMPORTANCE_LOW))
     }
 
     fun ready(context: Context): Notification =
@@ -55,21 +58,27 @@ object Notifications {
     fun cancelPairing(context: Context, code: String) =
         context.getSystemService(NotificationManager::class.java).cancel(pairingId(code))
 
-    /** One per job: its own notification, its own intent (extras do not tell PendingIntents apart). */
-    private fun jobId(job: String) = 2_000_000 + (job.hashCode() and 0x3fffffff) % 1_000_000_000
-
-    fun signJob(context: Context, job: String, title: String, open: Intent) {
-        val notification = Notification.Builder(context, ASK)
+    /** What waits to be signed: one notification for the whole queue, gone
+     * when it is empty. alert: it pops up, once per batch (not when updated
+     * while shown); otherwise it only sits there (the screen opened by itself). */
+    fun waiting(context: Context, jobs: List<Jobs.Job>, alert: Boolean) {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        if (jobs.isEmpty()) return manager.cancel(WAITING_ID)
+        val titles = Notification.InboxStyle()
+        jobs.take(6).forEach { titles.addLine(it.title) }
+        if (jobs.size > 6) titles.setSummaryText(context.resources.getQuantityString(R.plurals.and_more, jobs.size - 6, jobs.size - 6))
+        val notification = Notification.Builder(context, if (alert) ASK else QUEUE)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(context.getString(R.string.sign_title))
-            .setContentText(title)
-            .setContentIntent(PendingIntent.getActivity(context, jobId(job), open,
+            .setContentTitle(context.resources.getQuantityString(R.plurals.to_sign, jobs.size, jobs.size))
+            .setContentText(jobs.joinToString(", ") { it.title })
+            .setStyle(titles)
+            .setNumber(jobs.size)
+            .setContentIntent(PendingIntent.getActivity(context, WAITING_ID, SignActivity.open(context, null),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
-            .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
             .build()
-        context.getSystemService(NotificationManager::class.java).notify(jobId(job), notification)
+        manager.notify(WAITING_ID, notification)
     }
 
-    fun cancelJob(context: Context, job: String) =
-        context.getSystemService(NotificationManager::class.java).cancel(jobId(job))
+    private const val WAITING_ID = 2
 }

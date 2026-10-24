@@ -208,6 +208,14 @@ quiet notification; **Ready in the background** in the app turns that off (it
 is then ready for 10 minutes after you open it). If the Wi-Fi drops while you
 sign, Plus One finds the app again and gets the signature when you are done.
 
+**Several PDFs at once.** Select them all in Files → *Sign on Tablet* (or
+send them one at a time, also while you sign): they wait on the tablet in the
+order you sent them. The first opens; *Done* (or ✕, to leave one unsigned)
+sends it back to the PC and opens the next. The documents button in the
+top bar lists them, to sign them in any order: what you drew on one stays
+there while you look at another. The app's main screen lists them too, under
+**To sign**, and so does a notification.
+
 ### Recommended once: tablet low-latency mode
 
 Second Screen reads a configuration file. Creating it cuts its internal

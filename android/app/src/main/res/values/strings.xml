@@ -7,24 +7,24 @@
     <string name="clear_page">Clear</string>
     <string name="fit">Fit</string>
     <string name="page_of" translatable="false">%1$d / %2$d</string>
+    <string name="version" translatable="false">Plus One %1$s</string>
     <string name="cannot_open">Cannot open the PDF: %1$s</string>
-    <string name="saved_test">Signature kept (test)</string>
     <string name="channel_service">Ready for the PC</string>
     <string name="channel_ask">Requests from the PC</string>
+    <string name="channel_queue">PDFs waiting to be signed</string>
     <string name="ready_title">Plus One is ready</string>
     <string name="ready_text">Your PC can send PDFs to sign</string>
     <string name="pair_title">Pair with %1$s?</string>
     <string name="pair_message">Check that the PC shows the same code: %1$s</string>
     <string name="pair">Pair</string>
     <string name="pair_compare">Pair only if the PC shows this same code, and confirm there too:</string>
-    <string name="sign_title">A PDF to sign</string>
-    <string name="status_ready">Ready: Plus One on your PC finds “%1$s” on the home network and sends it PDFs to sign.</string>
-    <string name="heading_open">OPENING BY ITSELF</string>
+    <string name="status_ready">Plus One on your PC finds “%1$s” on the home network and sends it PDFs to sign.</string>
+    <string name="heading_open">Opening by itself</string>
     <string name="overlay_on">A PDF sent by the PC opens on its own.</string>
     <string name="overlay_off">For a PDF sent by the PC to open on its own, allow Plus One to display over other apps. Without it, a notification to tap.</string>
     <string name="overlay_allow">Allow</string>
-    <string name="heading_paired">PAIRED COMPUTERS</string>
-    <string name="paired_none">None yet. On the PC, right-click a PDF → Sign on Tablet, and confirm the code here.</string>
+    <string name="heading_paired">Paired computers</string>
+    <string name="paired_none">On the PC, right-click a PDF → Sign on Tablet, and confirm the code here.</string>
     <string name="forget">Forget</string>
     <string name="ink_blue_ink">Blue ink</string>
     <string name="ink_black">Black</string>
@@ -42,11 +42,11 @@
     <string name="tap_text">Tap where the text goes</string>
     <string name="text_to_add">Text to add</string>
     <string name="place">Place</string>
-    <string name="heading_ready">READY IN THE BACKGROUND</string>
-    <string name="always_on">Always ready, also after a restart: the PC can send a PDF at any time. It only listens; it uses next to no battery.</string>
+    <string name="heading_ready">Ready in the background</string>
+    <string name="always_on">Also after a restart: the PC can send a PDF at any time. It only listens; it uses next to no battery.</string>
     <string name="always_off">Ready for 10 minutes after you open the app: open it before signing.</string>
     <string name="my_signatures">My signatures</string>
-    <string name="heading_signatures">MY SIGNATURES</string>
+    <string name="heading_signatures">My signatures</string>
     <string name="signatures_none">None yet: draw one here, or keep one while signing. They go to the PC too, and the PC\'s come here, each time you sign.</string>
     <string name="new_signature">New signature</string>
     <string name="sign_here">Sign here with the pen</string>
@@ -68,4 +68,36 @@
     <string name="selection_hint">Drag it, turn it, or resize from a corner</string>
     <string name="delete">Delete</string>
     <string name="deselect">Done with the selection</string>
+    <string name="ready">Ready</string>
+    <string name="heading_waiting">To sign</string>
+    <string name="always_ready">Always ready</string>
+    <string name="open_by_itself">Open PDFs by themselves</string>
+    <string name="paired_none_title">None yet</string>
+    <string name="forget_title">Forget %1$s?</string>
+    <string name="forget_detail">To sign from it again, you will compare a code once more.</string>
+    <string name="started">Started</string>
+    <string name="queue_title">To sign</string>
+    <string name="sent">Sent to the PC: %1$s</string>
+    <string name="not_signed">Not signed: %1$s</string>
+    <string name="gone">The PC no longer waits for %1$s</string>
+    <string name="came">New PDF to sign: %1$s</string>
+    <string name="show">Show</string>
+    <string name="cancel_all">Cancel all</string>
+    <string name="cancel_all_detail">On the PC they stay as they were.</string>
+    <plurals name="came_many">
+        <item quantity="one">%d new PDF to sign</item>
+        <item quantity="other">%d new PDFs to sign</item>
+    </plurals>
+    <plurals name="cancel_all_title">
+        <item quantity="one">Cancel the PDF?</item>
+        <item quantity="other">Cancel all %d PDFs?</item>
+    </plurals>
+    <plurals name="to_sign">
+        <item quantity="one">%d PDF to sign</item>
+        <item quantity="other">%d PDFs to sign</item>
+    </plurals>
+    <plurals name="and_more">
+        <item quantity="one">and %d more</item>
+        <item quantity="other">and %d more</item>
+    </plurals>
 </resources>

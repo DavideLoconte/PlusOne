@@ -132,6 +132,7 @@ class FakeApp:
         answer, _ = receive(wire)
         wire.send({"type": "pair-ok"})
         if answer["type"] == "pair-ok":
+            self.paired = True  # as the app remembers the PC
             script(wire)
 
 
@@ -228,3 +229,42 @@ def test_a_dropped_link_is_resumed(tmp_path, pc):
     result = companion.sign(app.target, path, ask_pairing=None, paired=paired, locate=lambda: app.target,
                             signatures=ours, on_signatures=got.append)
     assert result == marks and got == [theirs] and not app.errors
+
+
+def test_a_batch_pairs_once_and_arrives_in_order(tmp_path, pc):
+    # Five PDFs selected in Files: each its own connection, but one after
+    # the other in the order asked for, so the first pairing asks once and
+    # the tablet's queue keeps that order, whichever thread runs first.
+    _path, paired = pc
+    titles, asked = [], []
+
+    def queued(wire):
+        message, _ = receive(wire)
+        titles.append(message["title"])
+        wire.send({"type": "signed", "job": message["job"], "marks": {"pages": []}})
+        assert receive(wire)[0]["type"] == "got"
+
+    paths = []
+    for i in range(3):
+        (tmp_path / f"doc{i}.pdf").write_bytes(b"%PDF-1.7")
+        paths.append(str(tmp_path / f"doc{i}.pdf"))
+    app = FakeApp(tmp_path, [queued] * 3, paired=False)
+    turns = [companion.next_turn() for _ in paths]
+    threads = [threading.Thread(target=companion.sign, args=(app.target, path, lambda n, c: asked.append(c) or True),
+                                kwargs={"paired": paired, "turn": turn})
+               for path, turn in zip(paths, turns)]
+    for thread in reversed(threads):
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    assert titles == ["doc0.pdf", "doc1.pdf", "doc2.pdf"] and len(asked) == 1 and not app.errors
+
+
+def test_a_turn_goes_on_when_its_pdf_fails(tmp_path, pc):
+    path, paired = pc
+    first = companion.next_turn()
+    with pytest.raises(OSError):
+        companion.sign(("127.0.0.1", 1), str(tmp_path / "missing.pdf"), None, paired=paired, turn=first)
+    app = FakeApp(tmp_path, [signs({"pages": []})])
+    paired.add(companion.fingerprint(app.der), "Tab")
+    assert companion.sign(app.target, path, None, paired=paired) == {"pages": []}

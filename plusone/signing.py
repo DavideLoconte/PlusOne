@@ -31,6 +31,8 @@ class Signing:
         self.opening = set()       # paths waiting for the tablet's monitor
         self.windows = []
         self.in_app = set()        # paths the tablet's app is signing
+        self.tablet = None         # its name
+        self.signed = []           # signed in a row (several PDFs sent at once): one notification
         self.pairing = {}          # code -> (threading.Event, answer list), while the user compares
         self._pairing_lock = threading.Lock()
         self._pair_dialogs = {}    # code -> its window
@@ -45,6 +47,8 @@ class Signing:
     def request(self, path):
         path = os.path.abspath(path)
         log("signing", path)
+        if not (self.in_app or self.windows or self.queue or self.opening):
+            self.signed = []  # nothing on the way: a new batch
         # Asked again while the tablet takes its time: one window per
         # document, or Done would leave the others open, and the tablet with them.
         for window in self.windows:
@@ -80,8 +84,7 @@ class Signing:
         address, port, tablet = target
         log(f"signing in the app on {tablet}: {path}")
         self.in_app.add(path)
-        self._notify_waiting(path, _("Sending {name} to Plus One on {tablet}")
-                             .format(name=os.path.basename(path), tablet=tablet))
+        self._notify_in_app(path, _("Sending {name} to Plus One on {tablet}"), tablet)
 
         from .ink import load_pen
         color, width, _smoothing = load_pen(PEN)
@@ -92,14 +95,17 @@ class Signing:
             GLib.idle_add(once(self._merge_signatures, found))
 
         def opened(tablet):
-            GLib.idle_add(once(self._notify_waiting, path, _("Sign {name} on {tablet}")
-                               .format(name=os.path.basename(path), tablet=tablet)))
+            GLib.idle_add(once(self._notify_in_app, path, _("Sign {name} on {tablet}"), tablet))
+
+        # Taken now, in the order the PDFs were asked for: they reach the tablet in it.
+        turn = companion.next_turn()
 
         def work():
             result = error = None
             try:
                 result = companion.sign((address, port), path, self._ask_pairing, pen=pen, signatures=ours,
-                                        on_signatures=theirs, on_opened=opened, locate=self._locate_app)
+                                        on_signatures=theirs, on_opened=opened, locate=self._locate_app,
+                                        turn=turn)
             except companion.PairingRefused:
                 error = "refused"
             except companion.Lost:
@@ -158,7 +164,13 @@ class Signing:
             self._keep_from_app(result)
         marks = companion.to_marks(result) if result else {}
         if not marks:
-            self.app.withdraw_notification(NOTIFICATION)
+            # Not signed: what still waits on the tablet, if anything, or
+            # what was signed before it.
+            if self.in_app:
+                left = next(iter(self.in_app))
+                self._notify_in_app(left, _("Sign {name} on {tablet}"), self.tablet)
+            elif not self.signed:
+                self.app.withdraw_notification(NOTIFICATION)
             return
 
         def save():
@@ -260,6 +272,17 @@ class Signing:
         if dialog is not None:
             dialog.close()
 
+    def _notify_in_app(self, path, template, tablet):
+        """What the tablet's app has to sign: this PDF (template takes its
+        name and the tablet's), or how many when there are several."""
+        self.tablet = tablet
+        if len(self.in_app) > 1:
+            note = Gio.Notification.new(_("Sign on the tablet"))
+            note.set_body(_("{count} PDFs to sign on {tablet}").format(count=len(self.in_app), tablet=tablet))
+            self.app.send_notification(NOTIFICATION, note)
+        elif path in self.in_app:
+            self._notify_waiting(path, template.format(name=os.path.basename(path), tablet=tablet))
+
     # -- Second Screen ---------------------------------------------------------
     def _notify_waiting(self, path, body):
         note = Gio.Notification.new(_("Sign on the tablet"))
@@ -330,11 +353,18 @@ class Signing:
         GLib.idle_add(once(self._maybe_disconnect))
 
     def _signed(self, result):
+        """One notification for the PDFs signed in a row."""
         log("signed:", result)
-        note = Gio.Notification.new(_("Signed"))
-        note.set_body(os.path.basename(result))
-        note.set_default_action_and_target("app.open-file", GLib.Variant("s", result))
-        note.add_button_with_target(_("Open"), "app.open-file", GLib.Variant("s", result))
+        self.signed.append(result)
+        if len(self.signed) > 1:
+            note = Gio.Notification.new(_("Signed {count} PDFs").format(count=len(self.signed)))
+            note.set_body(", ".join(os.path.basename(p) for p in self.signed))
+            note.set_default_action_and_target("app.show-file", GLib.Variant("s", result))
+        else:
+            note = Gio.Notification.new(_("Signed"))
+            note.set_body(os.path.basename(result))
+            note.set_default_action_and_target("app.open-file", GLib.Variant("s", result))
+            note.add_button_with_target(_("Open"), "app.open-file", GLib.Variant("s", result))
         note.add_button_with_target(_("Show in folder"), "app.show-file", GLib.Variant("s", result))
         self.app.send_notification(NOTIFICATION, note)
 

@@ -38,7 +38,7 @@ android {
 
     buildTypes {
         release {
-            // R8: 6.5 MB of Kotlin and androidx down to what the app uses.
+            // R8: Kotlin, androidx and Material down to what the app uses.
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
@@ -62,4 +62,6 @@ android {
 dependencies {
     // Ink drawn straight into the front buffer.
     implementation("androidx.graphics:graphics-core:1.0.4")
+    // Material 3 Expressive: the look of Android 16, in the wallpaper's colours.
+    implementation("com.google.android.material:material:1.14.0")
 }

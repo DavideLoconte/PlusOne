@@ -30,7 +30,8 @@ class CompanionService : Service() {
     @Volatile private var server: SSLServerSocket? = null
     @Volatile private var registration: NsdManager.RegistrationListener? = null
     @Volatile private var stopped = false
-    // A few PCs at a time; more connections are turned away.
+    // A connection per PDF: a PC sending a batch has a few dozen at most
+    // (companion.py MAX_JOBS); more connections are turned away.
     private val connections = ThreadPoolExecutor(0, MAX_CONNECTIONS, 60, TimeUnit.SECONDS, SynchronousQueue())
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -42,6 +43,8 @@ class CompanionService : Service() {
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
         // PDFs of jobs this process no longer has (it was ended meanwhile).
         File(cacheDir, "jobs").listFiles()?.forEach { if (it.nameWithoutExtension !in Jobs.ids) it.delete() }
+        Jobs.listen(queueChanged)
+        queueChanged()  // nor a notification for them
         Thread(::serve, "plusone-server").start()
         handler.postDelayed(::idleCheck, IDLE_CHECK)
     }
@@ -57,6 +60,8 @@ class CompanionService : Service() {
     private val busy = java.util.concurrent.atomic.AtomicInteger()  // PCs connected
 
     private fun idleCheck() {
+        // PDFs whose PC stopped looking for the tablet.
+        for (job in Jobs.expire()) if (job.ownsFile) job.file.delete()
         if (!Options.alwaysReady(this) && busy.get() == 0 && Jobs.ids.isEmpty() &&
             System.currentTimeMillis() - lastUse > IDLE_STOP) {
             stopSelf()
@@ -65,7 +70,14 @@ class CompanionService : Service() {
         handler.postDelayed(::idleCheck, IDLE_CHECK)
     }
 
+    /** The notification for what waits to be signed: it alerts when the
+     * screen cannot open by itself, and only for the first PDF of a batch. */
+    private val queueChanged: () -> Unit = {
+        Notifications.waiting(this, Jobs.waiting(), alert = !Settings.canDrawOverlays(this))
+    }
+
     override fun onDestroy() {
+        Jobs.unlisten(queueChanged)
         handler.removeCallbacksAndMessages(null)
         synchronized(this) {
             stopped = true
@@ -128,6 +140,7 @@ class CompanionService : Service() {
     private fun handle(socket: SSLSocket) {
         busy.incrementAndGet()
         lastUse = System.currentTimeMillis()
+        var link: Wire? = null
         try {
             socket.use {
                 // Nothing waits long for a peer that is not even paired.
@@ -150,16 +163,17 @@ class CompanionService : Service() {
                 }
                 // The PC asks "ping" every 15 s while the user signs.
                 socket.soTimeout = PAIRED_TIMEOUT
+                link = wire
                 while (true) {
                     val message = wire.receive()
                     val type = message.optString("type")
                     val size = message.optLong("size", 0)
                     require(size == 0L || type == "sign") { "unexpected payload" }
                     when (type) {
-                        "sign" -> sign(wire, message, size)
+                        "sign" -> sign(wire, message, size, pcName)
                         "resume" -> {
                             val job = message.optString("job")
-                            if (Jobs.resume(job) { answer(wire, job, it.result) }) {
+                            if (Jobs.resume(job, wire) { answer(wire, job, it.result) }) {
                                 wire.send(JSONObject().put("type", "resumed").put("job", job))
                             } else {
                                 wire.send(JSONObject().put("type", "unknown-job").put("job", job))
@@ -177,6 +191,7 @@ class CompanionService : Service() {
         } catch (e: Exception) {
             Log.i(TAG, "connection ended: $e")
         } finally {
+            link?.let { Jobs.detach(it) }  // its jobs wait for the PC to come back
             busy.decrementAndGet()
             lastUse = System.currentTimeMillis()
         }
@@ -208,27 +223,21 @@ class CompanionService : Service() {
     private fun jobFile(job: String): File? =
         if (JOB_ID.matches(job)) File(File(cacheDir, "jobs").apply { mkdirs() }, "$job.pdf") else null
 
-    /** A PDF to sign: the signing screen opens on it; its answer goes back. */
-    private fun sign(wire: Wire, message: JSONObject, size: Long) {
+    /** A PDF to sign: it joins the queue, and the signing screen opens on
+     * it (or, already open on another, says it came); its answer goes back. */
+    private fun sign(wire: Wire, message: JSONObject, size: Long, pc: String) {
         val job = message.optString("job")
         val file = jobFile(job)
         require(file != null && size in 1..Wire.MAX_PAYLOAD) { "bad job" }
         file.outputStream().use { wire.readPayload(size, it) }
         // Signatures added or removed on the PC since the last job.
         message.optJSONObject("signatures")?.let { Signatures.merge(this, it) }
-        Jobs.start(job) { answer(wire, job, it.result) }
         val title = message.optString("title", file.name).take(200)
-        val open = Intent(this, SignActivity::class.java).apply {
-            putExtra(SignActivity.EXTRA_PATH, file.path)
-            putExtra(SignActivity.EXTRA_JOB, job)
-            putExtra(SignActivity.EXTRA_TITLE, title)
-            // The PC's pen, so both sides sign alike.
-            message.optJSONObject("pen")?.let { putExtra(SignActivity.EXTRA_PEN, it.toString()) }
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
+        // With the PC's pen, so both sides sign alike.
+        Jobs.start(Jobs.Job(job, file, title, pc, message.optJSONObject("pen")), wire) { answer(wire, job, it.result) }
         // Opening over whatever is on screen needs "Display over other apps";
-        // without it, a notification to tap.
-        if (Settings.canDrawOverlays(this)) startActivity(open) else Notifications.signJob(this, job, title, open)
+        // without it, the notification (queueChanged) is there to tap.
+        if (Settings.canDrawOverlays(this)) startActivity(SignActivity.open(this, job))
         wire.send(JSONObject().put("type", "opened").put("job", job))
     }
 
@@ -236,7 +245,6 @@ class CompanionService : Service() {
      * false if the link is gone (the PC asks again). The job stays until
      * the PC says it got it. */
     private fun answer(wire: Wire, job: String, result: JSONObject?): Boolean = try {
-        Notifications.cancelJob(this, job)
         val message = JSONObject().put("job", job).put("signatures", Signatures.toJson(this))
         if (result != null) {
             wire.send(message.put("type", "signed").put("marks", result))
@@ -253,7 +261,7 @@ class CompanionService : Service() {
         const val TAG = "PlusOne"
         const val SERVICE_TYPE = "_plusone._tcp"
         const val PROTOCOL = 2
-        const val MAX_CONNECTIONS = 8
+        const val MAX_CONNECTIONS = 32
         const val HANDSHAKE_TIMEOUT = 20_000   // ms for TLS, hello and the pairing messages
         const val PAIRING_TIMEOUT = 150_000    // ms: the user compares the codes
         const val PAIRED_TIMEOUT = 90_000      // ms without a word from a paired PC

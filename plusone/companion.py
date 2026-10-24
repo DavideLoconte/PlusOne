@@ -159,6 +159,42 @@ class Lost(Exception):
 
 RESUME_FOR = 600     # seconds to look for the tablet again after the link drops mid-job
 RESUME_EVERY = 5     # seconds between attempts
+MAX_JOBS = 24        # PDFs waiting on the tablet at once (the app takes 32 connections)
+
+
+class _Turns:
+    """PDFs sent together (five selected in Files) go to the tablet one at a
+    time, in the order they were asked for: the tablet's queue keeps that
+    order, and a first pairing asks once, the others finding the tablet
+    paired."""
+
+    def __init__(self):
+        self._changed = threading.Condition()
+        self._issued = 0
+        self._now = 0
+
+    def ticket(self):
+        with self._changed:
+            self._issued += 1
+            return self._issued - 1
+
+    def wait(self, ticket):
+        with self._changed:
+            self._changed.wait_for(lambda: self._now == ticket)
+
+    def done(self, ticket):
+        with self._changed:
+            self._now = max(self._now, ticket + 1)
+            self._changed.notify_all()
+
+
+_turns = _Turns()
+_places = threading.BoundedSemaphore(MAX_JOBS)
+
+
+def next_turn():
+    """A place in line for sign(), taken when the PDF is asked for (its order)."""
+    return _turns.ticket()
 
 
 def _connect(target, paired, ask_pairing):
@@ -249,7 +285,7 @@ def _answer(wire, job, on_opened, name, on_signatures):
 
 
 def sign(target, path, ask_pairing, paired=None, on_opened=None, pen=None, signatures=None,
-         on_signatures=None, locate=None, resume_for=RESUME_FOR):
+         on_signatures=None, locate=None, resume_for=RESUME_FOR, turn=None):
     """Blocking (run it in a thread): send the PDF at path to the app at
     target (host, port) and wait for the user to sign it there. Returns the
     result ({"pages": [...], "pen": ..., maybe "signature": ...}) or None if
@@ -258,6 +294,9 @@ def sign(target, path, ask_pairing, paired=None, on_opened=None, pen=None, signa
     the saved signatures (signatures.message()) go along, so the tablet
     signs like the PC; on_signatures(the tablet's list) runs with the answer.
 
+    Several at once: each goes in its turn (next_turn(), or one taken now),
+    and at most MAX_JOBS wait on the tablet; more wait here for a place.
+
     Should the link drop once the PDF is on the tablet, the app keeps the
     job: Plus One connects again (to locate()'s address, the app's port may
     have changed) and asks for it, for resume_for seconds.
@@ -265,9 +304,28 @@ def sign(target, path, ask_pairing, paired=None, on_opened=None, pen=None, signa
     Raises OSError, EOFError, ValueError, PairingRefused or Incompatible
     before the PDF reached the tablet, Lost after."""
     paired = paired or Paired()
+    turn = next_turn() if turn is None else turn
+    try:
+        _turns.wait(turn)
+        _places.acquire()
+        try:
+            sock, wire, name, job = _send(target, path, paired, ask_pairing, pen, signatures)
+        except BaseException:
+            _places.release()
+            raise
+    finally:
+        _turns.done(turn)
+    try:
+        return _wait(sock, wire, name, job, target, paired, on_opened, on_signatures, locate, resume_for)
+    finally:
+        _places.release()
+
+
+def _send(target, path, paired, ask_pairing, pen, signatures):
+    """(socket, wire, tablet name, job id) once the PDF is on the tablet."""
     sock, wire, name = _connect(target, paired, ask_pairing)
     job = uuid.uuid4().hex
-    with sock:
+    try:
         with open(path, "rb") as f:
             pdf = f.read()
         sock.settimeout(IO_TIMEOUT * 4)  # a big PDF over slow Wi-Fi
@@ -278,6 +336,15 @@ def sign(target, path, ask_pairing, paired=None, on_opened=None, pen=None, signa
             header["signatures"] = signatures
         wire.send(header, pdf)
         sock.settimeout(IO_TIMEOUT)
+    except BaseException:
+        sock.close()
+        raise
+    return sock, wire, name, job
+
+
+def _wait(sock, wire, name, job, target, paired, on_opened, on_signatures, locate, resume_for):
+    """The job's answer, connecting again if the link drops (sign())."""
+    with sock:
         try:
             return _answer(wire, job, on_opened, name, on_signatures)
         except (OSError, EOFError, ValueError) as e:

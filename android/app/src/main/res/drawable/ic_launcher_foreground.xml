@@ -1,11 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- A plus sign and a pen stroke: Plus One's tablet half. -->
+<!-- A plus sign and a pen stroke under it: Plus One's tablet half. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M48,34h12v14h14v12h-14v14h-12v-14h-14v-12h14z" />
+        android:pathData="M54,35 L54,61 M41,48 L67,48"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="10"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M37,74 C40,70 43,67 45.5,67 C48,67 46,73.5 48.5,73.5 C51,73.5 52.5,68.5 55,68.5 C57,68.5 57,72 59,72 C61,72 64,70 71,67"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeAlpha="0.9"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
 </vector>

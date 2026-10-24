@@ -78,6 +78,8 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
     var selectMode = false
     /** A selection appeared (true) or went (false). */
     var onSelection: (Boolean) -> Unit = {}
+    /** Around the page (the theme's). */
+    var canvasColor = Color.rgb(48, 48, 50)
 
     var index = 0
         private set
@@ -141,10 +143,14 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
         strokeJoin = Paint.Join.ROUND
         color = Ink.COLOR
     }
-    private val white = Paint().apply { color = Color.WHITE }
+    // The page, a sheet lifted off the canvas.
+    private val white = Paint().apply {
+        color = Color.WHITE
+        val d = resources.displayMetrics.density
+        setShadowLayer(6 * d, 0f, 2 * d, Color.argb(56, 0, 0, 0))
+    }
     // pdf.py draws text in "Sans".
     private val text = Paint().apply { isAntiAlias = true; typeface = android.graphics.Typeface.SANS_SERIF }
-    private val shadow = Paint().apply { color = Color.argb(40, 0, 0, 0) }
     private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val eraserPaint = Paint().apply {
         isAntiAlias = true
@@ -318,13 +324,12 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
     }
 
     private fun drawScene(canvas: Canvas) {
-        canvas.drawColor(BACKGROUND)
+        canvas.drawColor(canvasColor)
         val s = scene ?: return
         val left = s.ox
         val top = s.oy
         val right = s.ox + s.size.width * s.zoom
         val bottom = s.oy + s.size.height * s.zoom
-        canvas.drawRect(left + 1, top + 4, right + 1, bottom + 4, shadow)
         canvas.drawRect(left, top, right, bottom, white)
         canvas.save()
         canvas.clipRect(left, top, right, bottom)
@@ -787,7 +792,6 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
     }
 
     companion object {
-        val BACKGROUND = Color.rgb(48, 48, 50)
         const val ERASER_RADIUS = 24f      // pixels around the nib
         const val PALM_WINDOW = 400L        // ms after the pen was seen during which touches are a palm
         const val DOUBLE_TAP_ZOOM = 2.5f

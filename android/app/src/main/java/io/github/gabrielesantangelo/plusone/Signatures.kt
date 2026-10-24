@@ -7,18 +7,17 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PointF
 import android.graphics.RectF
-import android.graphics.drawable.GradientDrawable
 import android.util.AtomicFile
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.widget.Button
 import android.widget.LinearLayout
-import android.widget.TextView
+import com.google.android.material.button.MaterialButton
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import com.google.android.material.R as M
 
 /**
  * The saved signatures, as plusone/signatures.py keeps the PC's: the order
@@ -146,7 +145,7 @@ class SignaturePad(context: Context, private val color: Int, private val pen: Fl
     private val density = context.resources.displayMetrics.density
 
     init {
-        val save = button(context.getString(R.string.save), accent = true) {
+        val save = context.button(context.getString(R.string.save), Look.FILLED) {
             val scale = pad.width / PAD_POINTS
             val strokes = pad.strokes.map { s ->
                 val pts = s.toArray()
@@ -159,39 +158,26 @@ class SignaturePad(context: Context, private val color: Int, private val pen: Fl
             }
             dismiss()
         }
-        val again = icon(R.drawable.ic_clear, R.string.start_over) { pad.clear() }
-        val eraser = icon(R.drawable.ic_eraser, R.string.eraser) {}
-        eraser.setOnClickListener {
-            pad.eraserMode = !pad.eraserMode
-            eraser.imageTintList = android.content.res.ColorStateList.valueOf(
-                if (pad.eraserMode) Color.rgb(120, 174, 237) else Color.WHITE)
-        }
+        val again = context.iconButton(R.drawable.ic_clear, R.string.start_over) { pad.clear() }
+        val eraser = context.iconButton(R.drawable.ic_eraser, R.string.eraser,
+            M.attr.materialIconButtonFilledTonalStyle) { pad.eraserMode = (it as MaterialButton).isChecked }
+        eraser.isCheckable = true
         save.isEnabled = false
-        save.alpha = 0.4f
-        pad.onChange = {
-            val any = pad.strokes.isNotEmpty()
-            save.isEnabled = any
-            save.alpha = if (any) 1f else 0.4f
-        }
+        pad.onChange = { save.isEnabled = pad.strokes.isNotEmpty() }
         pad.color = color
         pad.pen = pen
         val box = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            val p = (20 * density).toInt()
-            setPadding(p, p, p, p)
-            background = GradientDrawable().apply { setColor(Color.rgb(44, 44, 48)); cornerRadius = 24 * density }
-            addView(TextView(context).apply {
-                setText(R.string.new_signature)
-                setTextColor(Color.WHITE)
-                textSize = 20f
-                setPadding(0, 0, 0, (12 * density).toInt())
+            setPadding(context.dp(24), context.dp(24), context.dp(24), context.dp(16))
+            background = context.surface(M.attr.colorSurfaceContainerHigh)
+            addView(context.label(context.getString(R.string.new_signature), M.attr.textAppearanceHeadlineSmall).apply {
+                setPadding(0, 0, 0, context.dp(16))
             })
             addView(pad, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0))
-            addView(TextView(context).apply {
-                setText(R.string.sign_here)
-                setTextColor(Color.LTGRAY)
+            addView(context.label(context.getString(R.string.sign_here), M.attr.textAppearanceBodyMedium,
+                M.attr.colorOnSurfaceVariant).apply {
                 gravity = Gravity.CENTER
-                setPadding(0, (8 * density).toInt(), 0, (8 * density).toInt())
+                setPadding(0, context.dp(8), 0, context.dp(8))
             })
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -199,8 +185,9 @@ class SignaturePad(context: Context, private val color: Int, private val pen: Fl
                 addView(again)
                 addView(eraser)
                 addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
-                addView(button(context.getString(R.string.cancel)) { dismiss() })
-                addView(save)
+                addView(context.button(context.getString(R.string.cancel), Look.TEXT) { dismiss() })
+                addView(save, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = context.dp(8) })
             })
         }
         setContentView(box)
@@ -217,29 +204,6 @@ class SignaturePad(context: Context, private val color: Int, private val pen: Fl
         pad.layoutParams = pad.layoutParams.apply { height = minOf(width * 2 / 5, metrics.heightPixels / 2) }
         window?.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT)
         window?.setGravity(Gravity.CENTER)
-    }
-
-    private fun icon(drawable: Int, description: Int, onClick: () -> Unit) = android.widget.ImageButton(context).apply {
-        setImageResource(drawable)
-        contentDescription = context.getString(description)
-        tooltipText = contentDescription
-        background = null
-        minimumWidth = (48 * density).toInt()
-        minimumHeight = (48 * density).toInt()
-        setOnClickListener { onClick() }
-    }
-
-    private fun button(label: String, accent: Boolean = false, onClick: () -> Unit) = Button(context).apply {
-        text = label
-        isAllCaps = false
-        isSingleLine = true
-        setTextColor(Color.WHITE)
-        background = GradientDrawable().apply {
-            setColor(if (accent) Color.rgb(53, 132, 228) else Color.TRANSPARENT)
-            cornerRadius = 20 * density
-        }
-        setPadding((18 * density).toInt(), 0, (18 * density).toInt(), 0)
-        setOnClickListener { onClick() }
     }
 
     /** White card with a line to sign on. */

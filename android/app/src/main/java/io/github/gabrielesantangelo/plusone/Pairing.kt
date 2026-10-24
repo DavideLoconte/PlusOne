@@ -1,6 +1,5 @@
 package io.github.gabrielesantangelo.plusone
 
-import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -8,12 +7,14 @@ import android.os.Bundle
 import android.provider.Settings
 import android.graphics.Typeface
 import android.view.Gravity
-import android.widget.Button
+import android.view.ViewGroup
 import android.widget.LinearLayout
-import android.widget.TextView
+import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.color.DynamicColors
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import com.google.android.material.R as M
 
 /** Asking the user whether to pair with a PC, showing the code both screens show. */
 object Pairing {
@@ -58,47 +59,49 @@ object Pairing {
 
 /** The pairing question, over whatever is on screen. Its own layout: an
  * AlertDialog inside a dialog-themed activity was dismissed as it opened. */
-class PairActivity : Activity() {
+class PairActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        DynamicColors.applyToActivityIfAvailable(this)  // the wallpaper's colours, as the app's other screens
         super.onCreate(savedInstanceState)
         setFinishOnTouchOutside(false)
         val code = intent.getStringExtra(EXTRA_CODE) ?: return finish()
         val pc = Pairing.pending(code) ?: return finish()
-        fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
-        fun button(label: Int, accept: Boolean) = Button(this).apply {
-            setText(label)
-            isAllCaps = false
-            setOnClickListener {
-                Pairing.answer(code, accept)
-                finish()
-            }
+        fun answer(accept: Boolean) {
+            Pairing.answer(code, accept)
+            finish()
         }
         setContentView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(28), dp(24), dp(28), dp(16))
-            addView(TextView(context).apply {
-                text = getString(R.string.pair_title, pc)
-                textSize = 20f
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(24), dp(24), dp(24), dp(20))
+            background = surface(M.attr.colorSurfaceContainerHigh)
+            addView(icon(R.drawable.ic_computer, M.attr.colorSecondary))
+            addView(label(getString(R.string.pair_title, pc), M.attr.textAppearanceHeadlineSmall).apply {
+                gravity = Gravity.CENTER
+                setPadding(0, dp(16), 0, dp(16))
             })
-            addView(TextView(context).apply {
-                text = getString(R.string.pair_compare)
-                textSize = 15f
-                setPadding(0, dp(12), 0, dp(4))
-            })
-            addView(TextView(context).apply {
-                text = code.chunked(3).joinToString(" ")
-                textSize = 40f
+            addView(label(getString(R.string.pair_compare), M.attr.textAppearanceBodyMedium,
+                M.attr.colorOnSurfaceVariant))
+            // The code, big, in groups of three as the PC shows it.
+            addView(label(code.chunked(3).joinToString(" "), M.attr.textAppearanceDisplayMedium,
+                M.attr.colorOnSecondaryContainer).apply {
                 typeface = Typeface.MONOSPACE
                 gravity = Gravity.CENTER
-                setPadding(0, dp(8), 0, dp(16))
+                background = surface(M.attr.colorSecondaryContainer, dp(16f))
+                setPadding(dp(16), dp(12), dp(16), dp(12))
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                setMargins(0, dp(16), 0, dp(24))
             })
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.END
-                addView(button(R.string.cancel, false))
-                addView(button(R.string.pair, true))
-            })
+                addView(button(getString(R.string.cancel), Look.TEXT) { answer(false) })
+                addView(button(getString(R.string.pair), Look.FILLED) { answer(true) },
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) })
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         })
+        window.setLayout(minOf(resources.displayMetrics.widthPixels - dp(48), dp(400)), ViewGroup.LayoutParams.WRAP_CONTENT)
     }
 
     companion object {

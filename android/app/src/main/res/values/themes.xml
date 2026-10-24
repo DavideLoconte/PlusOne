@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Material 3 Expressive, in the colours Android takes from the wallpaper,
+         light or dark as the system is. -->
+    <style name="Theme.PlusOne" parent="Theme.Material3Expressive.DynamicColors.DayNight.NoActionBar">
+        <item name="android:windowLightStatusBar">@bool/light_theme</item>
+        <item name="android:windowLightNavigationBar">@bool/light_theme</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">always</item>
+        <item name="plusTextButtonStyle">@style/Widget.Material3Expressive.Button.TextButton</item>
+        <item name="plusToolbarButtonStyle">@style/Widget.Material3.FloatingToolbar.IconButton</item>
+    </style>
+
+    <!-- Signing: the page has the whole screen. -->
+    <style name="Theme.PlusOne.Sign">
+        <item name="android:windowFullscreen">true</item>
+    </style>
+
+    <!-- The pairing question, over whatever is on screen. -->
+    <style name="Theme.PlusOne.Pair" parent="Theme.Material3Expressive.DayNight.Dialog">
+        <item name="windowNoTitle">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="plusTextButtonStyle">@style/Widget.Material3Expressive.Button.TextButton</item>
+        <item name="plusToolbarButtonStyle">@style/Widget.Material3.FloatingToolbar.IconButton</item>
+    </style>
+</resources>

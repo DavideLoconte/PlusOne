@@ -245,18 +245,19 @@ class PlusOneApp(Adw.Application):
         pdfs.add_mime_type("application/pdf")
         filters = Gio.ListStore.new(Gtk.FileFilter)
         filters.append(pdfs)
-        dialog = Gtk.FileDialog(title=_("Choose the PDF to sign"), filters=filters)
+        dialog = Gtk.FileDialog(title=_("Choose the PDFs to sign"), filters=filters)
         self.hold()  # the portal dialog is not one of our windows
 
         def chosen(dialog, result):
             self.release()
             try:
-                file = dialog.open_finish(result)
+                files = dialog.open_multiple_finish(result)
             except GLib.Error:
                 return  # cancelled
-            if file and file.get_path():
-                self.signing.request(file.get_path())
-        dialog.open(None, None, chosen)
+            for file in files or []:
+                if file.get_path():
+                    self.signing.request(file.get_path())
+        dialog.open_multiple(None, None, chosen)
 
     def do_dbus_register(self, connection, object_path):
         Adw.Application.do_dbus_register(self, connection, object_path)

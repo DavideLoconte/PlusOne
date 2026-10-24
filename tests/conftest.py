@@ -30,3 +30,11 @@ def own_signatures(tmp_path, monkeypatch):
     from plusone import signatures
     monkeypatch.setattr(signatures, "PATH", str(tmp_path / "signatures.json"))
     monkeypatch.setattr(signatures, "OLD", str(tmp_path / "signature.json"))
+
+
+@pytest.fixture(autouse=True)
+def own_turns(monkeypatch):
+    """A test's PDFs take turns of their own: one that fakes companion.sign
+    leaves no turn unused for the next."""
+    from plusone import companion
+    monkeypatch.setattr(companion, "_turns", companion._Turns())

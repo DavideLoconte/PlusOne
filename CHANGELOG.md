@@ -32,6 +32,17 @@ The companion app: ink under the nib.
   (the angle shown, snapping to right angles); drag from inside; Delete.
   A placed signature, date or text comes picked, to adjust it at once.
 - The eraser works in the new-signature pad too.
+- **A queue of PDFs**: select five PDFs in Files and Sign on Tablet, or send
+  them one by one, also while signing: they reach the tablet in the order
+  sent (one pairing question for all of them) and wait there. Done or ✕
+  sends one back and opens the next; the documents button (and the app's
+  main screen, and a notification) lists them, to sign them in any order,
+  keeping what was drawn on each. The PC tells about them in one
+  notification ("5 PDFs to sign on…", "Signed 5 PDFs"); its file chooser
+  takes several PDFs. A PDF whose PC stopped waiting leaves the queue.
+- **Material 3 Expressive** look for the app, in the wallpaper's colours,
+  light or dark as the system: grouped settings as in Android 16, a floating
+  toolbar, Material dialogs, sliders and switches, a new icon.
 - The app fits phones too (Android 13 or later): icons in the toolbar,
   clear of the system bars and cutouts, popups sized to the screen.
 - When the app is not there, Second Screen as before.

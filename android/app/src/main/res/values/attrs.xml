@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Styles for views made in code (Ui.kt): a view takes its style from a theme attribute. -->
+    <attr name="plusTextButtonStyle" format="reference" />
+    <attr name="plusToolbarButtonStyle" format="reference" />
+</resources>
