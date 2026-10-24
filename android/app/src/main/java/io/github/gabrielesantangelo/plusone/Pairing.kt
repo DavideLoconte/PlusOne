@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit
 
 /** Asking the user whether to pair with a PC, showing the code both screens show. */
 object Pairing {
-    private class Request(val pc: String, @Suppress("unused") val code: String) {
+    private class Request(val pc: String) {
         val answered = CountDownLatch(1)
         @Volatile var accepted = false
     }
@@ -29,7 +29,7 @@ object Pairing {
      * PDFs at once), it waits for the same answer. */
     fun ask(context: Context, pc: String, code: String): Boolean {
         var asking = false
-        val request = requests.computeIfAbsent(code) { asking = true; Request(pc, code) }
+        val request = requests.computeIfAbsent(code) { asking = true; Request(pc) }
         if (asking) {
             val open = Intent(context, PairActivity::class.java)
                 .putExtra(PairActivity.EXTRA_CODE, code)
