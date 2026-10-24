@@ -279,12 +279,12 @@ def test_a_long_stroke_is_inked_once(window):
     assert area._inked > 150 and len(area._chunks) == area._inked // sign.CHUNK
     area._finish()
     area.do_snapshot(Gtk.Snapshot())
-    index, scale, cached, drawn, _texture = area._cache
-    assert drawn == tuple(win.marks[0])
-    area._cache = None
-    _scale, fresh, _texture = area._page_surface(scale)
-    cached.flush()
-    fresh.flush()
-    a, b = bytes(cached.get_data()), bytes(fresh.get_data())
+    raster = area._raster
+    assert raster.drawn == tuple(win.marks[0])
+    fresh = sign.PageRaster(raster.index, raster.scale, win.page(), area.page_size())
+    fresh.update(win.marks[0])
+    raster.surface.flush()
+    fresh.surface.flush()
+    a, b = bytes(raster.surface.get_data()), bytes(fresh.surface.get_data())
     # Chunks are composited in 8 bits: at most a rounding step apart.
     assert len(a) == len(b) and max(abs(x - y) for x, y in zip(a, b)) <= 2

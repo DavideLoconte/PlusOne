@@ -157,9 +157,35 @@ def place(signature, x, y, width=SIGNATURE_WIDTH, pen=PEN_WIDTH, color=INK):
             for s in signature["strokes"]]
 
 
+def bounds(mark):
+    """(x0, y0, x1, y1) in page points that the mark's ink stays within,
+    generously. Cached on the mark: marks do not change once on the page."""
+    cached = mark.__dict__.get("_bounds")
+    key = len(mark.points) if isinstance(mark, Stroke) else (mark.x, mark.y, mark.text, mark.size)
+    if cached and cached[0] == key:
+        return cached[1]
+    if isinstance(mark, Text):
+        # Wide glyphs reach about one em each.
+        box = (mark.x - 1, mark.y - 1.1 * mark.size, mark.x + mark.size * len(mark.text) + 1,
+               mark.y + 0.4 * mark.size)
+    else:
+        xs = [p[0] for p in mark.points]
+        ys = [p[1] for p in mark.points]
+        reach = mark.width / 2 + 2  # round caps, and the curve's slight swing
+        box = (min(xs) - reach, min(ys) - reach, max(xs) + reach, max(ys) + reach)
+    mark.__dict__["_bounds"] = (key, box)
+    return box
+
+
 def touches(mark, a, b, radius):
     """Whether an eraser of this radius going from a to b (page points)
     touches mark."""
+    # Most marks are nowhere near the eraser: checking each of their
+    # segments took 7 ms per eraser sample for a 20-stroke signature.
+    x0, y0, x1, y1 = bounds(mark)
+    if (max(a[0], b[0]) < x0 - radius or min(a[0], b[0]) > x1 + radius
+            or max(a[1], b[1]) < y0 - radius or min(a[1], b[1]) > y1 + radius):
+        return False
     if isinstance(mark, Text):
         # Rough box around the text: glyphs average about half an em.
         x0, x1 = mark.x - radius, mark.x + 0.55 * mark.size * len(mark.text) + radius

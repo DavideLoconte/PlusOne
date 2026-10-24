@@ -63,6 +63,10 @@ Sign on the tablet.
   - the signing window draws 60 frames a second while you write (it managed
     33-40): the page is a texture made once, and a frame only draws the
     newest bit of the stroke (3.5 ms a frame instead of 10);
+  - the eraser keeps up: it skips marks nowhere near it (checking every
+    segment of every mark took 7 ms per pen sample on a short signature),
+    and erasing or undoing redraws only that area of the page, whose
+    texture is cut in tiles so only the tiles it covers are uploaded again;
   - the first connection after Plus One starts is 1.5 s quicker: the NVENC
     plugin (CUDA probing the GPUs) loads while the tablet is being found,
     not after it connected.

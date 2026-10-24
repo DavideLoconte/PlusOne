@@ -26,7 +26,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gsk, Gtk, Poppler  # no
 
 from . import log, once  # noqa: E402
 from .i18n import _  # noqa: E402
-from .ink import (RawPen, View, load_pen, load_signature, pen_width, place,  # noqa: E402
+from .ink import (RawPen, View, bounds, load_pen, load_signature, pen_width, place,  # noqa: E402
                   save_pen, save_signature, thickness, touches)
 from .modeler import LEVELS, Params, StrokeModeler  # noqa: E402
 from .pdf import INK, Stroke, Text, curve, draw_marks, draw_segments, output_path, save_signed  # noqa: E402
@@ -50,6 +50,7 @@ CHUNK = 24  # settled stroke segments turned into one texture while drawing
 # Past this the page is magnified rather than rendered bigger: an A4 page at
 # the 8x zoom is 32 million pixels, 128 MB plus a copy for the texture.
 MAX_PAGE_PIXELS = 16_000_000
+TILE = 512  # device pixels per side of a page texture tile
 PEN_SAVE_DELAY = 500  # ms after the last change of colour, thickness or stabilization
 # cairo's 32-bit pixels are native-endian words: B, G, R, A bytes here.
 LITTLE = sys.byteorder == "little"
@@ -130,6 +131,107 @@ def rect(x, y, w, h):
     return Graphene.Rect().init(x, y, w, h)
 
 
+class PageRaster:
+    """A page with its finished marks, rendered at one scale and handed to
+    GTK as tiles of textures. A change (a stroke added, erased, undone)
+    re-renders only its area and makes new textures only for the tiles it
+    covers: one texture for the whole page meant copying and uploading all
+    of it (64 MB at high zoom) after every stroke and every erased one."""
+
+    def __init__(self, index, scale, page, size):
+        self.index, self.scale, self.page = index, scale, page
+        w, h = size
+        self.surface = cairo.ImageSurface(cairo.FORMAT_RGB24, max(1, int(w * scale)), max(1, int(h * scale)))
+        self.drawn = ()   # marks on the surface, in order
+        self.tiles = {}   # (column, row) -> texture, made when first needed
+        self._render(None, ())
+
+    def area(self, marks):
+        """Device pixel box (x0, y0, x1, y1) covering marks' ink, or None."""
+        boxes = [bounds(m) for m in marks]
+        if not boxes:
+            return None
+        s, w, h = self.scale, self.surface.get_width(), self.surface.get_height()
+        x0 = max(0, math.floor(min(b[0] for b in boxes) * s))
+        y0 = max(0, math.floor(min(b[1] for b in boxes) * s))
+        x1 = min(w, math.ceil(max(b[2] for b in boxes) * s))
+        y1 = min(h, math.ceil(max(b[3] for b in boxes) * s))
+        return (x0, y0, x1, y1) if x0 < x1 and y0 < y1 else None
+
+    def _render(self, area, marks):
+        """The page and marks again, within area (all of it if None)."""
+        cr = cairo.Context(self.surface)
+        if area is not None:
+            x0, y0, x1, y1 = area
+            cr.rectangle(x0, y0, x1 - x0, y1 - y0)
+            cr.clip()
+            marks = [m for m in marks if (box := self.area([m])) and _overlap(box, area)]
+        cr.set_source_rgb(1, 1, 1)
+        cr.paint()
+        cr.scale(self.scale, self.scale)
+        self.page.render(cr)
+        draw_marks(cr, marks)
+        self.changed(area)
+
+    def changed(self, area):
+        """Pixels within area (all if None) changed: their tiles go."""
+        if area is None:
+            self.tiles = {}
+            return
+        for key in [k for k in self.tiles if _overlap(self._tile_box(*k), area)]:
+            del self.tiles[key]
+
+    def update(self, marks):
+        """Bring the surface to these marks."""
+        drawn = self.drawn
+        if len(drawn) <= len(marks) and all(a is b for a, b in zip(drawn, marks)):
+            new = marks[len(drawn):]  # on top of what is there
+            if new:
+                cr = cairo.Context(self.surface)
+                cr.scale(self.scale, self.scale)
+                draw_marks(cr, new)
+                self.changed(self.area(new))
+        else:
+            # Erased, undone or cleared: render again where something changed.
+            before, after = {id(m) for m in drawn}, {id(m) for m in marks}
+            area = self.area([m for m in drawn if id(m) not in after]
+                             + [m for m in marks if id(m) not in before])
+            if area:
+                self._render(area, marks)
+        self.drawn = tuple(marks)
+
+    def add(self, mark, paint):
+        """mark goes on top, drawn by paint(cairo context in device pixels)."""
+        paint(cairo.Context(self.surface))
+        self.changed(self.area([mark]))
+        self.drawn += (mark,)
+
+    def _tile_box(self, column, row):
+        w, h = self.surface.get_width(), self.surface.get_height()
+        return column * TILE, row * TILE, min(w, (column + 1) * TILE), min(h, (row + 1) * TILE)
+
+    def tile_boxes(self):
+        w, h = self.surface.get_width(), self.surface.get_height()
+        return [(c, r) for r in range(-(-h // TILE)) for c in range(-(-w // TILE))]
+
+    def tile(self, column, row):
+        """(texture, its device pixel box) for one tile."""
+        box = self._tile_box(column, row)
+        tex = self.tiles.get((column, row))
+        if tex is None:
+            x0, y0, x1, y1 = box
+            self.surface.flush()
+            data, stride = self.surface.get_data(), self.surface.get_stride()
+            rows = b"".join(bytes(data[y * stride + 4 * x0:y * stride + 4 * x1]) for y in range(y0, y1))
+            tex = self.tiles[column, row] = Gdk.MemoryTexture.new(
+                x1 - x0, y1 - y0, OPAQUE, GLib.Bytes.new(rows), 4 * (x1 - x0))
+        return tex, box
+
+
+def _overlap(a, b):
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
 def open_document(path):
     """A Poppler document, or raise GLib.Error (missing, damaged, password)."""
     return Poppler.Document.new_from_file(Gio.File.new_for_path(path).get_uri(), None)
@@ -193,7 +295,8 @@ class PageArea(Gtk.Widget):
         self.window = window
         self.view = View()
         self.fitted = False
-        self._cache = None  # (page index, scale, surface, marks drawn on it, texture)
+        self._raster = None  # PageRaster of the page shown
+        self._origin = (0.0, 0.0)  # where the page is drawn (whole device pixels)
         self._stroke = None
         self._model = None    # the stroke's modeler, in widget pixels
         self._clock = 0.0     # time of the stroke's last sample, seconds
@@ -277,7 +380,7 @@ class PageArea(Gtk.Widget):
 
     def _sharpen(self):
         """After a pinch, the page and its marks at exactly the new zoom."""
-        self._cache = None
+        self._raster = None
         self.queue_draw()
 
     def _scroll(self, controller, dx, dy):
@@ -355,21 +458,21 @@ class PageArea(Gtk.Widget):
             self._add(self._model.up(*self._model.raw[-1]))
             if self._skipped:
                 self._stroke.points.append(self._skipped)
-            stroke, cached = self._stroke, self._cache
+            stroke, raster, chunks, inked = self._stroke, self._raster, self._chunks, self._inked
             self.window.add_mark(stroke)
             marks = self.window.marks.get(self.window.index, [])
-            if (self._chunks and cached is not None and cached[1] == self._chunk_scale
-                    and len(marks) == len(cached[3]) + 1 and marks[-1] is stroke
-                    and all(a is b for a, b in zip(cached[3], marks))):
+            if (chunks and raster is not None and raster.scale == self._chunk_scale
+                    and raster.index == self.window.index and len(marks) == len(raster.drawn) + 1
+                    and marks[-1] is stroke and all(a is b for a, b in zip(raster.drawn, marks))):
                 # What was shown goes onto the page as is: the chunks, then
                 # the rest of the stroke, rather than all of it again.
-                cr = cairo.Context(cached[2])
-                for surface, _texture, x, y in self._chunks:
-                    cr.set_source_surface(surface, x, y)
-                    cr.paint()
-                cr.scale(cached[1], cached[1])
-                draw_segments(cr, stroke, self._segments(stroke.points, self._inked))
-                self._cache = (*cached[:3], tuple(marks), None)
+                def paint(cr):
+                    for surface, _texture, x, y in chunks:
+                        cr.set_source_surface(surface, x, y)
+                        cr.paint()
+                    cr.scale(raster.scale, raster.scale)
+                    draw_segments(cr, stroke, self._segments(stroke.points, inked))
+                raster.add(stroke, paint)
             self.stats.stroke_done()
             self._stroke = self._model = self._skipped = None
             self._chunks, self._inked = [], 0
@@ -567,59 +670,43 @@ class PageArea(Gtk.Widget):
         self.queue_draw()
 
     # -- drawing ---------------------------------------------------------------
-    def _page_surface(self, scale):
-        """(scale, surface, texture): the page with its finished marks,
-        rendered at `scale` device pixels per point. Cached: new marks are
-        drawn onto it as they come, so a frame does not redraw every stroke
-        on the page (thousands of segments) and the texture is made once per
-        change; erasing, undo, another page or zoom render it again."""
-        index = self.window.index
-        marks = self.window.marks.get(index, [])
-        cached = self._cache
-        if (cached and cached[0] == index and abs(cached[1] / scale - 1) < 0.15
-                and len(cached[3]) <= len(marks) and all(a is b for a, b in zip(cached[3], marks))):
-            _index, scale, surface, drawn, page = cached
-        else:
-            w, h = self.page_size()
-            surface = cairo.ImageSurface(cairo.FORMAT_RGB24, max(1, int(w * scale)), max(1, int(h * scale)))
-            cr = cairo.Context(surface)
-            cr.set_source_rgb(1, 1, 1)
-            cr.paint()
-            cr.scale(scale, scale)
-            self.window.page().render(cr)
-            drawn, page = (), None
-        if len(drawn) < len(marks):
-            cr = cairo.Context(surface)
-            cr.scale(scale, scale)
-            draw_marks(cr, marks[len(drawn):])
-            drawn, page = tuple(marks), None
-        if page is None:
-            page = texture(surface)
-        self._cache = (index, scale, surface, drawn, page)
-        return scale, surface, page
+    def _page_raster(self, scale):
+        """The page with its finished marks at about `scale` device pixels
+        per point, kept up to date (see PageRaster); another page or a
+        different zoom renders it again."""
+        index, raster = self.window.index, self._raster
+        if raster is None or raster.index != index or abs(raster.scale / scale - 1) >= 0.15:
+            raster = self._raster = PageRaster(index, scale, self.window.page(), self.page_size())
+        raster.update(self.window.marks.get(index, []))
+        return raster
 
     def do_snapshot(self, snapshot):
         if not self.fitted:
             self.fit()
         v = self.view
         w, h = self.page_size()
-        page_rect = rect(v.ox, v.oy, w * v.zoom, h * v.zoom)
+        # The page on whole device pixels, so its tiles meet without seams.
+        sf = self.get_scale_factor()
+        ox, oy = self._origin = round(v.ox * sf) / sf, round(v.oy * sf) / sf
+        page_rect = rect(ox, oy, w * v.zoom, h * v.zoom)
         # The page floats over the background on a soft shadow.
         # (An outset shadow node left stale pixels behind when the page moved:
         # GTK 4.14 repainted too little around it.)
         snapshot.push_shadow([PAGE_SHADOW])
         snapshot.append_color(WHITE, page_rect)
         snapshot.pop()
-        scale = min(v.zoom * self.get_scale_factor(), math.sqrt(MAX_PAGE_PIXELS / (w * h)))
-        scale, _surface, page = self._page_surface(scale)
-        snapshot.append_texture(page, page_rect)
+        raster = self._page_raster(min(v.zoom * sf, math.sqrt(MAX_PAGE_PIXELS / (w * h))))
+        scale = raster.scale
+        k = v.zoom / scale  # widget pixels per page device pixel
+        for key in raster.tile_boxes():
+            tile, (x0, y0, x1, y1) = raster.tile(*key)
+            snapshot.append_texture(tile, rect(ox + x0 * k, oy + y0 * k, (x1 - x0) * k, (y1 - y0) * k))
         snapshot.push_clip(page_rect)
         if self._stroke is not None:
             self._ink(scale)
             self.stats.frame()
             for surface, chunk, x, y in self._chunks:
-                k = v.zoom / scale
-                snapshot.append_texture(chunk, rect(v.ox + x * k, v.oy + y * k,
+                snapshot.append_texture(chunk, rect(ox + x * k, oy + y * k,
                                                     surface.get_width() * k, surface.get_height() * k))
             # The rest of the stroke, up to where the pen is predicted to be by now.
             tail = [(*v.to_page(x, y), p) for x, y, p in self._model.predict()]
@@ -646,7 +733,7 @@ class PageArea(Gtk.Widget):
             # A faint preview of what the tap will place.
             snapshot.push_opacity(0.4)
             cr = snapshot.append_cairo(page_rect)
-            cr.translate(v.ox, v.oy)
+            cr.translate(ox, oy)
             cr.scale(v.zoom, v.zoom)
             draw_marks(cr, self.window.pending(*v.to_page(*self._hover)))
             snapshot.pop()
@@ -655,13 +742,13 @@ class PageArea(Gtk.Widget):
     def _cairo(self, snapshot, points, reach):
         """A cairo context in page points for drawing around points (and
         reach points beyond them): only that area is rasterized."""
-        v = self.view
+        v, (ox, oy) = self.view, self._origin
         xs, ys = [p[0] for p in points], [p[1] for p in points]
         pad = reach * v.zoom + 2
-        x0, y0 = v.ox + min(xs) * v.zoom - pad, v.oy + min(ys) * v.zoom - pad
+        x0, y0 = ox + min(xs) * v.zoom - pad, oy + min(ys) * v.zoom - pad
         cr = snapshot.append_cairo(rect(x0, y0, (max(xs) - min(xs)) * v.zoom + 2 * pad,
                                         (max(ys) - min(ys)) * v.zoom + 2 * pad))
-        cr.translate(v.ox, v.oy)
+        cr.translate(ox, oy)
         cr.scale(v.zoom, v.zoom)
         return cr
 
