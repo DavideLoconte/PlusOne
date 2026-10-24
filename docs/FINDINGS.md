@@ -248,3 +248,28 @@ selection does, which Plus One follows on the tablet and the PC
   moves (with snapping guides); outside ends the selection.
 - The eraser (`eraserTool_`) has pixel and object modes and an option to
   deselect itself after use.
+
+## How a note app renders a PDF while scrolling (studied with REA)
+
+The same note app (its version 4.1.7, decompiled with JADX through REA and
+its PDFium wrapper disassembled; read, never run). What Plus One's tablet
+app follows (android/.../Pages.kt):
+
+- Two layers. Each page whole at a modest resolution (up to about 1.4
+  million pixels there; Plus One allows 2 million, A4 at about 170 dpi),
+  scaled while the zoom changes; and sharp tiles of 400 × 400 pixels at the
+  zoom, quantized to steps of √2 (`√2^ceil(log√2 zoom)`, so 1-1.41 times the
+  screen's density), on a grid anchored to the page's corner, so a tile
+  stays the same tile while the page moves.
+- Tiles are asked for at every scroll step while panning or flinging, not
+  only when the page stops (never while pinching): the pages with the
+  largest part of the screen first, in each the tiles on screen, then
+  those within 400 pixels of it. A request no longer on the list is
+  dropped before it is rendered.
+- A missing tile is stood in for by the cached tiles of the nearest other
+  √2 level (the sharper of two equally near), over the scaled whole page.
+- Least-recently-used caches by bytes (whole pages and tiles), cut back
+  when Android says memory is short. All ARGB_8888: PDFium renders into
+  the bitmap's own pixels, filled white first. PDFium calls are
+  serialized behind one lock, so one rendering thread is enough; open
+  pages are kept (five there), not opened again for each tile.

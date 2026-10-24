@@ -45,6 +45,10 @@ The companion app: ink under the nib.
   page in the middle of the screen counted at the top; the pen draws on
   whichever page it touches. An option in the app (*Documents of several
   pages*) brings back one page at a time with the arrows.
+- **Pages there at once while scrolling**: each page is rendered whole at
+  a modest resolution as soon as it comes into view (and the ones next to
+  it ahead), then sharp tiles at the zoom, also while it still moves; both
+  kept in memory, so going back shows them at once.
 - **Material 3 Expressive** look for the app, in the wallpaper's colours,
   light or dark as the system: grouped settings as in Android 16; signing
   under floating bars only (close and title, pages and queue, Done, the

@@ -134,6 +134,12 @@ class SignActivity : AppCompatActivity() {
         current?.let { outState.putString(STATE_JOB, it.id) }
     }
 
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // Out of sight and memory short: the rendered pages go, to come back as needed.
+        if (level >= TRIM_MEMORY_BACKGROUND && ::view.isInitialized) view.trim()
+    }
+
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         compact()

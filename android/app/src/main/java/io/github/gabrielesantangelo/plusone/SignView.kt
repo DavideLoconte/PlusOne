@@ -7,7 +7,6 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
-import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
@@ -22,8 +21,6 @@ import androidx.graphics.lowlatency.CanvasFrontBufferedRenderer
 import androidx.graphics.surface.SurfaceControlCompat
 import java.io.Closeable
 import java.io.File
-import java.util.concurrent.Executors
-import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 
@@ -38,18 +35,26 @@ class Pdf(file: File) : Closeable {
     }
 
     private var closed = false
+    // The page last drawn stays open: the tiles of a page come one after the
+    // other, and opening it again each time parsed it and decoded its images again.
+    private var open: PdfRenderer.Page? = null
 
-    /** Draws page index into bitmap, within clip, page points mapped by matrix; nothing once closed. */
+    /** Draws page index into bitmap, page points mapped by matrix; nothing once closed. */
     @Synchronized
-    fun render(index: Int, bitmap: Bitmap, clip: Rect, matrix: Matrix) {
+    fun render(index: Int, bitmap: Bitmap, matrix: Matrix) {
         if (closed) return
-        renderer.openPage(index).use { it.render(bitmap, clip, matrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY) }
+        val page = open?.takeIf { it.index == index } ?: run {
+            open?.close()
+            renderer.openPage(index).also { open = it }
+        }
+        page.render(bitmap, null, matrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
     }
 
     @Synchronized
     override fun close() {
         if (closed) return
         closed = true
+        open?.close()
         renderer.close()
         fd.close()
     }
@@ -175,20 +180,15 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
     private fun toPageX(p: Int, x: Float) = (x - ox) / zoom - lefts[p]
     private fun toPageY(p: Int, y: Float) = (y - oy) / zoom - tops[p]
 
-    private class Picture(val key: Int, val bitmap: Bitmap, val zoom: Float, val ox: Float, val oy: Float)
-    @Volatile private var picture: Picture? = null
-    private val pageRenderer = Executors.newSingleThreadExecutor()
-    private var renderSerial = 0
-    /** What a rendering is of: the page shown, or the column. */
-    private val layoutKey get() = if (continuous) -1 else index
+    private val pages = Pages(pdf) { changed() }
 
-    /** A page on screen and its marks, as the render thread draws them. */
-    private class Shown(val rect: RectF, val marks: List<Mark>)
+    /** A page on screen as the render thread draws it: whole (scaled), the
+     * sharp tiles there are over it, its marks. */
+    private class Shown(val rect: RectF, val whole: Bitmap?, val tiles: List<Pair<Bitmap, RectF>>, val marks: List<Mark>)
 
     /** What the render thread draws: a snapshot, as the UI thread moves on. */
     private class Scene(
-        val key: Int, val pages: List<Shown>, val zoom: Float, val ox: Float, val oy: Float,
-        val picture: Picture?, val eraser: FloatArray?,
+        val pages: List<Shown>, val zoom: Float, val eraser: FloatArray?,
         val shape: SelectionLook.Shape? = null, val grabbed: Int = -1, val turned: Float? = null,
         val lasso: FloatArray? = null,
     )
@@ -277,7 +277,7 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
         zoom = fitZoom
         ox = width / 2f - (lefts[index] + size.width / 2) * zoom
         oy = topInset + room / 2 - (tops[index] + size.height / 2) * zoom
-        changed(render = true)
+        changed()
     }
 
     /** Turns to page i, or (scrolling) scrolls to it: whole if the zoom
@@ -286,14 +286,13 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
         if (i !in 0 until pageCount) return
         if (!continuous) deselect()  // its page goes
         index = i
-        picture = picture?.takeIf { continuous }
         if (!continuous || zoom <= fitZoom * 1.05f || width == 0) {
             fit()
         } else {
             stopFling()
             oy = topInset + 24f - tops[i] * zoom
             clamp()
-            changed(render = true)
+            changed()
         }
         onChange()
     }
@@ -325,12 +324,85 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
         return floatArrayOf(cx - columnWidth * zoom, cx, cy - columnHeight * zoom, cy)
     }
 
-    /** The view or the marks changed: draw again, and render the pages anew if asked. */
-    private fun changed(render: Boolean = false, eraser: FloatArray? = null) {
+    /** The view or the marks changed: draw again, and say what is to render now. */
+    private fun changed(eraser: FloatArray? = null) {
         if (continuous) follow()
         scene = snapshot(eraser)
         requestScene()
-        if (render) renderPages()
+        want()
+    }
+
+    /** The view less nothing: pages are rendered under the bars too. */
+    private fun screen() = RectF(0f, 0f, width.toFloat(), height.toFloat())
+
+    /** Whether page p shown at this zoom needs tiles: its whole rendering is not sharp enough. */
+    private fun tiled(p: Int) = pages.wholeScale(p) < zoom * 0.98f
+
+    /** The tiles of page p (on screen at r) at level, over the screen and margin
+     * pixels around it, the ones nearest the middle of the screen first. */
+    private fun tilesOf(p: Int, r: RectF, level: Int, margin: Float): List<Pages.Tile> {
+        val span = Pages.TILE / Pages.scale(level)  // points
+        val size = pdf.sizes[p]
+        val left = max(0f, (-margin - r.left) / zoom)
+        val top = max(0f, (-margin - r.top) / zoom)
+        val right = min(size.width, (width + margin - r.left) / zoom)
+        val bottom = min(size.height, (height + margin - r.top) / zoom)
+        if (right <= left || bottom <= top) return emptyList()
+        val cx = (width / 2f - r.left) / zoom / span
+        val cy = (height / 2f - r.top) / zoom / span
+        val found = ArrayList<Pages.Tile>()
+        for (y in (top / span).toInt()..((bottom - 0.001f) / span).toInt()) {
+            for (x in (left / span).toInt()..((right - 0.001f) / span).toInt()) found += Pages.Tile(p, level, x, y)
+        }
+        return found.sortedBy { (it.x + 0.5f - cx).let { dx -> dx * dx } + (it.y + 0.5f - cy).let { dy -> dy * dy } }
+    }
+
+    /** Where tile t of page (on screen at r) goes: its edges on whole pixels, shared with
+     * its neighbours', so no seam shows between them. */
+    private fun tileRect(t: Pages.Tile, r: RectF): RectF {
+        val step = Pages.TILE / Pages.scale(t.level) * zoom
+        return RectF(Math.round(r.left + t.x * step).toFloat(), Math.round(r.top + t.y * step).toFloat(),
+            Math.round(r.left + (t.x + 1) * step).toFloat(), Math.round(r.top + (t.y + 1) * step).toFloat())
+    }
+
+    /** Tells the renderer what is wanted now, the most wanted first: every page on
+     * screen whole (the largest part of the screen first) and the ones next to
+     * them, then the sharp tiles on screen, then those around it. Not while
+     * pinching: the zoom is still changing. */
+    private fun want() {
+        if (width == 0 || height == 0 || scaler.isInProgress) return
+        val view = screen()
+        val shown = onScreen().map { it to pageRect(it) }.sortedByDescending { (_, r) ->
+            val part = RectF(r)
+            if (part.intersect(view)) part.width() * part.height() else 0f
+        }
+        val jobs = LinkedHashSet<Pages.Job>()
+        val around = shown.map { it.first }.let { on ->
+            if (on.isEmpty()) on else on + listOf(on.min() - 1, on.max() + 1).filter { it in 0 until pageCount }
+        }
+        for (p in around) if (pages.whole(p) == null) jobs += Pages.Whole(p)
+        val level = Pages.level(zoom)
+        for (margin in floatArrayOf(0f, Pages.TILE.toFloat())) {
+            for ((p, r) in shown) {
+                if (!tiled(p)) continue
+                for (t in tilesOf(p, r, level, margin)) if (pages.tile(t) == null) jobs += t
+            }
+        }
+        pages.want(jobs)
+    }
+
+    /** The tiles to draw over page p: those of other levels first, where this
+     * level's are not there yet (the nearer levels over the farther, the
+     * sharper over the blurrier), then this level's. */
+    private fun tileDraws(p: Int, r: RectF): List<Pair<Bitmap, RectF>> {
+        if (!tiled(p)) return emptyList()
+        val level = Pages.level(zoom)
+        val draws = ArrayList<Pair<Bitmap, RectF>>()
+        for (d in intArrayOf(-3, -2, 2, -1, 1, 0)) {
+            if (d != 0 && draws.size >= MAX_STAND_INS) continue
+            for (t in tilesOf(p, r, level + d, 0f)) pages.tile(t)?.let { draws += it to tileRect(t, r) }
+        }
+        return draws
     }
 
     /** Scrolling, the page in the middle of the screen is the one shown. */
@@ -346,14 +418,16 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
     /** What the render thread is to draw, as things are now. */
     private fun snapshot(eraser: FloatArray? = null): Scene {
         val s = selection
-        val pages = onScreen().map { p ->
-            Shown(pageRect(p), (marks[p]?.toList() ?: emptyList()) + (s?.takeIf { it.page == p }?.marks ?: emptyList()))
+        val shown = onScreen().map { p ->
+            val r = pageRect(p)
+            Shown(r, pages.whole(p), tileDraws(p, r),
+                (marks[p]?.toList() ?: emptyList()) + (s?.takeIf { it.page == p }?.marks ?: emptyList()))
         }
-        val shown = s?.takeIf { it.page in laidOut() }
-        val shape = shown?.let { look.shape(screenCorners(it), visibleArea()) }
-        val turned = if (grab is Grab.Turn) shown?.angle else null
+        val picked = s?.takeIf { it.page in laidOut() }
+        val shape = picked?.let { look.shape(screenCorners(it), visibleArea()) }
+        val turned = if (grab is Grab.Turn) picked?.angle else null
         val lassoPoints = lasso?.toArray()?.let { p -> FloatArray(p.size / 3 * 2) { p[it / 2 * 3 + it % 2] } }
-        return Scene(layoutKey, pages, zoom, ox, oy, picture, eraser, shape, grabbed, turned, lassoPoints)
+        return Scene(shown, zoom, eraser, shape, grabbed, turned, lassoPoints)
     }
 
     /** The view less the bars over it. */
@@ -401,58 +475,15 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
         }
     }
 
-    /** The pages on screen, rendered for this zoom into one picture the size of the view. */
-    private fun renderPages() {
-        val serial = ++renderSerial
-        val key = layoutKey
-        val z = zoom
-        val x = ox
-        val y = oy
-        val w = width
-        val h = height
-        if (w == 0 || h == 0) return
-        val pages = onScreen(z, x, y).map { it to pageRect(it, z, x, y) }
-        pageRenderer.execute {
-            if (serial != renderSerial) return@execute
-            val bitmap = try {
-                Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { bitmap ->
-                    for ((p, r) in pages) {
-                        if (serial != renderSerial) return@execute  // another is wanted already
-                        val clip = Rect(max(0, r.left.toInt()), max(0, r.top.toInt()),
-                            min(w, ceil(r.right).toInt()), min(h, ceil(r.bottom).toInt()))
-                        if (clip.isEmpty) continue
-                        pdf.render(p, bitmap, clip, Matrix().apply { setScale(z, z); postTranslate(r.left, r.top) })
-                    }
-                }
-            } catch (e: Throwable) {
-                // A page the renderer cannot draw, or no memory for it: the
-                // scaled last rendering stays, and the app with it.
-                android.util.Log.w("PlusOne", "pages ${pages.map { it.first }} not rendered: $e")
-                return@execute
-            }
-            post {
-                if (serial == renderSerial) {
-                    picture = Picture(key, bitmap, z, x, y)
-                    changed()
-                }
-            }
-        }
-    }
-
     private fun drawScene(canvas: Canvas) {
         canvas.drawColor(canvasColor)
         val s = scene ?: return
         for (page in s.pages) canvas.drawRect(page.rect, white)
-        s.picture?.takeIf { it.key == s.key }?.let { p ->
-            // Rendered for another zoom or position: scaled meanwhile. Only
-            // the pages are drawn in it; the rest is clear.
-            val k = s.zoom / p.zoom
-            val m = Matrix().apply { setScale(k, k); postTranslate(s.ox - p.ox * k, s.oy - p.oy * k) }
-            canvas.drawBitmap(p.bitmap, m, bitmapPaint)
-        }
         for (page in s.pages) {
             canvas.save()
             canvas.clipRect(page.rect)
+            page.whole?.let { canvas.drawBitmap(it, null, page.rect, bitmapPaint) }
+            for ((tile, where) in page.tiles) canvas.drawBitmap(tile, null, where, bitmapPaint)
             canvas.translate(page.rect.left, page.rect.top)
             canvas.scale(s.zoom, s.zoom)
             for (mark in page.marks) {
@@ -851,7 +882,7 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
             // In where the finger lands, or back to the whole page.
             if (zoom < fitZoom * 1.5f) {
                 zoomAt(fitZoom * DOUBLE_TAP_ZOOM, e.x, e.y)
-                changed(render = true)
+                changed()
             } else {
                 fit()
             }
@@ -879,7 +910,7 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
             postOnAnimation(::flingStep)
         } else {
             flinging = false
-            changed(render = true)
+            changed()
         }
     }
 
@@ -887,7 +918,7 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
         if (!flinging) return
         flinging = false
         scroller.forceFinished(true)
-        changed(render = true)
+        changed()
     }
 
     private fun fingers(e: MotionEvent) {
@@ -933,7 +964,7 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 fingersDown = 0
-                if (!flinging) changed(render = true)  // sharp again at the new zoom
+                if (!flinging) changed()  // sharp again at the new zoom
             }
         }
         lastFocusX = fx
@@ -945,8 +976,11 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
     fun release() {
         flinging = false
         front.release(true)
-        pageRenderer.shutdownNow()
+        pages.release()
     }
+
+    /** Memory is short: rendered pages go (they come back as needed). */
+    fun trim() = pages.trim()
 
     companion object {
         const val ERASER_RADIUS = 24f      // pixels around the nib
@@ -954,5 +988,6 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
         const val DOUBLE_TAP_ZOOM = 2.5f
         const val TAP_SIZE = 10f            // dp: a lasso smaller than this is a tap on a mark
         const val GAP = 12f                 // points between pages, scrolling
+        const val MAX_STAND_INS = 60        // tiles of other levels drawn while this level's come
     }
 }
