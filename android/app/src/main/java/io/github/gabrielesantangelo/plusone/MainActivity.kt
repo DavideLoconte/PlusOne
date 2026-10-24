@@ -2,6 +2,7 @@ package io.github.gabrielesantangelo.plusone
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -11,6 +12,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
+import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -26,8 +28,9 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // adb shell am start -n …/.MainActivity --es path /data/user/0/…/files/x.pdf
-        // opens the signing screen on a PDF (for trying it out).
-        intent.getStringExtra(SignActivity.EXTRA_PATH)?.let { path ->
+        // opens the signing screen on a PDF (for trying it out; debug builds only).
+        val debuggable = applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
+        if (debuggable) intent.getStringExtra(SignActivity.EXTRA_PATH)?.let { path ->
             startActivity(Intent(this, SignActivity::class.java).putExtra(SignActivity.EXTRA_PATH, path))
         }
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -40,7 +43,22 @@ class MainActivity : Activity() {
         }
         setContentView(ScrollView(this).apply {
             setBackgroundColor(Color.rgb(30, 30, 32))
+            clipToPadding = false
             addView(content)
+            // Clear of the status and navigation bars (the app is drawn behind
+            // them), and no wider than reads well on a big screen.
+            var bars = android.graphics.Insets.NONE
+            fun pad(v: View) {
+                val side = maxOf(0, (v.width - bars.left - bars.right - dp(MAX_WIDTH)) / 2)
+                v.setPadding(bars.left + side, bars.top, bars.right + side, bars.bottom)
+            }
+            setOnApplyWindowInsetsListener { v, insets ->
+                bars = insets.getInsets(android.view.WindowInsets.Type.systemBars() or
+                    android.view.WindowInsets.Type.displayCutout())
+                pad(v)
+                insets
+            }
+            addOnLayoutChangeListener { v, l, _, r, _, ol, _, or_, _ -> if (r - l != or_ - ol) v.post { pad(v) } }
         })
     }
 
@@ -74,6 +92,38 @@ class MainActivity : Activity() {
             })
         })
 
+        content.addView(heading(getString(R.string.heading_signatures)))
+        val saved = Signatures.all(this)
+        if (saved.isEmpty()) content.addView(text(getString(R.string.signatures_none), 15f))
+        for (signature in saved) {
+            content.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(4), 0, dp(4))
+                addView(SignatureThumb(this@MainActivity, signature, Ink.COLOR),
+                    LinearLayout.LayoutParams(dp(200), dp(64)))
+                addView(View(this@MainActivity), LinearLayout.LayoutParams(0, 1, 1f))
+                addView(button(getString(R.string.remove)) {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle(R.string.remove_signature)
+                        .setMessage(R.string.remove_signature_detail)
+                        .setPositiveButton(R.string.remove) { _, _ ->
+                            Signatures.remove(this@MainActivity, signature.id)
+                            refresh()
+                        }
+                        .setNegativeButton(R.string.cancel, null)
+                        .show()
+                })
+            })
+        }
+        content.addView(button(getString(R.string.new_signature)) {
+            val (color, width) = Pen.load(this)
+            SignaturePad(this, color, width) { refresh() }.show()
+        }.apply {
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) }
+        })
+
         content.addView(heading(getString(R.string.heading_open)))
         if (Settings.canDrawOverlays(this)) {
             content.addView(text(getString(R.string.overlay_on), 15f))
@@ -101,6 +151,10 @@ class MainActivity : Activity() {
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    companion object {
+        const val MAX_WIDTH = 760  // dp of content
+    }
 
     private fun text(s: String, size: Float, bold: Boolean = false) = TextView(this).apply {
         text = s

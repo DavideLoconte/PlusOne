@@ -110,8 +110,9 @@ class TextMark(val x: Float, val y: Float, val text: String, val size: Float = I
 }
 
 /** A saved signature as ink.py normalize() keeps it: top-left at 0,0, width 1,
- * and the width in points it was drawn at. */
-class Signature(val width: Float, val strokes: List<FloatArray>) {
+ * and the width in points it was drawn at; with an id (plusone/signatures.py). */
+class Signature(val width: Float, val strokes: List<FloatArray>,
+                val id: String = java.util.UUID.randomUUID().toString().replace("-", "")) {
 
     /** ink.py place(): its left end and vertical centre at x, y, with the pen's colour. */
     fun place(x: Float, y: Float, pen: Float, color: Int, size: Float = Ink.SIGNATURE_WIDTH): List<Stroke> {
@@ -129,7 +130,7 @@ class Signature(val width: Float, val strokes: List<FloatArray>) {
         }
     }
 
-    fun toJson(): JSONObject = JSONObject().put("width", width.toDouble()).put("strokes", JSONArray().also { list ->
+    fun toJson(): JSONObject = JSONObject().put("id", id).put("width", width.toDouble()).put("strokes", JSONArray().also { list ->
         for (s in strokes) list.put(JSONArray().also { pts ->
             for (i in s.indices step 3) pts.put(JSONArray(listOf(s[i].toDouble(), s[i + 1].toDouble(), s[i + 2].toDouble())))
         })
@@ -153,14 +154,18 @@ class Signature(val width: Float, val strokes: List<FloatArray>) {
             })
         }
 
-        fun fromJson(json: JSONObject?): Signature? {
-            val list = json?.optJSONArray("strokes") ?: return null
-            val strokes = (0 until list.length()).mapNotNull { i ->
-                val pts = list.optJSONArray(i) ?: return@mapNotNull null
+        /** null if it is not a signature with an id. */
+        fun fromJson(json: JSONObject): Signature? = try {
+            val id = json.getString("id").takeIf { it.isNotEmpty() && it.length <= 64 }
+            val list = json.getJSONArray("strokes")
+            val strokes = (0 until list.length()).map { i ->
+                val pts = list.getJSONArray(i)
                 FloatArray(pts.length() * 3) { k -> pts.getJSONArray(k / 3).getDouble(k % 3).toFloat() }
-                    .takeIf { it.isNotEmpty() }
-            }
-            return if (strokes.isEmpty()) null else Signature(json.optDouble("width", 1.0).toFloat(), strokes)
+            }.filter { it.isNotEmpty() }
+            val width = json.optDouble("width", 1.0).toFloat()
+            if (id == null || strokes.isEmpty() || !(width > 0f)) null else Signature(width, strokes, id)
+        } catch (e: org.json.JSONException) {
+            null
         }
     }
 }

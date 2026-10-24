@@ -45,7 +45,6 @@ def spin(until, timeout=5):
 
 @pytest.fixture
 def window(tmp_path, monkeypatch):
-    monkeypatch.setattr(sign, "SIGNATURE", str(tmp_path / "signature.json"))
     monkeypatch.setattr(sign, "PEN", str(tmp_path / "pen.json"))
     src = tmp_path / "contract.pdf"
     make_pdf(src)
@@ -64,7 +63,7 @@ def test_opens_on_first_page(window):
     win, _results, _src = window
     assert win.doc.get_n_pages() == 2
     assert not win.done.get_sensitive()        # nothing to save yet
-    assert not win.sign_button.get_sensitive()  # no saved signature yet
+    assert win.signature is None               # no saved signature yet
     assert win.area.fitted
 
 
@@ -105,7 +104,7 @@ def test_keep_and_place_signature(window):
     win, _results, _src = window
     win.add_mark(Stroke([(100, 100, 0.5), (160, 140, 0.7)]))
     win._keep_signature()
-    assert win.signature and win.sign_button.get_sensitive()
+    assert win.signature
     win._place_signature()
     assert win.place_at(300, 500)              # the tap places it
     assert not win.place_at(310, 510)          # and only once

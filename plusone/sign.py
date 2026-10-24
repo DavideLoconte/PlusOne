@@ -24,15 +24,16 @@ gi.require_version("Gsk", "4.0")
 gi.require_version("Poppler", "0.18")
 from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gsk, Gtk, Poppler  # noqa: E402
 
-from . import log, once  # noqa: E402
+from . import log, once, signatures  # noqa: E402
 from .i18n import _  # noqa: E402
-from .ink import (RawPen, View, bounds, load_pen, load_signature, pen_width, place,  # noqa: E402
-                  save_pen, save_signature, thickness, touches)
+from .ink import (RawPen, View, bounds, load_pen, normalize, pen_width, place,  # noqa: E402
+                  save_pen, thickness, touches)
 from .modeler import LEVELS, Params, StrokeModeler  # noqa: E402
 from .pdf import INK, Stroke, Text, curve, draw_marks, draw_segments, output_path, save_signed  # noqa: E402
 from .pen import feed as pen_feed  # noqa: E402
+from .signature_pad import SignatureList, SignaturePad, draw_thumb  # noqa: E402
 
-from .signing import PEN, SIGNATURE  # noqa: E402 - shared with the tablet's app
+from .signing import PEN  # noqa: E402 - shared with the tablet's app
 PEN_SOURCES = (Gdk.InputSource.PEN, Gdk.InputSource.TOUCHSCREEN)
 NO_PRESSURE = 0.35  # mouse, or a pen that reports none: a medium line
 ERASER_RADIUS = 12  # widget pixels around the pen tip
@@ -837,7 +838,7 @@ class SignWindow(Adw.ApplicationWindow):
         self.history = []     # (page index, its marks before a change), for undo
         self.pending = None   # marks waiting for a tap to be placed
         self.result = None
-        self.signature = load_signature(SIGNATURE)
+        self.signature = self._first_signature()  # what "My signature" places
         self.pen_color, self.pen_width, self.pen_smoothing = load_pen(PEN)
         self._pen_save = None  # a pending write of the pen settings
 
@@ -893,8 +894,16 @@ class SignWindow(Adw.ApplicationWindow):
         bar.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
         self.signature_thumb = Gtk.DrawingArea(content_width=58, content_height=28)
         self.signature_thumb.set_draw_func(self._draw_signature_thumb)
-        self.sign_button = Gtk.Button(child=self.signature_thumb, tooltip_text=_("My signature"),
-                                      css_classes=["flat"])
+        # Its arrow opens the list: pick another, remove one, draw a new one.
+        self.signature_list = SignatureList(self.pen_color, self.pen_width, on_pick=self._pick_signature,
+                                            on_new=self._new_signature, on_change=self._signatures_changed)
+        popover = Gtk.Popover(child=Gtk.ScrolledWindow(child=self.signature_list, propagate_natural_height=True,
+                                                       max_content_height=420,
+                                                       hscrollbar_policy=Gtk.PolicyType.NEVER))
+        popover.connect("show", lambda p: self._show_signatures())
+        self.sign_button = Adw.SplitButton(child=self.signature_thumb, tooltip_text=_("My signature"),
+                                           dropdown_tooltip=_("My signatures"), popover=popover,
+                                           css_classes=["flat"])
         self.sign_button.connect("clicked", lambda b: self._place_signature())
         bar.append(self.sign_button)
         self._tool(bar, "x-office-calendar-symbolic", _("Date"), self._place_date)
@@ -1025,22 +1034,17 @@ class SignWindow(Adw.ApplicationWindow):
         cr.stroke()
 
     def _draw_signature_thumb(self, area, cr, width, height):
-        if not self.signature:
-            # A dim scribble: no signature saved yet.
-            color = area.get_color()
-            cr.set_source_rgba(color.red, color.green, color.blue, 0.35)
-            cr.set_line_width(1.6)
-            cr.move_to(6, height * 0.65)
-            for i in range(1, 47):
-                cr.line_to(6 + i, height * 0.65 - 6 * math.sin(i / 3.2) * (1 - i / 60))
-            cr.stroke()
+        if self.signature:
+            draw_thumb(cr, self.signature, width, height, self.pen_color)
             return
-        strokes = self.signature["strokes"]
-        tall = max((pt[1] for s in strokes for pt in s), default=0) or 0.01
-        scale = min(width - 6, (height - 6) / tall)
-        ox, oy = (width - scale) / 2, (height - tall * scale) / 2
-        draw_marks(cr, [Stroke([(ox + x * scale, oy + y * scale, p) for x, y, p in s], width=2.2,
-                               color=self.pen_color) for s in strokes])
+        # A dim scribble: no signature saved yet.
+        color = area.get_color()
+        cr.set_source_rgba(color.red, color.green, color.blue, 0.35)
+        cr.set_line_width(1.6)
+        cr.move_to(6, height * 0.65)
+        for i in range(1, 47):
+            cr.line_to(6 + i, height * 0.65 - 6 * math.sin(i / 3.2) * (1 - i / 60))
+        cr.stroke()
 
     def _set_pen(self, color=None, width=None, smoothing=None):
         self.pen_color = color or self.pen_color
@@ -1120,7 +1124,6 @@ class SignWindow(Adw.ApplicationWindow):
     def _update(self):
         strokes = [m for m in self.marks.get(self.index, []) if isinstance(m, Stroke)]
         self.undo.set_sensitive(bool(self.history))
-        self.sign_button.set_sensitive(self.signature is not None)
         self.keep_button.set_visible(self.signature is None and bool(strokes))
         self.done.set_sensitive(any(self.marks.values()))
         self.area.queue_draw()
@@ -1152,18 +1155,48 @@ class SignWindow(Adw.ApplicationWindow):
         else:
             self._cancel()
 
+    @staticmethod
+    def _first_signature():
+        found, _removed = signatures.load()
+        return found[0] if found else None
+
     def _place_signature(self):
-        if self.signature:
-            self._arm(lambda x, y: place(self.signature, x, y, pen=self.pen_width, color=self.pen_color),
-                      _("Tap where your signature goes"))
+        """The first saved signature; with none yet, the pad to draw one."""
+        if self.signature is None:
+            self._new_signature()
+            return
+        signature = self.signature
+        self._arm(lambda x, y: place(signature, x, y, pen=self.pen_width, color=self.pen_color),
+                  _("Tap where your signature goes"))
+
+    def _show_signatures(self):
+        self.signature_list.color, self.signature_list.pen = self.pen_color, self.pen_width
+        self.signature_list.reload()
+
+    def _pick_signature(self, signature):
+        self.sign_button.get_popover().popdown()
+        signatures.use(signature["id"])
+        self._signatures_changed()
+        self._place_signature()
+
+    def _new_signature(self):
+        self.sign_button.get_popover().popdown()
+
+        def saved(signature):
+            self._signatures_changed()
+            self._place_signature()
+        SignaturePad(self, self.pen_color, self.pen_width, on_saved=saved).present()
+
+    def _signatures_changed(self):
+        self.signature = self._first_signature()
+        self.signature_thumb.queue_draw()
+        self._update()
 
     def _keep_signature(self):
         strokes = [m for m in self.marks.get(self.index, []) if isinstance(m, Stroke)]
         if strokes:
-            save_signature(SIGNATURE, strokes)
-            self.signature = load_signature(SIGNATURE)
-            self.signature_thumb.queue_draw()
-            self._update()
+            signatures.add(normalize(strokes))
+            self._signatures_changed()
             self.toast(_("Saved: next time, “My signature” places it with one tap"))
 
     def _place_date(self):

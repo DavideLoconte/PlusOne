@@ -19,3 +19,14 @@ def wait_for(predicate, timeout=5.0):
             return True
         time.sleep(0.02)
     return False
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def own_signatures(tmp_path, monkeypatch):
+    """No test reads or writes the user's saved signatures."""
+    from plusone import signatures
+    monkeypatch.setattr(signatures, "PATH", str(tmp_path / "signatures.json"))
+    monkeypatch.setattr(signatures, "OLD", str(tmp_path / "signature.json"))

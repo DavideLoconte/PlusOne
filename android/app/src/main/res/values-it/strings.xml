@@ -34,7 +34,7 @@
     <string name="date">Data</string>
     <string name="text">Testo</string>
     <string name="keep_signature">Tieni come mia firma</string>
-    <string name="signature_kept">Tenuta: la prossima volta “Firma” la mette con un tocco (anche sul PC)</string>
+    <string name="signature_kept">Salvata: la prossima volta «Firma» la mette con un tocco (anche sul PC)</string>
     <string name="tap_signature">Tocca dove va la firma</string>
     <string name="tap_date">Tocca dove va la data</string>
     <string name="tap_text">Tocca dove va il testo</string>
@@ -43,4 +43,19 @@
     <string name="heading_ready">PRONTO IN BACKGROUND</string>
     <string name="always_on">Sempre pronto, anche dopo un riavvio: il PC può mandare un PDF in qualsiasi momento. Resta solo in ascolto; non consuma quasi batteria.</string>
     <string name="always_off">Pronto per 10 minuti dopo che apri l\'app: aprila prima di firmare.</string>
+    <string name="my_signatures">Le mie firme</string>
+    <string name="heading_signatures">LE MIE FIRME</string>
+    <string name="signatures_none">Ancora nessuna: disegnane una qui, o salvane una mentre firmi. Vanno anche sul PC, e quelle del PC arrivano qui, ogni volta che firmi.</string>
+    <string name="new_signature">Nuova firma</string>
+    <string name="sign_here">Firma qui con la penna</string>
+    <string name="start_over">Ricomincia</string>
+    <string name="save">Salva</string>
+    <string name="remove">Rimuovi</string>
+    <string name="place_signature">Metti questa firma</string>
+    <string name="remove_signature">Rimuovere questa firma?</string>
+    <string name="remove_signature_detail">Sparisce anche dal PC, la prossima volta che firmi da lì.</string>
+    <string name="pen">Penna</string>
+    <string name="undo">Annulla tratto</string>
+    <string name="previous_page">Pagina precedente</string>
+    <string name="next_page">Pagina successiva</string>
 </resources>

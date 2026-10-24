@@ -180,7 +180,7 @@ def _connect(target, paired, ask_pairing):
         raise
 
 
-def _answer(wire, job, on_opened, name):
+def _answer(wire, job, on_opened, name, on_signatures):
     """Waits for the job's answer: the result, or None if cancelled."""
     while True:
         message, _ = wire.receive()
@@ -189,22 +189,22 @@ def _answer(wire, job, on_opened, name):
             on_opened(name)
         elif kind == "unknown-job":
             raise Lost("the tablet no longer has the job")
-        elif kind == "signed" and message.get("job") == job:
+        elif kind in ("signed", "cancelled") and message.get("job") == job:
             wire.send({"type": "bye"})
-            return message.get("marks") or {"pages": []}
-        elif kind == "cancelled" and message.get("job") == job:
-            wire.send({"type": "bye"})
-            return None
+            if on_signatures and isinstance(message.get("signatures"), dict):
+                on_signatures(message["signatures"])
+            return (message.get("marks") or {"pages": []}) if kind == "signed" else None
 
 
-def sign(target, path, ask_pairing, paired=None, on_opened=None, pen=None, signature=None,
-         locate=None, resume_for=RESUME_FOR):
+def sign(target, path, ask_pairing, paired=None, on_opened=None, pen=None, signatures=None,
+         on_signatures=None, locate=None, resume_for=RESUME_FOR):
     """Blocking (run it in a thread): send the PDF at path to the app at
     target (host, port) and wait for the user to sign it there. Returns the
     result ({"pages": [...], "pen": ..., maybe "signature": ...}) or None if
     the user cancelled. ask_pairing(name, code) -> bool asks this PC's user
     (from this thread) when pairing is needed. pen ({"color", "width"}) and
-    signature (as ink.py saves it) go along, so the tablet signs like the PC.
+    the saved signatures (signatures.message()) go along, so the tablet
+    signs like the PC; on_signatures(the tablet's list) runs with the answer.
 
     Should the link drop once the PDF is on the tablet, the app keeps the
     job: Plus One connects again (to locate()'s address, the app's port may
@@ -222,12 +222,12 @@ def sign(target, path, ask_pairing, paired=None, on_opened=None, pen=None, signa
         header = {"type": "sign", "job": job, "title": os.path.basename(path)}
         if pen:
             header["pen"] = pen
-        if signature:
-            header["signature"] = signature
+        if signatures:
+            header["signatures"] = signatures
         wire.send(header, pdf)
         sock.settimeout(None)  # signing takes as long as the user wants
         try:
-            return _answer(wire, job, on_opened, name)
+            return _answer(wire, job, on_opened, name, on_signatures)
         except (OSError, EOFError, ValueError) as e:
             log("companion: lost the tablet while signing:", repr(e))
     deadline = time.monotonic() + resume_for
@@ -245,7 +245,7 @@ def sign(target, path, ask_pairing, paired=None, on_opened=None, pen=None, signa
                 wire.send({"type": "resume", "job": job})
                 sock.settimeout(None)
                 log("companion: back in touch with the tablet")
-                return _answer(wire, job, None, name)
+                return _answer(wire, job, None, name, on_signatures)
             except (OSError, EOFError, ValueError) as e:
                 log("companion: lost the tablet again:", repr(e))
     raise Lost(name)

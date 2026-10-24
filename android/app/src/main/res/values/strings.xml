@@ -36,7 +36,7 @@
     <string name="date">Date</string>
     <string name="text">Text</string>
     <string name="keep_signature">Keep as my signature</string>
-    <string name="signature_kept">Kept: next time, “Signature” places it with one tap (on the PC too)</string>
+    <string name="signature_kept">Saved: next time, “Signature” places it with one tap (on the PC too)</string>
     <string name="tap_signature">Tap where your signature goes</string>
     <string name="tap_date">Tap where the date goes</string>
     <string name="tap_text">Tap where the text goes</string>
@@ -45,4 +45,19 @@
     <string name="heading_ready">READY IN THE BACKGROUND</string>
     <string name="always_on">Always ready, also after a restart: the PC can send a PDF at any time. It only listens; it uses next to no battery.</string>
     <string name="always_off">Ready for 10 minutes after you open the app: open it before signing.</string>
+    <string name="my_signatures">My signatures</string>
+    <string name="heading_signatures">MY SIGNATURES</string>
+    <string name="signatures_none">None yet: draw one here, or keep one while signing. They go to the PC too, and the PC\'s come here, each time you sign.</string>
+    <string name="new_signature">New signature</string>
+    <string name="sign_here">Sign here with the pen</string>
+    <string name="start_over">Start over</string>
+    <string name="save">Save</string>
+    <string name="remove">Remove</string>
+    <string name="place_signature">Place this signature</string>
+    <string name="remove_signature">Remove this signature?</string>
+    <string name="remove_signature_detail">It goes from the PC too, the next time you sign from there.</string>
+    <string name="pen">Pen</string>
+    <string name="undo">Undo</string>
+    <string name="previous_page">Previous page</string>
+    <string name="next_page">Next page</string>
 </resources>

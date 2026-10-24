@@ -1,7 +1,7 @@
 """Signing window helpers that do not need a display."""
 import pytest
 
-from plusone.ink import SIGNATURE_WIDTH, View, load_signature, normalize, place, save_signature
+from plusone.ink import SIGNATURE_WIDTH, View, normalize, place
 from plusone.pdf import Stroke
 
 
@@ -48,10 +48,8 @@ def strokes():
     return [Stroke([(100, 200, 0.5), (160, 220, 0.8)]), Stroke([(120, 190, 0.4), (130, 230, 0.6)])]
 
 
-def test_saved_signature_is_placed_at_the_tap(tmp_path):
-    path = tmp_path / "plus-one" / "signature.json"
-    save_signature(str(path), strokes())
-    signature = load_signature(str(path))
+def test_saved_signature_is_placed_at_the_tap():
+    signature = normalize(strokes())
     placed = place(signature, 300, 500)
     xs = [x for s in placed for x, _y, _p in s.points]
     ys = [y for s in placed for _x, y, _p in s.points]
@@ -61,12 +59,6 @@ def test_saved_signature_is_placed_at_the_tap(tmp_path):
     # Pressure survives; shape keeps its proportions (60 wide, 40 tall).
     assert placed[0].points[1][2] == 0.8
     assert max(ys) - min(ys) == pytest.approx(SIGNATURE_WIDTH * 40 / 60)
-
-
-def test_missing_or_broken_signature(tmp_path):
-    assert load_signature(str(tmp_path / "none.json")) is None
-    (tmp_path / "bad.json").write_text("{nope")
-    assert load_signature(str(tmp_path / "bad.json")) is None
 
 
 def test_normalize_single_dot():
@@ -178,10 +170,8 @@ def test_pen_settings(tmp_path):
     assert load_pen(str(tmp_path / "bad.json")) == (INK, PEN_WIDTH, SMOOTHING)
 
 
-def test_placed_signature_uses_the_pen(tmp_path):
-    path = tmp_path / "signature.json"
-    save_signature(str(path), strokes())
-    placed = place(load_signature(str(path)), 0, 0, width=60, pen=2.0, color=(1, 0, 0))
+def test_placed_signature_uses_the_pen():
+    placed = place(normalize(strokes()), 0, 0, width=60, pen=2.0, color=(1, 0, 0))
     assert {s.color for s in placed} == {(1, 0, 0)}
     assert all(s.width == pytest.approx(2.0) for s in placed)  # drawn 60 wide, placed 60 wide
 

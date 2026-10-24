@@ -14,7 +14,7 @@ import threading
 
 from gi.repository import Gio, GLib
 
-from . import companion, log, once
+from . import companion, log, once, signatures
 from .engine import NOT_ANSWERING, State
 from .i18n import _
 
@@ -22,7 +22,6 @@ MONITOR_WAIT = 5  # seconds for the tablet's monitor to appear once streaming
 NOTIFICATION = "sign"
 PAIRING = "pair"
 # Shared with the signing window (sign.py).
-SIGNATURE = os.path.join(GLib.get_user_data_dir(), "plus-one", "signature.json")
 PEN = os.path.join(GLib.get_user_config_dir(), "plus-one", "pen.json")
 
 
@@ -84,16 +83,19 @@ class Signing:
         self._notify_waiting(path, _("Sending {name} to Plus One on {tablet}")
                              .format(name=os.path.basename(path), tablet=tablet))
 
-        from .ink import load_pen, load_signature
+        from .ink import load_pen
         color, width, _smoothing = load_pen(PEN)
         pen = {"color": list(color), "width": width}
-        signature = load_signature(SIGNATURE)
+        ours = signatures.message()
+
+        def theirs(found):
+            GLib.idle_add(once(self._merge_signatures, found))
 
         def work():
             error = None
             try:
-                result = companion.sign((address, port), path, self._ask_pairing, pen=pen, signature=signature,
-                                        locate=self._locate_app)
+                result = companion.sign((address, port), path, self._ask_pairing, pen=pen, signatures=ours,
+                                        on_signatures=theirs, locate=self._locate_app)
             except companion.PairingRefused:
                 result, error = None, "refused"
             except companion.Lost:
@@ -146,10 +148,17 @@ class Signing:
             GLib.idle_add(once(self._app_saved, done))
         threading.Thread(target=save, daemon=True).start()
 
+    @staticmethod
+    def _merge_signatures(found):
+        """Signatures added or removed on the tablet."""
+        try:
+            signatures.merge(found)
+        except OSError as e:
+            log("signing: signatures from the tablet not kept:", repr(e))
+
     def _keep_from_app(self, result):
-        """The pen chosen and a signature kept on the tablet, for next time
-        (on the PC too)."""
-        from .ink import load_pen, save_pen, store_signature
+        """The pen chosen on the tablet, for next time (on the PC too)."""
+        from .ink import load_pen, save_pen
         pen = result.get("pen")
         if isinstance(pen, dict):
             try:
@@ -157,12 +166,6 @@ class Signing:
                 save_pen(PEN, tuple(float(c) for c in pen["color"]), float(pen["width"]), smoothing)
             except (KeyError, TypeError, ValueError, OSError) as e:
                 log("signing: pen from the tablet not kept:", repr(e))
-        signature = result.get("signature")
-        if isinstance(signature, dict) and signature.get("strokes"):
-            try:
-                store_signature(SIGNATURE, signature)
-            except OSError as e:
-                log("signing: signature from the tablet not kept:", repr(e))
 
     def _app_saved(self, result):
         if isinstance(result, Exception):

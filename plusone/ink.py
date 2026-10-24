@@ -1,5 +1,5 @@
 """Toolkit-free helpers for the signing window: page view, pen samples,
-pen settings and saved signature."""
+pen settings and signatures (normalized to keep, placed on a page)."""
 import collections
 import json
 import math
@@ -213,25 +213,3 @@ def _between_segments(p, q, a, b):
     if _side(a, b, p) * _side(a, b, q) < 0 and _side(p, q, a) * _side(p, q, b) < 0:
         return 0.0  # they cross
     return min(_to_segment(p, a, b), _to_segment(q, a, b), _to_segment(a, p, q), _to_segment(b, p, q))
-
-
-def load_signature(path):
-    try:
-        with open(path) as f:
-            data = json.load(f)
-        return data if data.get("strokes") else None
-    except (OSError, ValueError):
-        return None
-
-
-def save_signature(path, strokes):
-    store_signature(path, normalize(strokes))
-
-
-def store_signature(path, signature):
-    """A normalized signature (see normalize), as kept on the tablet too."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".part"
-    with open(tmp, "w") as f:
-        json.dump(signature, f)
-    os.replace(tmp, path)

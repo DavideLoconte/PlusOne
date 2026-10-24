@@ -85,7 +85,8 @@ def test_a_dropped_link_is_resumed(tmp_path, monkeypatch):
     listener.bind(("127.0.0.1", 0))
     listener.listen(2)
     marks = {"pages": [{"page": 0, "marks": []}]}
-    seen = []
+    ours, theirs = {"signatures": [], "removed": ["x"]}, {"signatures": [], "removed": ["y"]}
+    seen, got = [], []
 
     def app():
         for attempt in range(2):
@@ -97,17 +98,19 @@ def test_a_dropped_link_is_resumed(tmp_path, monkeypatch):
                 message, payload = wire.receive()
                 seen.append(message["type"])
                 if attempt == 0:
+                    assert message["signatures"] == ours
                     wire.send({"type": "opened", "job": message["job"]})
                     job = message["job"]
                 else:
                     assert message == {"type": "resume", "job": job}
-                    wire.send({"type": "signed", "job": job, "marks": marks})
+                    wire.send({"type": "signed", "job": job, "marks": marks, "signatures": theirs})
                     wire.receive()  # bye
 
     threading.Thread(target=app, daemon=True).start()
     pdf = tmp_path / "doc.pdf"
     pdf.write_bytes(b"%PDF-1.7")
     target = listener.getsockname()
-    result = companion.sign(target, str(pdf), ask_pairing=None, paired=paired, locate=lambda: target)
-    assert result == marks and seen == ["sign", "resume"]
+    result = companion.sign(target, str(pdf), ask_pairing=None, paired=paired, locate=lambda: target,
+                            signatures=ours, on_signatures=got.append)
+    assert result == marks and seen == ["sign", "resume"] and got == [theirs]
     listener.close()

@@ -150,13 +150,14 @@ def test_an_unreachable_app_falls_back_to_second_screen(monkeypatch, tmp_path):
     assert spin(lambda: app.controller.starts == 1)
 
 
-def test_pen_and_signature_from_the_tablet_are_kept(monkeypatch, tmp_path):
+def test_pen_and_signatures_from_the_tablet_are_kept(monkeypatch, tmp_path):
+    from plusone import signatures
     from plusone import signing as signing_module
-    from plusone.ink import load_pen, load_signature
+    from plusone.ink import load_pen
     monkeypatch.setattr(signing_module, "PEN", str(tmp_path / "pen.json"))
-    monkeypatch.setattr(signing_module, "SIGNATURE", str(tmp_path / "signature.json"))
     app, signing, _, _ = make(monkeypatch)
-    signing._keep_from_app({"pen": {"color": [0.8, 0.1, 0.1], "width": 0.9},
-                            "signature": {"width": 120.0, "strokes": [[[0, 0, 0.5], [1, 0.2, 0.5]]]}})
+    signing._keep_from_app({"pen": {"color": [0.8, 0.1, 0.1], "width": 0.9}})
     assert load_pen(str(tmp_path / "pen.json"))[:2] == ((0.8, 0.1, 0.1), 0.9)
-    assert load_signature(str(tmp_path / "signature.json"))["width"] == 120.0
+    signing._merge_signatures({"signatures": [{"id": "t1", "width": 120.0,
+                                               "strokes": [[[0, 0, 0.5], [1, 0.2, 0.5]]]}], "removed": []})
+    assert [s["width"] for s in signatures.load()[0]] == [120.0]

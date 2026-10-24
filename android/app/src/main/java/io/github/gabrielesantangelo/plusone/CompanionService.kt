@@ -154,6 +154,8 @@ class CompanionService : Service() {
     /** A PDF to sign: the signing screen opens on it; its answer goes back. */
     private fun sign(wire: Wire, message: JSONObject, pdf: ByteArray) {
         val job = message.getString("job")
+        // Signatures added or removed on the PC since the last job.
+        message.optJSONObject("signatures")?.let { Signatures.merge(this, it) }
         val file = File(File(cacheDir, "jobs").apply { mkdirs() }, "$job.pdf")
         file.writeBytes(pdf)
         Jobs.start(job) { answer(wire, job, it.result) }
@@ -162,9 +164,8 @@ class CompanionService : Service() {
             putExtra(SignActivity.EXTRA_PATH, file.path)
             putExtra(SignActivity.EXTRA_JOB, job)
             putExtra(SignActivity.EXTRA_TITLE, title)
-            // The PC's pen and saved signature, so both sides sign alike.
+            // The PC's pen, so both sides sign alike.
             message.optJSONObject("pen")?.let { putExtra(SignActivity.EXTRA_PEN, it.toString()) }
-            message.optJSONObject("signature")?.let { putExtra(SignActivity.EXTRA_SIGNATURE, it.toString()) }
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         // Opening over whatever is on screen needs "Display over other apps";
@@ -173,12 +174,14 @@ class CompanionService : Service() {
         wire.send(JSONObject().put("type", "opened").put("job", job))
     }
 
-    /** Sends a job's answer; false if the link is gone (the PC asks again). */
+    /** Sends a job's answer, and the saved signatures for the PC to merge;
+     * false if the link is gone (the PC asks again). */
     private fun answer(wire: Wire, job: String, result: JSONObject?): Boolean = try {
+        val message = JSONObject().put("job", job).put("signatures", Signatures.toJson(this))
         if (result != null) {
-            wire.send(JSONObject().put("type", "signed").put("job", job).put("marks", result))
+            wire.send(message.put("type", "signed").put("marks", result))
         } else {
-            wire.send(JSONObject().put("type", "cancelled").put("job", job))
+            wire.send(message.put("type", "cancelled"))
         }
         File(File(cacheDir, "jobs"), "$job.pdf").delete()
         true

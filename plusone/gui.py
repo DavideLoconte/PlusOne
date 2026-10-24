@@ -81,13 +81,16 @@ class Window(Adw.ApplicationWindow):
         self.has_adb = shutil.which("adb") is not None
         self.adb_row = Adw.SwitchRow(active=self.settings.use_adb and self.has_adb,
                                      sensitive=self.has_adb)
+        self.signatures_row = Adw.ActionRow(activatable=True)
+        self.signatures_row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+        self.signatures_row.connect("activated", lambda r: self._show_signatures())
         self.language_row = Adw.ComboRow(model=Gtk.StringList.new(
             [i18n.LANGUAGE_NAMES[code] for code in i18n.LANGUAGES]))
         language = self.settings.language if self.settings.language in i18n.LANGUAGES else "auto"
         self.language_row.set_selected(i18n.LANGUAGES.index(language))
         self._language_handler = self.language_row.connect("notify::selected", self._on_language)
-        for row in (self.touch_row, self.sign_row, self.background_row, self.extension_row,
-                    self.adb_row, self.language_row):
+        for row in (self.touch_row, self.sign_row, self.signatures_row, self.background_row,
+                    self.extension_row, self.adb_row, self.language_row):
             self.options_group.add(row)
         page.add(self.options_group)
         # Settings are read when a connection starts: lock them while one is up.
@@ -130,6 +133,8 @@ class Window(Adw.ApplicationWindow):
         self.options_group.set_title(_("Options"))
         self.touch_row.set_title(_("Touch and S Pen"))
         self.sign_row.set_title(_("Sign on Tablet"))
+        self.signatures_row.set_title(_("My signatures"))
+        self.signatures_row.set_subtitle(_("Placed with one tap when signing, here and on the tablet"))
         self.background_row.set_title(_("Ready in the background"))
         self.background_row.set_subtitle(_("Starts at login and stays ready after you close this window"))
         self.extension_row.set_title(_("Quick Settings toggle"))
@@ -150,6 +155,13 @@ class Window(Adw.ApplicationWindow):
                 [_(i18n.LANGUAGE_NAMES[code]) for code in i18n.LANGUAGES]))
             self.language_row.set_selected(selected)
         self._refresh()
+
+    def _show_signatures(self):
+        from .ink import load_pen
+        from .signature_pad import SignaturesWindow
+        from .signing import PEN
+        color, width, _smoothing = load_pen(PEN)
+        SignaturesWindow(self, color, width).present()
 
     def _on_language(self, row, _pspec):
         self.settings.language = i18n.LANGUAGES[row.get_selected()]
