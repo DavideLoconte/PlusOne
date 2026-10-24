@@ -20,6 +20,7 @@ from .i18n import _
 MONITOR_WAIT = 5  # seconds for the tablet's monitor to appear once streaming
 NOTIFICATION = "sign"
 PAIRING = "pair"
+UPDATE = "update"
 # Shared with the signing window (sign.py).
 PEN = os.path.join(GLib.get_user_config_dir(), "plus-one", "pen.json")
 
@@ -105,10 +106,14 @@ class Signing:
         # Taken now, in the order the PDFs were asked for: they reach the tablet in it.
         turn = companion.next_turn()
 
+        # Every address the tablet is announced at: someone may announce it too.
+        targets = (self.app.nearby.addresses(app_id) if app_id else []) or [(address, port)]
+
         def work():
             result = error = None
             try:
-                result = companion.sign((address, port), path, self._ask_pairing, pen=pen, signatures=ours,
+                result = companion.sign(targets, path, self._ask_pairing,
+                                        pen=pen, signatures=ours, expect=app_id or None,
                                         on_signatures=theirs, on_opened=opened,
                                         locate=lambda: self._locate_app(app_id),
                                         turn=turn)
@@ -139,14 +144,11 @@ class Signing:
 
     def _locate_app(self, app_id):
         """Where the app the PDF went to is now (its port changes when it
-        restarts): that tablet's, not another's."""
-        for found, address, port, _name in self.app.nearby.apps():
-            if found == app_id:
-                return address, port
+        restarts): that tablet's addresses, not another's."""
         if not app_id:  # an app that does not say which it is
             found = self._find_app()
-            return found[:2] if found else None
-        return None
+            return [found[:2]] if found else None
+        return self.app.nearby.addresses(app_id) or None
 
     def _app_done(self, path, result, error):
         if path not in self.in_app:
@@ -162,7 +164,7 @@ class Signing:
             note = Gio.Notification.new(_("Update Plus One"))
             note.set_body(_("The app on the tablet and Plus One on this PC are different versions: "
                             "signing with Second Screen instead"))
-            self.app.send_notification(PAIRING, note)
+            self.app.send_notification(UPDATE, note)
             self._second_screen(path)
             return
         if error == "lost":

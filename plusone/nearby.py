@@ -61,7 +61,9 @@ class Nearby:
         self.known = False   # Avahi is there to ask
         self.services = set()  # (interface, protocol, name, type, domain) announced
         self.tablets = {}    # those on a tablet -> its name ("" if unknown)
-        self.companions = {}  # the app's services -> (address, port, name, app id)
+        # The app's services -> (address, port, name, app id); replaced whole
+        # on each change, as the signing threads read it.
+        self.companions = {}
         self._browsers = []
         self._subscription = self._watch = self._timer = None
 
@@ -81,6 +83,12 @@ class Nearby:
             seen.setdefault(app_id or f"{address}:{port}", (app_id, address, port, name))
         return sorted(seen.values(), key=lambda app: (app[3].lower(), app[0]))
 
+    def addresses(self, app_id):
+        """Every (address, port) the app with this id is announced at: someone
+        else may announce it too, and only the real one proves it (TLS)."""
+        return sorted({(address, port) for address, port, _name, found in self.companions.values()
+                       if found == app_id})
+
     def companion(self, paired=(), prefer=()):
         """(address, port, name, app id) of the app to sign with, or None: the
         first of prefer (app ids, the most wanted first) on the network, else
@@ -88,7 +96,7 @@ class Nearby:
         apps = self.apps()
         for wanted in prefer:
             for app_id, address, port, name in apps:
-                if wanted and app_id == wanted:
+                if app_id == wanted:
                     return address, port, name, app_id
         def known(app):
             return bool(app[0]) and any(fp.startswith(app[0]) for fp in paired)
@@ -166,7 +174,8 @@ class Nearby:
                 self._resolve(key)
         else:
             self.services.discard(key)
-            if self.companions.pop(key, None):
+            if key in self.companions:
+                self.companions = {k: v for k, v in self.companions.items() if k != key}
                 log("nearby: the Plus One app left the network")
                 self.on_change()
             self._update(key, None)
@@ -195,13 +204,13 @@ class Nearby:
 
     def _companion(self, key, reply, txt):
         before = self.companions.get(key)
-        if reply is None:
-            self.companions.pop(key, None)
-        else:
+        companions = {k: v for k, v in self.companions.items() if k != key}
+        if reply is not None:
             fields = dict(entry.partition(b"=")[::2] for entry in txt)
-            name = fields.get(b"name", b"").decode(errors="replace") or key[2]
-            app_id = fields.get(b"id", b"").decode(errors="replace").lower()
-            self.companions[key] = (reply[7], reply[8], name, app_id)
+            name = fields.get(b"name", b"").decode(errors="replace")[:64] or key[2]
+            app_id = fields.get(b"id", b"").decode(errors="replace").lower()[:64]
+            companions[key] = (reply[7], reply[8], name, app_id)
+        self.companions = companions
         if self.companions.get(key) != before:
             log("nearby:", f"the Plus One app on {self.companions[key][2]} at {reply[7]}:{reply[8]}"
                 if key in self.companions else "the Plus One app is gone")

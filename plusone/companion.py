@@ -16,6 +16,7 @@ bytes as the header's "size" says (android/.../Wire.kt).
 """
 import hashlib
 import json
+import math
 import os
 import secrets
 import select
@@ -29,7 +30,7 @@ import uuid
 
 from gi.repository import GLib
 
-from . import log
+from . import log, write_private
 
 PROTOCOL = 2
 CONNECT_TIMEOUT = 5          # seconds
@@ -37,7 +38,10 @@ PAIRING_TIMEOUT = 120        # seconds for the user to compare the codes
 IO_TIMEOUT = 30              # seconds for a message to go through
 PING_EVERY = 15              # seconds of silence while the user signs before asking "still there?"
 SILENT_FOR = 45              # seconds of silence after which the link is taken for dead
-MAX_HEADER = 32 * 1024 * 1024  # the marks of a long document
+MAX_HEADER = 16 * 1024 * 1024  # the marks of a long document (the app takes as much)
+UNPAIRED_HEADER = 4096         # hello and pairing: small, from an app not yet known
+HANDSHAKE_FOR = 20             # seconds for TLS, hello and pairing messages (not the user's answer)
+MAX_NAME = 64
 CONFIG = os.path.join(GLib.get_user_config_dir(), "plus-one", "companion")
 _making_identity = threading.Lock()
 
@@ -102,10 +106,12 @@ class Paired:
     def add(self, fp, name):
         data = self.all()
         data[fp] = name
-        os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
-        with open(self.path + ".part", "w") as f:
-            json.dump(data, f, indent=2)
-        os.replace(self.path + ".part", self.path)
+        write_private(self.path, data)
+
+    def forget(self, fp):
+        data = self.all()
+        if data.pop(fp, None) is not None:
+            write_private(self.path, data)
 
 
 class Wire:
@@ -136,20 +142,26 @@ class Wire:
             left -= len(chunk)
         return b"".join(chunks)
 
-    def receive(self):
+    def receive(self, limit=MAX_HEADER):
+        """The next message (the app sends headers only), at most limit bytes."""
         (length,) = struct.unpack(">I", self._exactly(4))
-        if not 0 < length <= MAX_HEADER:
+        if not 0 < length <= limit:
             raise ValueError(f"bad header length {length}")
         header = json.loads(self._exactly(length))
         if not isinstance(header, dict):
             raise ValueError("a message that is not an object")
         if header.get("size"):
             raise ValueError("the app sends no payloads")
-        return header, None
+        return header
 
 
 class PairingRefused(Exception):
     pass
+
+
+class Impostor(PairingRefused):
+    """At an address announced for a paired tablet, an app with another
+    certificate: someone answering mDNS for it. Never paired with."""
 
 
 class Lost(Exception):
@@ -197,10 +209,12 @@ def next_turn():
     return _turns.ticket()
 
 
-def _connect(target, paired, ask_pairing):
+def _connect(target, paired, ask_pairing, expect=None):
     """(socket, wire, tablet name) of a TLS link to the app at target, the
     tablet paired (asking the user through ask_pairing if needed, or raising
-    PairingRefused if ask_pairing is None)."""
+    PairingRefused if ask_pairing is None). expect: the id the app was
+    announced with; if it is a paired tablet's, that tablet's certificate is
+    required (Impostor otherwise)."""
     cert, key, ours = identity()
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.minimum_version = ssl.TLSVersion.TLSv1_3
@@ -215,25 +229,36 @@ def _connect(target, paired, ask_pairing):
     except Exception:
         raw.close()
         raise
+    deadline = time.monotonic() + HANDSHAKE_FOR
+
+    def small():
+        """A message of the handshake: small, and all of them in time."""
+        sock.settimeout(max(0.1, deadline - time.monotonic()))
+        return wire.receive(UNPAIRED_HEADER)
+
     try:
-        sock.settimeout(IO_TIMEOUT)
         theirs = sock.getpeercert(binary_form=True)
         fp = fingerprint(theirs)
         wire = Wire(sock)
-        known = fp in paired.all()
+        known = paired.all()
+        pinned = [p for p in known if expect and p.startswith(expect)]
+        if pinned and fp not in pinned:
+            raise Impostor(f"an app at {target[0]} announced as a paired tablet, with another certificate")
+        known = fp in known
+        sock.settimeout(IO_TIMEOUT)
         wire.send({"type": "hello", "name": socket.gethostname(), "version": PROTOCOL, "paired": known})
-        hello, _ = wire.receive()
-        name = str(hello.get("name") or "tablet")
+        hello = small()
+        name = str(hello.get("name") or "tablet")[:MAX_NAME]
         if hello.get("version") != PROTOCOL:
             raise Incompatible(f"{name} speaks version {hello.get('version')}, this PC {PROTOCOL}")
         if not known or not hello.get("paired"):
             if ask_pairing is None:
                 raise PairingRefused(name)
             # The app commits to its number, learns ours, then shows its own.
-            commit, _ = wire.receive()
+            commit = small()
             nonce = secrets.token_bytes(16)
             wire.send({"type": "pair-nonce", "nonce": nonce.hex()})
-            reveal, _ = wire.receive()
+            reveal = small()
             their_nonce = bytes.fromhex(str(reveal.get("nonce", "")))
             if (commit.get("type") != "pair-commit" or len(their_nonce) != 16
                     or commit.get("commit") != commitment(their_nonce, theirs, ours)):
@@ -243,7 +268,7 @@ def _connect(target, paired, ask_pairing):
             sock.settimeout(PAIRING_TIMEOUT + 10)
             accepted = ask_pairing(name, code)
             wire.send({"type": "pair-ok" if accepted else "pair-no"})
-            answer, _ = wire.receive()
+            answer = wire.receive(UNPAIRED_HEADER)
             if not accepted or answer.get("type") != "pair-ok":
                 raise PairingRefused(name)
             paired.add(fp, name)
@@ -265,7 +290,7 @@ def _answer(wire, job, on_opened, name, on_signatures):
                 raise TimeoutError("the tablet stopped answering")
             wire.send({"type": "ping"})
             continue
-        message, _ = wire.receive()
+        message = wire.receive()
         heard = time.monotonic()
         kind = message.get("type")
         if kind == "opened" and on_opened:
@@ -285,9 +310,11 @@ def _answer(wire, job, on_opened, name, on_signatures):
 
 
 def sign(target, path, ask_pairing, paired=None, on_opened=None, pen=None, signatures=None,
-         on_signatures=None, locate=None, resume_for=RESUME_FOR, turn=None):
+         on_signatures=None, locate=None, resume_for=RESUME_FOR, turn=None, expect=None):
     """Blocking (run it in a thread): send the PDF at path to the app at
-    target (host, port) and wait for the user to sign it there. Returns the
+    target ((host, port), or a list of them: the addresses the app was
+    announced at, tried in turn) and wait for the user to sign it there.
+    expect: the id it was announced with (_connect). Returns the
     result ({"pages": [...], "pen": ..., maybe "signature": ...}) or None if
     the user cancelled. ask_pairing(name, code) -> bool asks this PC's user
     (from this thread) when pairing is needed. pen ({"color", "width"}) and
@@ -298,7 +325,7 @@ def sign(target, path, ask_pairing, paired=None, on_opened=None, pen=None, signa
     and at most MAX_JOBS wait on the tablet; more wait here for a place.
 
     Should the link drop once the PDF is on the tablet, the app keeps the
-    job: Plus One connects again (to locate()'s address, the app's port may
+    job: Plus One connects again (to locate()'s addresses, the app's port may
     have changed) and asks for it, for resume_for seconds.
 
     Raises OSError, EOFError, ValueError, PairingRefused or Incompatible
@@ -309,21 +336,36 @@ def sign(target, path, ask_pairing, paired=None, on_opened=None, pen=None, signa
         _turns.wait(turn)
         _places.acquire()
         try:
-            sock, wire, name, job = _send(target, path, paired, ask_pairing, pen, signatures)
+            sock, wire, name, job = _send(target, path, paired, ask_pairing, pen, signatures, expect)
         except BaseException:
             _places.release()
             raise
     finally:
         _turns.done(turn)
     try:
-        return _wait(sock, wire, name, job, target, paired, on_opened, on_signatures, locate, resume_for)
+        return _wait(sock, wire, name, job, target, paired, on_opened, on_signatures, locate, resume_for,
+                     expect)
     finally:
         _places.release()
 
 
-def _send(target, path, paired, ask_pairing, pen, signatures):
+def _connect_any(targets, paired, ask_pairing, expect):
+    """_connect() to the first of targets that answers as it should."""
+    error = None
+    for target in [targets] if isinstance(targets, tuple) else targets:
+        try:
+            return _connect(target, paired, ask_pairing, expect)
+        except Impostor as e:
+            log("companion:", e)
+            error = e
+        except (OSError, EOFError, ValueError) as e:
+            error = e
+    raise error or OSError("no address for the tablet")
+
+
+def _send(target, path, paired, ask_pairing, pen, signatures, expect):
     """(socket, wire, tablet name, job id) once the PDF is on the tablet."""
-    sock, wire, name = _connect(target, paired, ask_pairing)
+    sock, wire, name = _connect_any(target, paired, ask_pairing, expect)
     job = uuid.uuid4().hex
     try:
         with open(path, "rb") as f:
@@ -342,12 +384,12 @@ def _send(target, path, paired, ask_pairing, pen, signatures):
     return sock, wire, name, job
 
 
-def _wait(sock, wire, name, job, target, paired, on_opened, on_signatures, locate, resume_for):
+def _wait(sock, wire, name, job, target, paired, on_opened, on_signatures, locate, resume_for, expect):
     """The job's answer, connecting again if the link drops (sign())."""
     with sock:
         try:
             return _answer(wire, job, on_opened, name, on_signatures)
-        except (OSError, EOFError, ValueError) as e:
+        except Exception as e:  # noqa: BLE001 - the PDF is on the tablet: whatever broke, ask again
             log("companion: lost the tablet while signing:", repr(e))
     deadline = time.monotonic() + resume_for
     while time.monotonic() < deadline:
@@ -356,7 +398,7 @@ def _wait(sock, wire, name, job, target, paired, on_opened, on_signatures, locat
         if not where:
             continue
         try:
-            sock, wire, name = _connect(where, paired, None)
+            sock, wire, name = _connect_any(where, paired, None, expect)
         except (OSError, EOFError, ValueError, PairingRefused, Incompatible):
             continue
         with sock:
@@ -364,35 +406,50 @@ def _wait(sock, wire, name, job, target, paired, on_opened, on_signatures, locat
                 wire.send({"type": "resume", "job": job})
                 log("companion: back in touch with the tablet")
                 return _answer(wire, job, None, name, on_signatures)
-            except (OSError, EOFError, ValueError) as e:
+            except Exception as e:  # noqa: BLE001 - as above
                 log("companion: lost the tablet again:", repr(e))
     raise Lost(name)
 
 
+def _finite(value):
+    number = float(value)  # TypeError, ValueError: not a number
+    if not math.isfinite(number):
+        raise ValueError("not a finite number")
+    return number
+
+
 def to_marks(result):
-    """The app's marks as plusone/pdf.py takes them: {page index: [Stroke | Text]}."""
+    """The app's marks as plusone/pdf.py takes them: {page index: [Stroke |
+    Text]}. What does not make sense (not a page index, not finite, a colour
+    not of three parts, control characters) is left out, mark by mark."""
     from .pdf import INK, PEN_WIDTH, Stroke, Text
 
     marks = {}
     pages = result.get("pages") if isinstance(result, dict) else None
     for page in pages if isinstance(pages, list) else []:
-        if not isinstance(page, dict) or not isinstance(page.get("page"), int):
+        index = page.get("page") if isinstance(page, dict) else None
+        if type(index) is not int or index < 0:
             continue
         found = []
         for mark in page.get("marks") if isinstance(page.get("marks"), list) else []:
             try:
-                color = tuple(float(c) for c in mark.get("color", INK))[:3]
+                color = tuple(min(1.0, max(0.0, _finite(c))) for c in mark.get("color", INK))
+                if len(color) != 3:
+                    raise ValueError("a colour of three parts")
                 if mark.get("type") == "stroke":
-                    p = [float(v) for v in mark.get("points", [])]
-                    points = [(p[i], p[i + 1], p[i + 2]) for i in range(0, len(p) - 2, 3)]
-                    if points:
-                        found.append(Stroke(points, width=float(mark.get("width", PEN_WIDTH)), color=color))
-                elif mark.get("type") == "text" and mark.get("text"):
-                    found.append(Text(float(mark["x"]), float(mark["y"]), str(mark["text"]),
-                                      size=float(mark.get("size", 11.0)), color=color,
-                                      angle=float(mark.get("angle", 0.0))))
+                    p = [_finite(v) for v in mark.get("points", [])]
+                    points = [(p[i], p[i + 1], min(1.0, max(0.0, p[i + 2]))) for i in range(0, len(p) - 2, 3)]
+                    width = _finite(mark.get("width", PEN_WIDTH))
+                    if points and 0 < width <= 100:
+                        found.append(Stroke(points, width=width, color=color))
+                elif mark.get("type") == "text" and isinstance(mark.get("text"), str):
+                    text = "".join(ch for ch in mark["text"] if ch.isprintable())[:500]
+                    size = _finite(mark.get("size", 11.0))
+                    if text and 0 < size <= 500:
+                        found.append(Text(_finite(mark["x"]), _finite(mark["y"]), text, size=size, color=color,
+                                          angle=_finite(mark.get("angle", 0.0))))
             except (AttributeError, KeyError, TypeError, ValueError):
                 log("companion: a mark from the tablet skipped")
         if found:
-            marks[int(page["page"])] = found
+            marks[index] = found
     return marks

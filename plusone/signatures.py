@@ -11,10 +11,13 @@ except those either side removed. Removed ids are remembered, so a signature
 removed on one side does not come back from the other.
 """
 import json
+import math
 import os
 import uuid
 
 from gi.repository import GLib
+
+from . import write_private
 
 PATH = os.path.join(GLib.get_user_data_dir(), "plus-one", "signatures.json")
 OLD = os.path.join(GLib.get_user_data_dir(), "plus-one", "signature.json")  # 0.4 kept one
@@ -22,15 +25,27 @@ MAX_SIGNATURES = 50
 KEEP_REMOVED = 500  # removed ids remembered
 
 
+MAX_POINTS = 20000  # samples in a signature: a long one has a few thousand
+
+
+def _number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
 def valid(signature):
-    """Whether signature is a normalized signature with an id."""
+    """Whether signature is a normalized signature with an id: finite
+    numbers, points of three, no empty stroke, of a sane size."""
     try:
+        strokes = signature["strokes"]
+        width = signature.get("width", 1.0)
         return (isinstance(signature["id"], str) and 0 < len(signature["id"]) <= 64
-                and float(signature.get("width", 1.0)) > 0
-                and len(signature["strokes"]) > 0
-                and all(len(pt) == 3 and all(isinstance(v, (int, float)) for v in pt)
-                        for s in signature["strokes"] for pt in s))
-    except (KeyError, TypeError, ValueError):
+                and _number(width) and width > 0
+                and isinstance(strokes, list) and 0 < len(strokes)
+                and sum(len(s) for s in strokes) <= MAX_POINTS
+                and all(isinstance(s, list) and s and all(
+                    isinstance(pt, list) and len(pt) == 3 and all(_number(v) for v in pt) for pt in s)
+                    for s in strokes))
+    except (KeyError, TypeError, AttributeError):
         return False
 
 
@@ -39,8 +54,14 @@ def _parse(data):
         return [], []
     found = data.get("signatures")
     removed = data.get("removed")
-    return ([s for s in found if valid(s)] if isinstance(found, list) else [],
-            [r for r in removed if isinstance(r, str)] if isinstance(removed, list) else [])
+    kept, seen = [], set()
+    for s in found if isinstance(found, list) else []:
+        if valid(s) and s["id"] not in seen:  # one of each
+            seen.add(s["id"])
+            kept.append(s)
+    return (kept[:MAX_SIGNATURES],
+            list(dict.fromkeys(r for r in removed if isinstance(r, str) and 0 < len(r) <= 64))[-KEEP_REMOVED:]
+            if isinstance(removed, list) else [])
 
 
 def load(path=None, old=None):
@@ -67,12 +88,7 @@ def load(path=None, old=None):
 
 
 def save(signatures, removed, path=None):
-    path = path or PATH
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".part"
-    with open(tmp, "w") as f:
-        json.dump({"signatures": signatures[:MAX_SIGNATURES], "removed": removed[-KEEP_REMOVED:]}, f)
-    os.replace(tmp, path)
+    write_private(path or PATH, {"signatures": signatures[:MAX_SIGNATURES], "removed": removed[-KEEP_REMOVED:]})
 
 
 def add(signature, path=None):

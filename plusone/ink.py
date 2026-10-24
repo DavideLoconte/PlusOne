@@ -5,6 +5,7 @@ import json
 import math
 import os
 
+from . import write_private
 from .modeler import LEVELS
 from .pdf import INK, PEN_WIDTH, Stroke, Text
 
@@ -129,11 +130,7 @@ def load_pen(path):
 
 
 def save_pen(path, color, width, smoothing):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".part"
-    with open(tmp, "w") as f:
-        json.dump({"color": list(color), "width": width, "smoothing": smoothing}, f)
-    os.replace(tmp, path)
+    write_private(path, {"color": list(color), "width": width, "smoothing": smoothing})
 
 
 def normalize(strokes):

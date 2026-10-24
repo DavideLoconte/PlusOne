@@ -30,7 +30,7 @@ def test_messages_with_and_without_payload():
         raw = right.recv(4096)
         assert raw.endswith(b"%PDF-1.7 ...") and b'"size": 12' in raw
         companion.Wire(left).send({"type": "ping"})
-        assert companion.Wire(right).receive() == ({"type": "ping"}, None)
+        assert companion.Wire(right).receive() == {"type": "ping"}
 
 
 def test_what_the_app_may_not_send():
@@ -268,3 +268,31 @@ def test_a_turn_goes_on_when_its_pdf_fails(tmp_path, pc):
     app = FakeApp(tmp_path, [signs({"pages": []})])
     paired.add(companion.fingerprint(app.der), "Tab")
     assert companion.sign(app.target, path, None, paired=paired) == {"pages": []}
+
+
+def test_an_impostor_at_a_paired_tablets_address(tmp_path, pc):
+    # Someone answers mDNS with the paired tablet's id: no pairing is
+    # offered with it, and the tablet's real address is tried next.
+    path, paired = pc
+    real = FakeApp(tmp_path / "real", [signs({"pages": []})])
+    paired.add(companion.fingerprint(real.der), "Tab")
+    impostor = FakeApp(tmp_path / "impostor", [lambda wire: None], paired=False)
+    asked = []
+    expect = companion.fingerprint(real.der)[:16]
+    result = companion.sign([impostor.target, real.target], path, lambda name, code: asked.append(code) or True,
+                            paired=paired, expect=expect)
+    assert result == {"pages": []} and asked == []
+
+
+def test_marks_that_make_no_sense_are_left_out():
+    marks = companion.to_marks({"pages": [
+        {"page": -1, "marks": [{"type": "text", "x": 1, "y": 1, "text": "x"}]},
+        {"page": True, "marks": [{"type": "text", "x": 1, "y": 1, "text": "x"}]},
+        {"page": 0, "marks": [
+            {"type": "stroke", "points": [0, 0, 0.5, "NaN", 1, 0.5]},
+            {"type": "text", "x": 1, "y": 2, "text": "ok\x00", "color": [0, 0]},
+            {"type": "text", "x": 1, "y": 2, "text": "fine\x00", "size": 1e309},
+            {"type": "text", "x": 1, "y": 2, "text": "kept\x00"},
+        ]},
+    ]})
+    assert list(marks) == [0] and [m.text for m in marks[0]] == ["kept"]

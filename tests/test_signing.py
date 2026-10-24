@@ -29,6 +29,9 @@ class FakeNearby:
     def apps(self):
         return [(a[3], a[0], a[1], a[2]) for a in [self.app_on] if a]
 
+    def addresses(self, app_id):
+        return [(a[0], a[1]) for a in [self.app_on] if a and a[3] == app_id]
+
 
 class FakeApp:
     def __init__(self):
@@ -139,7 +142,7 @@ def test_the_tablets_app_signs_when_it_is_on_the_network(monkeypatch, tmp_path):
     path = str(tmp_path / "form.pdf")
     signing.request(path)
     assert spin(lambda: saved)
-    assert asked == [(("10.0.0.2", 40000), path)] and app.controller.starts == 0  # no Second Screen
+    assert asked == [([("10.0.0.2", 40000)], path)] and app.controller.starts == 0  # no Second Screen
     assert app.settings.last_tablet == "a1b2"  # "Automatic" picks it next time
     stroke = saved[0][1][0]
     assert stroke.points == [(10, 20, 0.5), (30, 40, 0.6)] and stroke.width == 1.2
@@ -219,5 +222,5 @@ def test_a_dropped_link_finds_the_same_tablet_again(monkeypatch):
     app.nearby = Nearby()
     app.nearby.companions = {"a": ("10.0.0.2", 1000, "Kitchen", "aaaa"), "b": ("10.0.0.9", 2001, "Office", "bbbb")}
     app.settings.sign_tablet = "aaaa"
-    assert signing._locate_app("bbbb") == ("10.0.0.9", 2001)
+    assert signing._locate_app("bbbb") == [("10.0.0.9", 2001)]
     assert signing._locate_app("cccc") is None
