@@ -42,9 +42,6 @@ CAPTURE_FORMAT = "BGRA"
 # seconds. Keep the monitor at the stream's rate.
 TS_PER_RTP = 7  # 7 x 188 bytes of MPEG-TS per RTP packet, as WFD sinks expect
 RTP_MP2T = 33
-# Wi-Fi sends packets marked EF (DSCP 46) from its video queue (WMM AC_VI),
-# which waits less for the air than best effort.
-DSCP_EF = 46
 # Pads a frame's last RTP packet to 7 TS packets, the size sinks always got
 # from mpegtsmux alignment=7; demuxers drop PID 0x1FFF.
 NULL_TS = b"\x47\x1f\xff\x10" + b"\xff" * 184
@@ -60,7 +57,6 @@ class RtpSender:
     def __init__(self, host, port, bind_port):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, DSCP_EF << 2)
         self.sock.bind(("0.0.0.0", bind_port))
         # Not connect()ed: a connected UDP socket fails the next send after
         # any ICMP error (the packet is dropped, and the sink counts a loss).
