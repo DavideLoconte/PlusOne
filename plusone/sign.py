@@ -106,8 +106,16 @@ def tablet_monitor():
     return found
 
 
-SHADOW = Gdk.RGBA()
-SHADOW.parse("rgba(0, 0, 0, 0.28)")
+def rgba(spec):
+    color = Gdk.RGBA()
+    color.parse(spec)
+    return color
+
+
+WHITE = rgba("white")
+PAGE_SHADOW = Gsk.Shadow()
+PAGE_SHADOW.color = rgba("rgba(0, 0, 0, 0.28)")  # a copy: set it whole
+PAGE_SHADOW.dx, PAGE_SHADOW.dy, PAGE_SHADOW.radius = 0, 3, 14
 
 
 def texture(surface):
@@ -597,7 +605,11 @@ class PageArea(Gtk.Widget):
         w, h = self.page_size()
         page_rect = rect(v.ox, v.oy, w * v.zoom, h * v.zoom)
         # The page floats over the background on a soft shadow.
-        snapshot.append_outset_shadow(Gsk.RoundedRect().init_from_rect(page_rect, 0), SHADOW, 0, 3, 0, 14)
+        # (An outset shadow node left stale pixels behind when the page moved:
+        # GTK 4.14 repainted too little around it.)
+        snapshot.push_shadow([PAGE_SHADOW])
+        snapshot.append_color(WHITE, page_rect)
+        snapshot.pop()
         scale = min(v.zoom * self.get_scale_factor(), math.sqrt(MAX_PAGE_PIXELS / (w * h)))
         scale, _surface, page = self._page_surface(scale)
         snapshot.append_texture(page, page_rect)

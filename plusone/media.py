@@ -4,7 +4,6 @@ Video-only MPEG-TS: without an audio track the sink renders frames as they
 arrive instead of syncing them to an audio clock (measured ~90 ms -> ~50 ms).
 """
 import collections
-import errno
 import random
 import socket
 import struct
@@ -63,7 +62,9 @@ class RtpSender:
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_TOS, DSCP_EF << 2)
         self.sock.bind(("0.0.0.0", bind_port))
-        self.sock.connect((host, port))
+        # Not connect()ed: a connected UDP socket fails the next send after
+        # any ICMP error (the packet is dropped, and the sink counts a loss).
+        self.dest = (host, port)
         self.seq = random.getrandbits(16)
         self.ssrc = random.getrandbits(32)
         self.packets = 0
@@ -77,13 +78,15 @@ class RtpSender:
         for offset in range(0, len(data), size):
             header = struct.pack("!BBHII", 0x80, RTP_MP2T, self.seq, stamp, self.ssrc)
             try:
-                self.sock.send(header + data[offset:offset + size])
+                self.sock.sendto(header + data[offset:offset + size], self.dest)
             except OSError as e:
-                # Refused: the sink is not listening (yet). Anything else (the
-                # link went away) once in the log; the RTSP session notices.
-                if e.errno != errno.ECONNREFUSED and e.errno not in self.errors:
+                # Once in the log (the link went away, say): the RTSP session
+                # notices. A packet not sent keeps its sequence number, so the
+                # sink does not count it as lost.
+                if e.errno not in self.errors:
                     self.errors.add(e.errno)
                     log("RTP: cannot send:", e.strerror)
+                continue
             self.seq = (self.seq + 1) & 0xFFFF
             self.packets += 1
 
