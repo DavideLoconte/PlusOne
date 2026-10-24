@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-gi python3-pytest \
         gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gstreamer-1.0 gir1.2-nm-1.0 \
-        gir1.2-poppler-0.18 python3-pypdf python3-cryptography python3-gi-cairo weston \
+        gir1.2-poppler-0.18 python3-pypdf openssl python3-gi-cairo weston \
         gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
         gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-pipewire gstreamer1.0-x \
         dpkg-dev lintian git ca-certificates \

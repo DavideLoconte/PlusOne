@@ -35,11 +35,29 @@ class CompanionService : Service() {
         startForeground(Notifications.SERVICE_ID, Notifications.ready(this),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
         Thread(::serve, "plusone-server").start()
+        handler.postDelayed(::idleCheck, IDLE_CHECK)
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int) = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        lastUse = System.currentTimeMillis()  // the app was opened, or a job came
+        return if (Options.alwaysReady(this)) START_STICKY else START_NOT_STICKY
+    }
+
+    // Not always ready: stop once nothing has happened for a while.
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    @Volatile private var lastUse = System.currentTimeMillis()
+    private val busy = java.util.concurrent.atomic.AtomicInteger()  // PCs connected
+
+    private fun idleCheck() {
+        if (!Options.alwaysReady(this) && busy.get() == 0 && System.currentTimeMillis() - lastUse > IDLE_STOP) {
+            stopSelf()
+            return
+        }
+        handler.postDelayed(::idleCheck, IDLE_CHECK)
+    }
 
     override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
         registration?.let { (getSystemService(NSD_SERVICE) as NsdManager).unregisterService(it) }
         server?.close()
         connections.shutdownNow()
@@ -86,6 +104,8 @@ class CompanionService : Service() {
 
     /** One PC: hello, pairing if either side does not know the other, then jobs. */
     private fun handle(socket: SSLSocket) {
+        busy.incrementAndGet()
+        lastUse = System.currentTimeMillis()
         try {
             socket.use {
                 socket.startHandshake()
@@ -125,6 +145,9 @@ class CompanionService : Service() {
             }
         } catch (e: Exception) {
             Log.i(TAG, "connection ended: $e")
+        } finally {
+            busy.decrementAndGet()
+            lastUse = System.currentTimeMillis()
         }
     }
 
@@ -168,6 +191,8 @@ class CompanionService : Service() {
         const val TAG = "PlusOne"
         const val SERVICE_TYPE = "_plusone._tcp"
         const val PROTOCOL = 1
+        const val IDLE_CHECK = 60_000L       // ms
+        const val IDLE_STOP = 10 * 60_000L   // ms without a PC when not always ready
 
         fun deviceName(context: Context): String =
             Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME) ?: Build.MODEL

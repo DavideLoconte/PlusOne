@@ -9,13 +9,13 @@ Bluetooth's numeric comparison); then each side remembers the other's
 certificate. Messages: a 4-byte big-endian length, a JSON header, and as
 many payload bytes as the header's "size" says (android/.../Wire.kt).
 """
-import datetime
 import hashlib
 import json
 import os
 import socket
 import ssl
 import struct
+import subprocess
 import time
 import uuid
 
@@ -44,29 +44,19 @@ def fingerprint(der):
 
 def identity(directory=CONFIG):
     """(certificate path, key path, certificate DER) of this PC, made on
-    first use: an EC P-256 key and a self-signed certificate."""
+    first use with openssl (on every Ubuntu, and in the GNOME runtime): an
+    EC P-256 key and a self-signed certificate."""
     cert, key = os.path.join(directory, "cert.pem"), os.path.join(directory, "key.pem")
     if not (os.path.exists(cert) and os.path.exists(key)):
-        from cryptography import x509
-        from cryptography.hazmat.primitives import hashes, serialization
-        from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.x509.oid import NameOID
-
         os.makedirs(directory, mode=0o700, exist_ok=True)
-        private = ec.generate_private_key(ec.SECP256R1())
-        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"Plus One on {socket.gethostname()}")])
-        now = datetime.datetime.now(datetime.timezone.utc)
-        certificate = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
-                       .public_key(private.public_key()).serial_number(x509.random_serial_number())
-                       .not_valid_before(now - datetime.timedelta(days=1))
-                       .not_valid_after(now + datetime.timedelta(days=30 * 365))
-                       .sign(private, hashes.SHA256()))
-        fd = os.open(key, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "wb") as f:
-            f.write(private.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
-                                          serialization.NoEncryption()))
-        with open(cert, "wb") as f:
-            f.write(certificate.public_bytes(serialization.Encoding.PEM))
+        old = os.umask(0o077)  # the key is readable by us only
+        try:
+            subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1",
+                            "-nodes", "-keyout", key, "-out", cert, "-days", "10950",
+                            "-subj", f"/CN=Plus One on {socket.gethostname()}"],
+                           check=True, capture_output=True, timeout=30)
+        finally:
+            os.umask(old)
     with open(cert) as f:
         der = ssl.PEM_cert_to_DER_cert(f.read())
     return cert, key, der

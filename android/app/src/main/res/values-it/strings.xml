@@ -40,4 +40,7 @@
     <string name="tap_text">Tocca dove va il testo</string>
     <string name="text_to_add">Testo da aggiungere</string>
     <string name="place">Metti</string>
+    <string name="heading_ready">PRONTO IN BACKGROUND</string>
+    <string name="always_on">Sempre pronto, anche dopo un riavvio: il PC può mandare un PDF in qualsiasi momento. Resta solo in ascolto; non consuma quasi batteria.</string>
+    <string name="always_off">Pronto per 10 minuti dopo che apri l\'app: aprila prima di firmare.</string>
 </resources>

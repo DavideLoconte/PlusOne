@@ -2,6 +2,19 @@ package io.github.gabrielesantangelo.plusone
 
 import android.content.Context
 
+/** The app's own settings. */
+object Options {
+    private const val PREFS = "options"
+
+    /** Ready for the PC all the time (and after a restart), or only for a
+     * while after the app was opened. */
+    fun alwaysReady(context: Context) =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("always", true)
+
+    fun setAlwaysReady(context: Context, on: Boolean) =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("always", on).apply()
+}
+
 /** PCs the user paired with: certificate fingerprint -> name. */
 object Paired {
     private const val PREFS = "paired"

@@ -43,7 +43,9 @@ def test_marks_from_the_app():
 
 
 def test_identity_is_made_once(tmp_path):
-    pytest.importorskip("cryptography")
+    import shutil
+    if not shutil.which("openssl"):
+        pytest.skip("no openssl")
     cert, key, der = companion.identity(str(tmp_path))
     assert companion.identity(str(tmp_path))[2] == der
     assert oct((tmp_path / "key.pem").stat().st_mode)[-3:] == "600"
@@ -67,9 +69,11 @@ def test_text_from_the_app():
 def test_a_dropped_link_is_resumed(tmp_path, monkeypatch):
     # The link drops once the PDF is on the tablet; Plus One connects again
     # and gets the signature the user finished meanwhile.
+    import shutil
     import ssl
     import threading
-    pytest.importorskip("cryptography")
+    if not shutil.which("openssl"):
+        pytest.skip("no openssl")
     monkeypatch.setattr(companion, "CONFIG", str(tmp_path / "pc"))
     monkeypatch.setattr(companion, "RESUME_EVERY", 0.01)
     app_cert, app_key, app_der = companion.identity(str(tmp_path / "app"))

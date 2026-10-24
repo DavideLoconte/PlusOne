@@ -42,4 +42,7 @@
     <string name="tap_text">Tap where the text goes</string>
     <string name="text_to_add">Text to add</string>
     <string name="place">Place</string>
+    <string name="heading_ready">READY IN THE BACKGROUND</string>
+    <string name="always_on">Always ready, also after a restart: the PC can send a PDF at any time. It only listens; it uses next to no battery.</string>
+    <string name="always_off">Ready for 10 minutes after you open the app: open it before signing.</string>
 </resources>

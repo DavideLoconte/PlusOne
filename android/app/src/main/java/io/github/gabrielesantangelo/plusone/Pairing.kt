@@ -115,6 +115,8 @@ class PairingReceiver : BroadcastReceiver() {
 /** Ready again after a restart. */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED) CompanionService.start(context)
+        if (intent.action == Intent.ACTION_BOOT_COMPLETED && Options.alwaysReady(context)) {
+            CompanionService.start(context)
+        }
     }
 }

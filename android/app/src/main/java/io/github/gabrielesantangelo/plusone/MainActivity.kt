@@ -25,7 +25,6 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        CompanionService.start(this)
         // adb shell am start -n …/.MainActivity --es path /data/user/0/…/files/x.pdf
         // opens the signing screen on a PDF (for trying it out).
         intent.getStringExtra(SignActivity.EXTRA_PATH)?.let { path ->
@@ -47,6 +46,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        CompanionService.start(this)  // ready now (for a while, if not always)
         refresh()
     }
 
@@ -54,6 +54,25 @@ class MainActivity : Activity() {
         content.removeAllViews()
         content.addView(text(getString(R.string.app_name), 28f, bold = true))
         content.addView(text(getString(R.string.status_ready, CompanionService.deviceName(this)), 16f))
+
+        content.addView(heading(getString(R.string.heading_ready)))
+        content.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(text(getString(if (Options.alwaysReady(this@MainActivity)) R.string.always_on else R.string.always_off), 15f),
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(android.widget.Switch(this@MainActivity).apply {
+                val states = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
+                thumbTintList = android.content.res.ColorStateList(states, intArrayOf(Color.WHITE, Color.LTGRAY))
+                trackTintList = android.content.res.ColorStateList(states,
+                    intArrayOf(Color.rgb(53, 132, 228), Color.rgb(90, 90, 96)))
+                isChecked = Options.alwaysReady(this@MainActivity)
+                setOnCheckedChangeListener { _, on ->
+                    Options.setAlwaysReady(this@MainActivity, on)
+                    refresh()
+                }
+            })
+        })
 
         content.addView(heading(getString(R.string.heading_open)))
         if (Settings.canDrawOverlays(this)) {
