@@ -55,8 +55,6 @@ def test_paired_tablets_are_remembered(tmp_path):
     paired = companion.Paired(str(tmp_path))
     paired.add("ab" * 32, "Galaxy Tab")
     assert companion.Paired(str(tmp_path)).all() == {"ab" * 32: "Galaxy Tab"}
-    paired.forget("ab" * 32)
-    assert paired.all() == {}
 
 
 def test_text_from_the_app():

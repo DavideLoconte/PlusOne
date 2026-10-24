@@ -84,13 +84,6 @@ class Paired:
             json.dump(data, f, indent=2)
         os.replace(self.path + ".part", self.path)
 
-    def forget(self, fp):
-        data = self.all()
-        if data.pop(fp, None) is not None:
-            with open(self.path + ".part", "w") as f:
-                json.dump(data, f, indent=2)
-            os.replace(self.path + ".part", self.path)
-
 
 class Wire:
     """Framed messages over a socket (see the module docstring)."""
