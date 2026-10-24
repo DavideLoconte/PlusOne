@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Plus One</string>
-    <string name="ink_hint">Write with the S Pen · hold its button to erase · tap with a finger to clear</string>
     <string name="cancel">Cancel</string>
     <string name="done">Done</string>
     <string name="eraser">Eraser</string>
@@ -10,4 +9,21 @@
     <string name="page_of">%1$d / %2$d</string>
     <string name="cannot_open">Cannot open the PDF: %1$s</string>
     <string name="saved_test">Signature kept (test)</string>
+    <string name="channel_service">Ready for the PC</string>
+    <string name="channel_ask">Requests from the PC</string>
+    <string name="ready_title">Plus One is ready</string>
+    <string name="ready_text">Your PC can send PDFs to sign</string>
+    <string name="pair_title">Pair with %1$s?</string>
+    <string name="pair_message">Check that the PC shows the same code: %1$s</string>
+    <string name="pair">Pair</string>
+    <string name="pair_compare">Pair only if the PC shows this same code, and confirm there too:</string>
+    <string name="sign_title">A PDF to sign</string>
+    <string name="status_ready">Ready: Plus One on your PC finds “%1$s” on the home network and sends it PDFs to sign.</string>
+    <string name="heading_open">OPENING BY ITSELF</string>
+    <string name="overlay_on">A PDF sent by the PC opens on its own.</string>
+    <string name="overlay_off">For a PDF sent by the PC to open on its own, allow Plus One to display over other apps. Without it, a notification to tap.</string>
+    <string name="overlay_allow">Allow</string>
+    <string name="heading_paired">PAIRED COMPUTERS</string>
+    <string name="paired_none">None yet. On the PC, right-click a PDF → Sign on Tablet, and confirm the code here.</string>
+    <string name="forget">Forget</string>
 </resources>

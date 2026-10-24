@@ -2,7 +2,8 @@
 from gi.repository import GLib
 
 from plusone import i18n
-from plusone.engine import NOT_ANSWERING, State
+from plusone import companion
+from plusone.engine import NOT_ANSWERING, Settings, State
 from plusone.signing import Signing
 
 
@@ -18,15 +19,26 @@ class FakeController:
         self.running, self.stops = False, self.stops + 1
 
 
+class FakeNearby:
+    def __init__(self):
+        self.app_on = None  # (address, port, name) of the companion app, if any
+
+    def companion(self):
+        return self.app_on
+
+
 class FakeApp:
     def __init__(self):
         self.controller = FakeController()
+        self.settings = Settings()
+        self.nearby = FakeNearby()
+        self.notes = []
 
     def add_action(self, action):
         pass
 
     def send_notification(self, id, note):
-        pass
+        self.notes.append(id)
 
     def withdraw_notification(self, id):
         pass
@@ -98,3 +110,41 @@ def test_a_start_that_fails_at_once_keeps_its_notification(monkeypatch, tmp_path
     app.controller.start = failing_start
     signing.request(str(tmp_path / "form.pdf"))
     assert notes == [] and signing.queue == []
+
+
+def spin(until, timeout=5):
+    import time
+    end = time.monotonic() + timeout
+    while time.monotonic() < end and not until():
+        GLib.MainContext.default().iteration(False)
+        time.sleep(0.005)
+    return until()
+
+
+def test_the_tablets_app_signs_when_it_is_on_the_network(monkeypatch, tmp_path):
+    app, signing, _, _ = make(monkeypatch)
+    app.nearby.app_on = ("10.0.0.2", 40000, "Galaxy Tab")
+    marks = {"pages": [{"page": 1, "marks": [
+        {"type": "stroke", "width": 1.2, "color": [0, 0, 0], "points": [10, 20, 0.5, 30, 40, 0.6]}]}]}
+    asked, saved = [], []
+    monkeypatch.setattr(companion, "sign", lambda target, path, ask: asked.append((target, path)) or marks)
+    import plusone.pdf
+    monkeypatch.setattr(plusone.pdf, "save_signed", lambda path, m: saved.append(m) or path + ".signed")
+    path = str(tmp_path / "form.pdf")
+    signing.request(path)
+    assert spin(lambda: saved)
+    assert asked == [(("10.0.0.2", 40000), path)] and app.controller.starts == 0  # no Second Screen
+    stroke = saved[0][1][0]
+    assert stroke.points == [(10, 20, 0.5), (30, 40, 0.6)] and stroke.width == 1.2
+    assert spin(lambda: path not in signing.in_app)
+
+
+def test_an_unreachable_app_falls_back_to_second_screen(monkeypatch, tmp_path):
+    app, signing, _, notes = make(monkeypatch)
+    app.nearby.app_on = ("10.0.0.2", 40000, "Galaxy Tab")
+
+    def unreachable(*args):
+        raise ConnectionRefusedError()
+    monkeypatch.setattr(companion, "sign", unreachable)
+    signing.request(str(tmp_path / "form.pdf"))
+    assert spin(lambda: app.controller.starts == 1)

@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="ink_hint">Scrivi con la S Pen · tieni premuto il tasto per cancellare · tocca con un dito per pulire</string>
     <string name="cancel">Annulla</string>
     <string name="done">Fatto</string>
     <string name="eraser">Gomma</string>
@@ -8,4 +7,21 @@
     <string name="fit">Adatta</string>
     <string name="cannot_open">Impossibile aprire il PDF: %1$s</string>
     <string name="saved_test">Firma tenuta (prova)</string>
+    <string name="channel_service">Pronto per il PC</string>
+    <string name="channel_ask">Richieste dal PC</string>
+    <string name="ready_title">Plus One è pronto</string>
+    <string name="ready_text">Il PC può mandare PDF da firmare</string>
+    <string name="pair_title">Abbinare %1$s?</string>
+    <string name="pair_message">Controlla che il PC mostri lo stesso codice: %1$s</string>
+    <string name="pair">Abbina</string>
+    <string name="pair_compare">Abbina solo se il PC mostra questo stesso codice, e conferma anche lì:</string>
+    <string name="sign_title">Un PDF da firmare</string>
+    <string name="status_ready">Pronto: Plus One sul PC trova “%1$s” sulla rete di casa e gli manda i PDF da firmare.</string>
+    <string name="heading_open">APERTURA AUTOMATICA</string>
+    <string name="overlay_on">Un PDF mandato dal PC si apre da solo.</string>
+    <string name="overlay_off">Perché un PDF mandato dal PC si apra da solo, consenti a Plus One di comparire sopra le altre app. Senza, arriva una notifica da toccare.</string>
+    <string name="overlay_allow">Consenti</string>
+    <string name="heading_paired">COMPUTER ABBINATI</string>
+    <string name="paired_none">Ancora nessuno. Sul PC, clic destro su un PDF → Firma sul tablet, e conferma qui il codice.</string>
+    <string name="forget">Dimentica</string>
 </resources>

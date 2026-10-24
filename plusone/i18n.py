@@ -96,6 +96,16 @@ _IT = {
     "Mode {mode} is not supported": "La modalità {mode} non è supportata",
     "Close {apps}: it also uses Wi-Fi Direct": "Chiudi {apps}: usa anche lui il Wi-Fi Direct",
     "This PC's Wi-Fi cannot do Wi-Fi Direct": "Il Wi-Fi di questo PC non supporta il Wi-Fi Direct",
+    "Sending {name} to Plus One on {tablet}": "Invio di {name} a Plus One su {tablet}",
+    "Not paired": "Non abbinato",
+    "The codes were not confirmed on both the PC and the tablet":
+        "I codici non sono stati confermati sia sul PC sia sul tablet",
+    "Pair with {tablet}?": "Abbinare {tablet}?",
+    "Check that the tablet shows the same code: {code}":
+        "Controlla che il tablet mostri lo stesso codice: {code}",
+    "Pair": "Abbina",
+    "Pair only if the tablet shows this same code, and confirm there too:":
+        "Abbina solo se il tablet mostra questo stesso codice, e conferma anche lì:",
     "Opening Second Screen on the tablet…": "Apro Second Screen sul tablet…",
     "Tap “Second screen” on the tablet": "Tocca «Second screen» sul tablet",
     "The tablet did not answer: open Second Screen on it and connect again":

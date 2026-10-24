@@ -126,7 +126,7 @@ class SignView(context: Context, private val pdf: Pdf) : SurfaceView(context) {
         ) = drawScene(canvas)
 
         override fun onMultiBufferedLayerRenderComplete(
-            frontBufferedLayer: SurfaceControlCompat, multiBufferedLayer: SurfaceControlCompat,
+            frontBufferedLayerSurfaceControl: SurfaceControlCompat, multiBufferedLayerSurfaceControl: SurfaceControlCompat,
             transaction: SurfaceControlCompat.Transaction,
         ) {
             post {

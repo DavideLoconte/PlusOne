@@ -19,8 +19,10 @@ SERVER = AVAHI + ".Server"
 BROWSER = AVAHI + ".ServiceBrowser"
 QUICK_SHARE = "_FC9F5ED42C8A._tcp"
 KDE_CONNECT = "_kdeconnect._udp"
-SERVICES = (QUICK_SHARE, KDE_CONNECT)
+COMPANION = "_plusone._tcp"  # Plus One's own app on the tablet (companion.py)
+SERVICES = (QUICK_SHARE, KDE_CONNECT, COMPANION)
 UNSPEC = -1  # any interface, any protocol
+INET = 0     # Avahi's IPv4: the app is reached at an IPv4 address
 TABLET = 2  # Quick Share device type: 1 phone, 2 tablet, 3 laptop
 RECHECK = 60  # seconds
 RESOLVE_TIMEOUT = 10000  # ms; Avahi gives up after 5 s
@@ -59,6 +61,7 @@ class Nearby:
         self.known = False   # Avahi is there to ask
         self.services = set()  # (interface, protocol, name, type, domain) announced
         self.tablets = {}    # those on a tablet -> its name ("" if unknown)
+        self.companions = {}  # the app's services -> (address, port, name)
         self._browsers = []
         self._subscription = self._watch = self._timer = None
 
@@ -68,6 +71,10 @@ class Nearby:
 
     def names(self):
         return sorted({name for name in self.tablets.values() if name})
+
+    def companion(self):
+        """(address, port, name) of the companion app on the network, or None."""
+        return next(iter(sorted(self.companions.values())), None)
 
     def start(self):
         if self.bus is not None:
@@ -102,6 +109,7 @@ class Nearby:
         self._browsers = []
         self.services.clear()
         self.tablets.clear()
+        self.companions.clear()
 
     # -- Avahi -----------------------------------------------------------------
     def _appeared(self, bus, name, owner):
@@ -136,21 +144,45 @@ class Nearby:
                 self._resolve(key)
         else:
             self.services.discard(key)
+            if self.companions.pop(key, None):
+                log("nearby: the Plus One app left the network")
+                self.on_change()
             self._update(key, None)
 
     def _resolve(self, key):
+        aprotocol = INET if key[3] == COMPANION else UNSPEC
         self.bus.call(AVAHI, "/", SERVER, "ResolveService",
-                      GLib.Variant("(iisssiu)", key + (UNSPEC, 0)),
+                      GLib.Variant("(iisssiu)", key + (aprotocol, 0)),
                       GLib.VariantType("(iissssisqaayu)"), Gio.DBusCallFlags.NONE,
                       RESOLVE_TIMEOUT, None, self._resolved, key)
 
     def _resolved(self, bus, result, key):
         try:
-            txt = [bytes(entry) for entry in bus.call_finish(result).unpack()[9]]
+            reply = bus.call_finish(result).unpack()
+            txt = [bytes(entry) for entry in reply[9]]
         except GLib.Error:
-            txt = None  # gone, or not answering any more
-        if key in self.services:
-            self._update(key, tablet_name(key[3], txt) if txt is not None else None)
+            reply = txt = None  # gone, or not answering any more
+        if key not in self.services:
+            return
+        if key[3] == COMPANION:
+            self._companion(key, reply, txt)
+            # The app runs on a tablet: that is a tablet on the network too.
+            self._update(key, self.companions[key][2] if key in self.companions else None)
+            return
+        self._update(key, tablet_name(key[3], txt) if txt is not None else None)
+
+    def _companion(self, key, reply, txt):
+        before = self.companions.get(key)
+        if reply is None:
+            self.companions.pop(key, None)
+        else:
+            fields = dict(entry.partition(b"=")[::2] for entry in txt)
+            name = fields.get(b"name", b"").decode(errors="replace") or key[2]
+            self.companions[key] = (reply[7], reply[8], name)
+        if self.companions.get(key) != before:
+            log("nearby:", f"the Plus One app on {self.companions[key][2]} at {reply[7]}:{reply[8]}"
+                if key in self.companions else "the Plus One app is gone")
+            self.on_change()
 
     def _update(self, key, name):
         # Each tablet shows up once per app and IP version: report changes only.
