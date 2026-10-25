@@ -215,6 +215,14 @@ _IT = {
         "Non abbinato: il codice non è stato confermato su entrambi gli schermi",
     "{name} did not answer": "{name} non ha risposto",
     "Try again": "Riprova",
+    "Add a “Tablet” button to Quick Settings?": "Aggiungere un pulsante «Tablet» alle impostazioni rapide?",
+    "Add": "Aggiungi",
+    "Balanced": "Equilibrata",
+    "Sharper text": "Testo più nitido",
+    "For weak Wi-Fi": "Per Wi-Fi debole",
+    "Sharper text takes more of the Wi-Fi": "Il testo più nitido usa più Wi-Fi",
+    "Second screen": "Secondo schermo",
+    "Advanced": "Avanzate",
     "Without Plus One's pen helper (the .deb installs it) the S Pen works as a mouse, without pressure":
         "Senza l'aiutante di Plus One per la penna (lo installa il .deb) la S Pen funziona come un mouse, "
         "senza pressione",

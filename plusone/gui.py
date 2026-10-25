@@ -21,6 +21,8 @@ MODE_LIST = sorted(((w, h, f) for (w, h, f) in MODES if f == 60), key=lambda m: 
 TABLET_ICON = "plusone-tablet-symbolic"  # icons/
 WEBSITE = "https://github.com/GabrieleSantangelo/PlusOne"
 QUALITY_LIST = ["720p", "1080p"]
+# The second screen's picture, by what it is for: (label, kbit/s).
+QUALITY_BITRATES = [("Balanced", 20000), ("Sharper text", 40000), ("For weak Wi-Fi", 10000)]
 FACING_LIST = ["front", "back"]
 NOISE_LIST = ["off", "light", "neural"]  # devices.NOISE
 
@@ -258,6 +260,19 @@ class Window(Adw.ApplicationWindow):
     def _paired(self, name):
         # The name is the tablet's own: shown as text, not markup.
         self.toasts.add_toast(Adw.Toast(title=_("Paired with {name}").format(name=GLib.markup_escape_text(name))))
+        if not self.app.settings.toggle_offered:
+            shell_extension_state(self._offer_toggle)
+
+    def _offer_toggle(self, enabled):
+        """Once, after the first pairing: the Quick Settings toggle, if the
+        shell has it and it is off. Turned on only if the user says so."""
+        if enabled is not False or self.app.settings.toggle_offered:
+            return
+        self.app.settings.toggle_offered = True
+        self.app.save_settings()
+        toast = Adw.Toast(title=_("Add a “Tablet” button to Quick Settings?"), button_label=_("Add"), timeout=0)
+        toast.connect("button-clicked", lambda t: set_shell_extension(True))
+        self.toasts.add_toast(toast)
 
     def _show_signatures(self):
         from .ink import load_pen
@@ -271,10 +286,6 @@ class Window(Adw.ApplicationWindow):
                         comments=_("Your Galaxy Tab as a second monitor, and to sign PDFs with its S Pen"),
                         website=WEBSITE, issue_url=WEBSITE + "/issues",
                         license_type=Gtk.License.MIT_X11).present(self)
-
-    def relabel(self):
-        """The language changed."""
-        self._build()
 
     def _on_close(self, _window):
         self.app.listeners.remove(self._refresh)
@@ -503,47 +514,27 @@ class TabletsDialog(Adw.PreferencesDialog):
 
 
 class PreferencesDialog(Adw.PreferencesDialog):
+    """One page: what most people change, then Advanced for the rest."""
+
     def __init__(self, app, window):
         super().__init__(title=_("Preferences"))
         self.app = app
         self.window = window
         self.settings = app.settings
         s = self.settings
+        page = Adw.PreferencesPage()
+        self.add(page)
 
-        screen = Adw.PreferencesPage(title=_("Screen"), icon_name="video-display-symbolic")
-        group = Adw.PreferencesGroup()
-        # Entry 0 is "Automatic" (from the tablet's EDID); the rest follow MODE_LIST.
-        self.mode_row = Adw.ComboRow(title=_("Resolution"), model=Gtk.StringList.new(
-            [_("Automatic")] + [mode_label(m) for m in MODE_LIST]))
-        current = (s.width, s.height, s.fps)
-        self.mode_row.set_selected(0 if s.auto_mode or current not in MODE_LIST else 1 + MODE_LIST.index(current))
-        self.bitrate_row = Adw.SpinRow.new_with_range(5, 60, 1)
-        self.bitrate_row.set_title(_("Quality"))
-        self.bitrate_row.set_subtitle(_("Mbit/s: higher is sharper but uses more bandwidth"))
-        self.bitrate_row.set_value(s.bitrate / 1000)
-        # Its subtitle says how to get the pen's pressure.
-        self.touch_row = Adw.SwitchRow(title=_("Touch and S Pen"), active=s.touch, subtitle_selectable=True,
-                                       subtitle={
-            "set up": _("Without Plus One's pen helper (the .deb installs it) the S Pen works as a mouse, "
-                        "without pressure"),
-        }.get(pen.uhid_missing(), ""))
-        has_adb = shutil.which("adb") is not None
-        self.adb_row = Adw.SwitchRow(title=_("Open Second Screen from here"), active=s.use_adb and has_adb,
-                                     sensitive=has_adb,
-                                     subtitle=_("Uses adb: needs wireless debugging on the tablet")
-                                     if has_adb else _("adb is not available"))
-        for row in (self.mode_row, self.bitrate_row, self.touch_row, self.adb_row):
-            group.add(row)
-        screen.add(group)
-        self.add(screen)
-        # Read when a connection starts: locked while one is up.
-        self.session_rows = [self.mode_row, self.bitrate_row, self.touch_row, self.adb_row]
-        for row, signal in ((self.mode_row, "notify::selected"), (self.bitrate_row, "notify::value"),
-                            (self.touch_row, "notify::active"), (self.adb_row, "notify::active")):
-            row.connect(signal, self._apply)
+        group = Adw.PreferencesGroup(title=_("Second screen"))
+        # Said as what it is for, not in Mbit/s (QUALITY_BITRATES).
+        self.quality_row = Adw.ComboRow(title=_("Picture"), model=Gtk.StringList.new(
+            [_(label) for label, _kbit in QUALITY_BITRATES]),
+            selected=min(range(len(QUALITY_BITRATES)), key=lambda i: abs(QUALITY_BITRATES[i][1] - s.bitrate)))
+        self.quality_row.set_subtitle(_("Sharper text takes more of the Wi-Fi"))
+        group.add(self.quality_row)
+        page.add(group)
 
-        signing = Adw.PreferencesPage(title=_("Signing"), icon_name="document-edit-symbolic")
-        group = Adw.PreferencesGroup()
+        group = Adw.PreferencesGroup(title=_("Signing"))
         # Files and Open With are outside a Flatpak's reach.
         sign_row = Adw.SwitchRow(title=_("Sign on Tablet"), active=s.sign_on_tablet, visible=not IN_FLATPAK,
                                  subtitle=_("In Files and Open With, for PDFs"))
@@ -554,23 +545,21 @@ class PreferencesDialog(Adw.PreferencesDialog):
         signatures.connect("activated", lambda r: window._show_signatures())
         group.add(sign_row)
         group.add(signatures)
-        signing.add(group)
-        self.add(signing)
+        page.add(group)
 
-        devices = Adw.PreferencesPage(title=_("Camera and microphone"), icon_name="camera-web-symbolic")
         group = Adw.PreferencesGroup(description=_("The tablet's camera, as a webcam for this PC's programs "
                                                    "(switched on in the window)."))
         self.facing_row = Adw.ComboRow(title=_("Camera"), model=Gtk.StringList.new([_("Front"), _("Back")]),
                                        selected=FACING_LIST.index(s.camera_facing)
                                        if s.camera_facing in FACING_LIST else 0)
-        self.quality_row = Adw.ComboRow(title=_("Picture"), model=Gtk.StringList.new(
+        self.quality_row_camera = Adw.ComboRow(title=_("Picture"), model=Gtk.StringList.new(
             ["720p (1280 × 720)", "1080p (1920 × 1080)"]),
             selected=QUALITY_LIST.index(s.camera_quality) if s.camera_quality in QUALITY_LIST else 0,
             subtitle=_("1080p takes about twice the bandwidth. A change waits until no program uses the camera"))
-        for row in (self.facing_row, self.quality_row):
+        for row in (self.facing_row, self.quality_row_camera):
             row.connect("notify::selected", self._camera_options)
             group.add(row)
-        devices.add(group)
+        page.add(group)
         group = Adw.PreferencesGroup(description=_("The tablet's microphone, as a microphone for this PC's "
                                                    "programs (switched on in the window)."))
         neural = neural_available()
@@ -583,11 +572,9 @@ class PreferencesDialog(Adw.PreferencesDialog):
         self.noise_row.connect("notify::selected", lambda row, _p: app.set_microphone_noise(
             NOISE_LIST[row.get_selected()]))
         group.add(self.noise_row)
-        devices.add(group)
-        self.add(devices)
+        page.add(group)
 
-        general = Adw.PreferencesPage(title=_("General"), icon_name="preferences-system-symbolic")
-        group = Adw.PreferencesGroup()
+        group = Adw.PreferencesGroup(title=_("General"))
         background = Adw.SwitchRow(title=_("Ready in the background"), active=s.background,
                                    subtitle=_("Starts at login and stays ready after you close this window"))
         background.connect("notify::active", lambda row, _p: app.set_background(row.get_active()))
@@ -597,15 +584,39 @@ class PreferencesDialog(Adw.PreferencesDialog):
         self._extension_handler = self.extension_row.connect(
             "notify::active", lambda row, _p: set_shell_extension(row.get_active()))
         shell_extension_state(self._show_extension_state)
-        language = s.language if s.language in i18n.LANGUAGES else "auto"
-        self.language_row = Adw.ComboRow(title=_("Language"), model=Gtk.StringList.new(
-            [_(i18n.LANGUAGE_NAMES[code]) for code in i18n.LANGUAGES]),
-            selected=i18n.LANGUAGES.index(language))
-        self.language_row.connect("notify::selected", self._on_language)
-        for row in (background, self.extension_row, self.language_row):
-            group.add(row)
-        general.add(group)
-        self.add(general)
+        group.add(background)
+        group.add(self.extension_row)
+        page.add(group)
+
+        # The rest, for when the defaults do not do.
+        group = Adw.PreferencesGroup()
+        advanced = Adw.ExpanderRow(title=_("Advanced"))
+        # Entry 0 is "Automatic" (from the tablet's EDID); the rest follow MODE_LIST.
+        self.mode_row = Adw.ComboRow(title=_("Resolution"), model=Gtk.StringList.new(
+            [_("Automatic")] + [mode_label(m) for m in MODE_LIST]))
+        current = (s.width, s.height, s.fps)
+        self.mode_row.set_selected(0 if s.auto_mode or current not in MODE_LIST else 1 + MODE_LIST.index(current))
+        # Its subtitle says how to get the pen's pressure.
+        self.touch_row = Adw.SwitchRow(title=_("Touch and S Pen"), active=s.touch, subtitle_selectable=True,
+                                       subtitle={
+            "set up": _("Without Plus One's pen helper (the .deb installs it) the S Pen works as a mouse, "
+                        "without pressure"),
+        }.get(pen.uhid_missing(), ""))
+        has_adb = shutil.which("adb") is not None
+        self.adb_row = Adw.SwitchRow(title=_("Open Second Screen from here"), active=s.use_adb and has_adb,
+                                     sensitive=has_adb,
+                                     subtitle=_("Uses adb: needs wireless debugging on the tablet")
+                                     if has_adb else _("adb is not available"))
+        for row in (self.mode_row, self.touch_row, self.adb_row):
+            advanced.add_row(row)
+        group.add(advanced)
+        page.add(group)
+
+        # Read when a connection starts: locked while one is up.
+        self.session_rows = [self.quality_row, self.mode_row, self.touch_row, self.adb_row]
+        for row, signal in ((self.quality_row, "notify::selected"), (self.mode_row, "notify::selected"),
+                            (self.touch_row, "notify::active"), (self.adb_row, "notify::active")):
+            row.connect(signal, self._apply)
 
         self._refresh()
         app.listeners.append(self._refresh)
@@ -622,14 +633,14 @@ class PreferencesDialog(Adw.PreferencesDialog):
         s.auto_mode = selected == 0
         if not s.auto_mode:
             s.width, s.height, s.fps = MODE_LIST[selected - 1]
-        s.bitrate = int(self.bitrate_row.get_value() * 1000)
+        s.bitrate = QUALITY_BITRATES[self.quality_row.get_selected()][1]
         s.touch = self.touch_row.get_active()
         s.use_adb = self.adb_row.get_active()
         self.app.save_settings()
 
     def _camera_options(self, *_args):
         self.app.set_camera_options(FACING_LIST[self.facing_row.get_selected()],
-                                    QUALITY_LIST[self.quality_row.get_selected()])
+                                    QUALITY_LIST[self.quality_row_camera.get_selected()])
 
     def _show_extension_state(self, enabled):
         if enabled is None:
@@ -637,17 +648,6 @@ class PreferencesDialog(Adw.PreferencesDialog):
         with self.extension_row.handler_block(self._extension_handler):
             self.extension_row.set_active(enabled)
         self.extension_row.set_visible(True)
-
-    def _on_language(self, row, _pspec):
-        self.settings.language = i18n.LANGUAGES[row.get_selected()]
-        i18n.set_language(self.settings.language)
-        self.app.save_settings()
-        # Everything in the new language: the window again, this dialog closed.
-        GLib.idle_add(once(self._relabel))
-
-    def _relabel(self):
-        self.close()
-        self.window.relabel()
 
 
 class LogDialog(Adw.Dialog):

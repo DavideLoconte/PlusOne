@@ -57,6 +57,8 @@ class Settings:
     # Its noise taken out: "off", "light" (the tablet's libwebrtc) or "neural"
     # (DeepFilterNet's plugin, on this PC: devices.py).
     microphone_noise: str = "neural"
+    # The Quick Settings toggle offered once, after the first pairing (gui.py).
+    toggle_offered: bool = False
 
 
 class State:

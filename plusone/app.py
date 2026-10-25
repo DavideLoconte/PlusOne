@@ -218,7 +218,9 @@ class PlusOneApp(Adw.Application):
         # take the call that woke us up.
         self.set_inactivity_timeout(10000)
         self.settings = load_settings()
-        i18n.set_language(self.settings.language)
+        # The system's language, as the Quick Settings toggle, Files and the
+        # tablet have it: a choice of Plus One's own mixed languages.
+        i18n.set_language("auto")
         self.nearby = Nearby(on_change=self._on_nearby)
         self.tablets = Tablets(self.settings, self.save_settings, self.nearby)
         self.controller = Controller(self.settings, self._on_state, self.tablets)

@@ -160,8 +160,8 @@ def test_forgetting_a_paired_tablet(monkeypatch, tmp_path):
 def test_preferences_and_log(monkeypatch, tmp_path):
     win, app = make(monkeypatch, tmp_path, [(KITCHEN, "Kitchen")])
     prefs = gui.PreferencesDialog(app, win)
-    prefs.bitrate_row.set_value(30)
-    assert app.settings.bitrate == 30000
+    prefs.quality_row.set_selected(1)  # "Sharper text"
+    assert app.settings.bitrate == 40000
     app.controller.state = State.STREAMING
     prefs._refresh()
     assert not prefs.mode_row.get_sensitive()
@@ -180,7 +180,7 @@ def test_the_tablets_camera_and_microphone(monkeypatch, tmp_path):
     win._refresh()
     assert camera.get_subtitle() == "On the tablet, allow Plus One to use the camera"
     prefs = gui.PreferencesDialog(app, win)
-    prefs.quality_row.set_selected(1)
+    prefs.quality_row_camera.set_selected(1)
     assert app.settings.camera_quality == "1080p"
 
 
@@ -197,3 +197,17 @@ def test_an_older_attempt_does_not_answer_the_new_one(monkeypatch, tmp_path):
     dialog = gui.PairDialog(app)
     dialog.attempt = 2  # another tablet chosen since attempt 1
     assert dialog._ask(1, "Old", "111111") is False
+
+
+def test_the_quick_settings_toggle_is_offered_once(monkeypatch, tmp_path):
+    win, app = make(monkeypatch, tmp_path, [(KITCHEN, "Kitchen")])
+    turned = []
+    monkeypatch.setattr(gui, "set_shell_extension", turned.append)
+    toasts = []
+    monkeypatch.setattr(win.toasts, "add_toast", toasts.append)
+    win._offer_toggle(False)  # the shell has it, off
+    assert app.settings.toggle_offered and len(toasts) == 1 and turned == []  # not on by itself
+    toasts[0].emit("button-clicked")
+    assert turned == [True]
+    win._offer_toggle(False)  # asked once only
+    assert len(toasts) == 1
