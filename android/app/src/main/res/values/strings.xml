@@ -36,6 +36,9 @@
     <string name="capturing_microphone">The PC is using the microphone</string>
     <string name="capturing_both">The PC is using the camera and the microphone</string>
     <string name="capturing_for">For %1$s</string>
+    <string name="display_title">Showing the desktop of %1$s</string>
+    <string name="display_text">Tap to go back to it</string>
+    <string name="display_stop">Stop</string>
     <string name="paired_none">On your PC: Plus One → Pair a tablet.</string>
     <string name="forget">Forget</string>
     <string name="ink_blue_ink">Blue ink</string>

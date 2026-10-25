@@ -59,6 +59,9 @@ class Settings:
     microphone_noise: str = "neural"
     # The Quick Settings toggle offered once, after the first pairing (gui.py).
     toggle_offered: bool = False
+    # The second screen through Plus One's app when it answers on the
+    # network ("auto"), or always through Samsung's Second Screen.
+    display_via: str = "auto"
 
 
 class State:
@@ -100,6 +103,7 @@ class Controller:
         self.uibc = None
         self.srv = None
         self.encoder = None
+        self.app_display = None  # appdisplay.AppDisplay, when the app shows the desktop
         self.mode = None  # (width, height, fps) of the current session
         self._running = False
         # Each start() a new one: a connection accepted before stop() (and
@@ -134,9 +138,18 @@ class Controller:
         if not s.auto_mode and (s.width, s.height, s.fps) not in MODES:
             self._set_state(State.ERROR, "Mode {mode} is not supported", mode=f"{s.width}x{s.height}@{s.fps}")
             return
-        if self.tablets.active() is None:
+        tablet = self.tablets.active()
+        if tablet is None:
             self._set_state(State.ERROR, "Pair a tablet first")
             return
+        targets = self.tablets.addresses(tablet)
+        if targets and s.display_via == "auto" and not s.test_pattern and not s.peer:
+            self._start_app(tablet, targets)
+        else:
+            self._start_second_screen()
+
+    def _start_second_screen(self):
+        s = self.settings
         others = conflicting_apps()
         if others:
             self._set_state(State.ERROR, "Close {apps}: it also uses Wi-Fi Direct", apps=", ".join(others))
@@ -174,6 +187,7 @@ class Controller:
         with self._lock:
             self._running = False
             self._generation += 1
+        self._end_app()
         self._end_session()
         if self.srv:
             try:
@@ -183,6 +197,70 @@ class Controller:
             self.srv.close()
             self.srv = None
         self._set_state(State.IDLE, reason)
+
+    # -- the desktop in Plus One's app (appdisplay.py) -----------------------------
+    def _start_app(self, tablet, targets):
+        """The app on the tablet shows the desktop: over the home Wi-Fi, no
+        Second Screen. If it cannot (no app answering, refused, failed
+        before showing anything), Second Screen as before."""
+        try:
+            from .appdisplay import AppDisplay
+        except ImportError as e:  # python3-cryptography missing (from the sources)
+            log("app display: not available:", e)
+            self._start_second_screen()
+            return
+        s = self.settings
+        try:
+            self.encoder = media.pick_encoder(s.encoder)
+        except (RuntimeError, KeyError) as e:
+            self._set_state(State.ERROR, "{error}", error=str(e))
+            return
+        threading.Thread(target=media.warm_up, args=(self.encoder,), daemon=True).start()
+        with self._lock:
+            self._running = True
+            self._generation += 1
+        mode = (1920, 1200, 60) if s.auto_mode else (s.width, s.height, s.fps)
+        self._set_state(State.CONNECTING, "Opening the desktop on {name}…", name=tablet.name)
+        generation = self._generation
+
+        def started(mode):
+            if generation == self._generation:
+                self.mode = mode
+                self._set_state(State.STREAMING, "{name} · {width}×{height} @ {fps} Hz",
+                                name=tablet.name, width=mode[0], height=mode[1], fps=mode[2])
+
+        def paused(paused):
+            if generation != self._generation or self.state != State.STREAMING:
+                return
+            if paused:
+                self._set_state(State.STREAMING, "{name}: paused while Plus One is not on its screen",
+                                name=tablet.name)
+            else:
+                started(self.mode)
+
+        def ended(error, was_started):
+            if generation != self._generation:
+                return
+            self.app_display = None
+            self.mode = None
+            if was_started:
+                log("app display: the tablet ended it", repr(error) if error else "")
+                self.stop("The tablet closed the desktop")
+            else:
+                log("app display: not through the app:", repr(error), "- Second Screen instead")
+                with self._lock:
+                    self._running = False
+                self._start_second_screen()
+
+        self.app_display = AppDisplay(targets, tablet.app_id, mode, s.bitrate, self.encoder, touch=s.touch,
+                                      on_started=started, on_ended=ended, on_paused=paused)
+        self.app_display.start()
+
+    def _end_app(self):
+        if self.app_display is not None:
+            self.app_display.stop()
+            self.app_display = None
+            self.mode = None
 
     # -- internals -----------------------------------------------------------
     def _adb_open(self):

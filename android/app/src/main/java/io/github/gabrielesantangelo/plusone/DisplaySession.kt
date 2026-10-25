@@ -29,13 +29,20 @@ import javax.crypto.spec.SecretKeySpec
  * Bodies from the PC, after a kind byte:
  *   VIDEO  flags (1: keyframe) | frame u32 | index u16 | count u16 | captured i64 | H.264
  *   PONG   our ping's time i64 | the PC's time i64
- * and to the PC: KEYFRAME, PING (now i64), STATS (see stats()), INPUT
- * (DisplayInput).
+ * and to the PC: KEYFRAME, PING (now i64, shown u8), STATS (see stats()),
+ * INPUT (DisplayInput).
  * Times are each side's monotonic clock in nanoseconds; PING and PONG tell
  * the offset between them, so the delay from the PC's capture to the frame
  * decoded here is measured, not guessed. (Not to the glass: MediaCodec's
  * "rendered" times only gave back the time it was released with.)
  */
+/** The display notification's Stop. */
+class DisplayStopReceiver : android.content.BroadcastReceiver() {
+    override fun onReceive(context: android.content.Context, intent: android.content.Intent) {
+        DisplaySession.current?.end()
+    }
+}
+
 class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pcPort: Int) {
     val socket = DatagramSocket(0).apply { receiveBufferSize = 4 shl 20 }
     private val key = SecretKeySpec(key, "AES")
@@ -53,6 +60,25 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
     private val handler = Handler(callbacks.looper)
     private val free = ConcurrentLinkedQueue<Int>()
     @Volatile private var codec: MediaCodec? = null
+
+    /** Ends the session from here (Back, Stop): set by the service. */
+    var onEnd: (() -> Unit)? = null
+    fun end() = onEnd?.invoke()
+
+    /** Whether the desktop is on screen: told to the PC with every ping
+     * (and at once), which captures and encodes nothing while it is not. */
+    @Volatile var visible = true  // being opened: not "hidden" before it ever showed
+        private set
+    /** Told when the desktop goes on or off screen (the service's Wi-Fi lock). */
+    var onVisible: ((Boolean) -> Unit)? = null
+    fun show(visible: Boolean) {
+        this.visible = visible
+        ping()
+        onVisible?.invoke(visible)
+    }
+
+    private fun ping() = send(ByteBuffer.allocate(10).put(PING).putLong(System.nanoTime())
+        .put(if (visible) 1 else 0).array())
 
     // Frames being put together, by number.
     private class Frame(val count: Int, val keyframe: Boolean, val captured: Long) {
@@ -256,7 +282,7 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
     /** Every second: a ping for the clocks, and what was shown to the PC. */
     private fun tick() {
         while (running) {
-            send(ByteBuffer.allocate(9).put(PING).putLong(System.nanoTime()).array())
+            ping()
             stats()
             try {
                 Thread.sleep(1000)

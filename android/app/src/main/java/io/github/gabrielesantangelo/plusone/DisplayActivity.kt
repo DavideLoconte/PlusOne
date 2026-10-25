@@ -41,7 +41,21 @@ class DisplayActivity : Activity(), SurfaceHolder.Callback {
         bind()
     }
 
+    // The session in progress, not the bound one: the surface (and with it
+    // the binding) goes before onStop().
+    override fun onStart() {
+        super.onStart()
+        DisplaySession.current?.show(true)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        DisplaySession.current?.show(false)  // another app, the screen off: the PC rests
+    }
+
     override fun onDestroy() {
+        // Back, or swiped away from Recents: the desktop is no longer wanted here.
+        if (isFinishing) (session ?: DisplaySession.current)?.end()
         if (instance === this) instance = null
         super.onDestroy()
     }
@@ -68,6 +82,7 @@ class DisplayActivity : Activity(), SurfaceHolder.Callback {
         val surface = surface ?: return  // surfaceCreated() binds it
         current.attach(surface)
         session = current
+        current.show(true)
     }
 
     companion object {

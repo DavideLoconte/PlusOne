@@ -33,6 +33,9 @@
     <string name="capturing_microphone">Il PC sta usando il microfono</string>
     <string name="capturing_both">Il PC sta usando fotocamera e microfono</string>
     <string name="capturing_for">Per %1$s</string>
+    <string name="display_title">Mostro il desktop di %1$s</string>
+    <string name="display_text">Tocca per tornarci</string>
+    <string name="display_stop">Interrompi</string>
     <string name="paired_none">Sul PC: Plus One → Abbina un tablet.</string>
     <string name="forget">Dimentica</string>
     <string name="ink_blue_ink">Inchiostro blu</string>

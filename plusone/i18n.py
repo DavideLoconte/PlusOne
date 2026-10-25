@@ -133,6 +133,12 @@ _IT = {
         "Quanto firmato sul tablet non è arrivato al PC: {name} è rimasto com'era",
     "Opening Second Screen on the tablet…": "Apro Second Screen sul tablet…",
     "Tap “Second screen” on the tablet": "Tocca «Second screen» sul tablet",
+    "Opening the desktop on {name}…": "Apro il desktop su {name}…",
+    "Second screen through": "Secondo schermo tramite",
+    "Plus One's app, when it is there": "L'app Plus One, se c'è",
+    "Samsung's Second Screen": "Second Screen di Samsung",
+    "{name}: paused while Plus One is not on its screen": "{name}: in pausa finché Plus One non è sul suo schermo",
+    "The tablet closed the desktop": "Il tablet ha chiuso il desktop",
     "The tablet did not answer: open Second Screen on it and connect again":
         "Il tablet non ha risposto: apri Second Screen e collega di nuovo",
     "Connecting to {name}…": "Collegamento a {name}…",

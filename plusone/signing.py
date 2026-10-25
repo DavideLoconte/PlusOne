@@ -80,7 +80,9 @@ class Signing:
             return
         controller = self.app.controller
         target = self._find_app() if self.app.settings.sign_on_tablet else None
-        if target and controller.state != State.STREAMING:
+        # Showing the desktop through the app, the app signs too (the ink
+        # under the nib); the desktop rests meanwhile and comes back after.
+        if target and (controller.state != State.STREAMING or controller.app_display is not None):
             self._sign_in_app(path, target)
             return
         self._second_screen(path)

@@ -48,6 +48,22 @@ object Notifications {
             .setOngoing(true)
             .build()
 
+    /** The service's notification while a PC's desktop is shown here: back
+     * to it with a tap, or Stop. */
+    fun displaying(context: Context, pc: String): Notification {
+        val stop = PendingIntent.getBroadcast(context, 0,
+            Intent(context, DisplayStopReceiver::class.java), PendingIntent.FLAG_IMMUTABLE)
+        return Notification.Builder(context, SERVICE)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(context.getString(R.string.display_title, pc))
+            .setContentText(context.getString(R.string.display_text))
+            .setContentIntent(PendingIntent.getActivity(context, 0, Intent(context, DisplayActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE))
+            .addAction(Notification.Action.Builder(null, context.getString(R.string.display_stop), stop).build())
+            .setOngoing(true)
+            .build()
+    }
+
     /** One per code (several PCs may pair at once); 1000 and up, clear of SERVICE_ID. */
     private fun pairingId(code: String) = 1000 + code.toInt()
 

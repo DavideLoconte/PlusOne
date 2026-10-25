@@ -265,7 +265,7 @@ class CompanionService : Service() {
                         }
                         "ping" -> wire.send(JSONObject().put("type", "pong"))
                         "camera", "microphone" -> return capture(socket, wire, message, type, pcName)
-                        "display" -> return display(socket, wire, message)
+                        "display" -> return display(socket, wire, message, pcName)
                         "bye" -> return
                     }
                 }
@@ -415,6 +415,7 @@ class CompanionService : Service() {
         val now = synchronized(captures) { captures.values.toList() }
         val kinds = now.map { it.kind }.toSet()
         val pcs = now.map { it.pc }.distinct().joinToString(", ")
+        displaying?.let { return Notifications.displaying(this, it) }
         return if (kinds.isEmpty()) Notifications.ready(this) else Notifications.capturing(this, kinds, pcs)
     }
 
@@ -429,7 +430,8 @@ class CompanionService : Service() {
     private fun lowLatency(capturing: Boolean) {
         val any = synchronized(captures) { captures.isNotEmpty() }
         try {
-            if (capturing || any || displaying) wifiLock.acquire() else wifiLock.release()
+            val showing = displaying != null && DisplaySession.current?.visible == true
+            if (capturing || any || showing) wifiLock.acquire() else wifiLock.release()
         } catch (e: Exception) {
             Log.w(TAG, "Wi-Fi lock: $e")
         }
@@ -438,7 +440,7 @@ class CompanionService : Service() {
     /** The PC's desktop on this screen (DisplaySession, DisplayActivity),
      * until the PC hangs up or says stop. The key for its packets comes
      * over this paired link, fresh for each session. */
-    private fun display(socket: SSLSocket, wire: Wire, request: JSONObject) {
+    private fun display(socket: SSLSocket, wire: Wire, request: JSONObject, pc: String) {
         val key = request.optString("key").chunked(2).mapNotNull { it.toIntOrNull(16)?.toByte() }.toByteArray()
         val port = request.optInt("port")
         require(key.size == 32 && port in 1..65535) { "bad display request" }
@@ -447,6 +449,9 @@ class CompanionService : Service() {
             return
         }
         val session = DisplaySession(key, socket.inetAddress, port)
+        // Ended here (Back, Stop): the link closes, and the PC with it.
+        session.onEnd = { Thread { runCatching { socket.close() } }.start() }
+        session.onVisible = { lowLatency(false) }  // no low-latency Wi-Fi while nothing is shown
         DisplaySession.current?.stop()
         DisplaySession.current = session
         session.start()
@@ -458,7 +463,8 @@ class CompanionService : Service() {
                 .put("height", minOf(mode.physicalWidth, mode.physicalHeight))
                 .put("refresh", mode.refreshRate.toDouble()))
             startActivity(Intent(this, DisplayActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            displaying = true
+            displaying = pc
+            showCaptures()
             lowLatency(true)
             socket.soTimeout = RtcCapture.SILENT_PC
             while (wire.receive().optString("type") != "stop") continue
@@ -466,12 +472,13 @@ class CompanionService : Service() {
             session.stop()
             if (DisplaySession.current === session) DisplaySession.current = null
             android.os.Handler(mainLooper).post { DisplayActivity.ended(session) }
-            displaying = false
+            if (DisplaySession.current == null) displaying = null
+            showCaptures()
             lowLatency(false)
         }
     }
 
-    @Volatile private var displaying = false
+    @Volatile private var displaying: String? = null  // the PC whose desktop is shown
 
     /** What the notification says, when only that changed. */
     private fun showCaptures() =

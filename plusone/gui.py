@@ -602,19 +602,24 @@ class PreferencesDialog(Adw.PreferencesDialog):
             "set up": _("Without Plus One's pen helper (the .deb installs it) the S Pen works as a mouse, "
                         "without pressure"),
         }.get(pen.uhid_missing(), ""))
+        # Plus One's app shows the desktop when it answers; Second Screen otherwise.
+        self.via_row = Adw.ComboRow(title=_("Second screen through"), model=Gtk.StringList.new(
+            [_("Plus One's app, when it is there"), _("Samsung's Second Screen")]))
+        self.via_row.set_selected(0 if s.display_via == "auto" else 1)
         has_adb = shutil.which("adb") is not None
         self.adb_row = Adw.SwitchRow(title=_("Open Second Screen from here"), active=s.use_adb and has_adb,
                                      sensitive=has_adb,
                                      subtitle=_("Uses adb: needs wireless debugging on the tablet")
                                      if has_adb else _("adb is not available"))
-        for row in (self.mode_row, self.touch_row, self.adb_row):
+        for row in (self.via_row, self.mode_row, self.touch_row, self.adb_row):
             advanced.add_row(row)
         group.add(advanced)
         page.add(group)
 
         # Read when a connection starts: locked while one is up.
-        self.session_rows = [self.quality_row, self.mode_row, self.touch_row, self.adb_row]
-        for row, signal in ((self.quality_row, "notify::selected"), (self.mode_row, "notify::selected"),
+        self.session_rows = [self.quality_row, self.via_row, self.mode_row, self.touch_row, self.adb_row]
+        for row, signal in ((self.quality_row, "notify::selected"), (self.via_row, "notify::selected"),
+                            (self.mode_row, "notify::selected"),
                             (self.touch_row, "notify::active"), (self.adb_row, "notify::active")):
             row.connect(signal, self._apply)
 
@@ -636,6 +641,7 @@ class PreferencesDialog(Adw.PreferencesDialog):
         s.bitrate = QUALITY_BITRATES[self.quality_row.get_selected()][1]
         s.touch = self.touch_row.get_active()
         s.use_adb = self.adb_row.get_active()
+        s.display_via = "auto" if self.via_row.get_selected() == 0 else "second-screen"
         self.app.save_settings()
 
     def _camera_options(self, *_args):

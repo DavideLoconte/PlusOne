@@ -21,7 +21,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 gi.require_version("Gst", "1.0")
 from gi.repository import GLib, Gst  # noqa: E402
 
-from . import companion, log, media, pen  # noqa: E402
+from . import companion, log, media, once, pen  # noqa: E402
 
 VIDEO, KEYFRAME, PING, PONG, STATS, INPUT = 1, 2, 3, 4, 5, 6
 FROM_PC, FROM_APP = 1, 2
@@ -222,11 +222,16 @@ class Channel:
 class AppStreamer:
     """The virtual monitor (or a test pattern), encoded, to the app."""
 
-    def __init__(self, source, channel, width, height, fps, bitrate, encoder, on_stats=None, input=None):
-        """input: an Input for the fingers and the pen, or None."""
+    def __init__(self, source, channel, width, height, fps, bitrate, encoder, on_stats=None, input=None,
+                 on_visible=None):
+        """input: an Input for the fingers and the pen, or None.
+        on_visible(shown): from the listening thread, when the app starts or
+        stops showing the desktop (left for another app, its screen off)."""
         self.channel = channel
         self.on_stats = on_stats or (lambda stats: None)
+        self.on_visible = on_visible or (lambda shown: None)
         self.input = input
+        self.shown = True
         if source == "test":
             video = (f"videotestsrc is-live=true pattern=ball ! "
                      f"video/x-raw,format={media.CAPTURE_FORMAT},width={width},height={height},"
@@ -319,9 +324,11 @@ class AppStreamer:
             elif kind == KEYFRAME:
                 log("app display: the app asks for a keyframe")
                 self.force_keyframe()
-            elif kind == PING and len(body) == 9:
+            elif kind == PING and len(body) in (9, 10):
                 self.channel.send(struct.pack("!Bqq", PONG, struct.unpack_from("!q", body, 1)[0],
                                               time.monotonic_ns()))
+                if len(body) == 10:
+                    self.visible(bool(body[9]))
             elif kind == STATS and len(body) == STATS_FORMAT.size:
                 _kind, shown, lost, *ms = STATS_FORMAT.unpack(body)
                 encoded, self._encoded = sorted(self._encoded), []
@@ -329,6 +336,19 @@ class AppStreamer:
                                "capture_to_decoded": [v / 10 for v in ms[:3]],
                                "whole_to_decoded": [v / 10 for v in ms[3:]],
                                "capture_to_sent": encoded[len(encoded) // 2] if encoded else None})
+
+    def visible(self, shown):
+        """The app shows the desktop, or not: nothing is captured or encoded
+        while it does not (Mutter's monitor stays, windows and all)."""
+        if shown == self.shown:
+            return
+        self.shown = shown
+        if not shown and self.input:
+            self.input.close()  # nothing left touching
+        self.pipeline.set_state(Gst.State.PLAYING if shown else Gst.State.PAUSED)
+        if shown:
+            self.force_keyframe()
+        self.on_visible(shown)
 
     def force_keyframe(self):
         now = time.monotonic()
@@ -346,13 +366,140 @@ def describe(stats):
             f"{sent if sent is None else round(sent, 1)} ms, first packet to decoded {stats['whole_to_decoded'][0]:.1f} ms")
 
 
+class AppDisplay:
+    """A display session with the paired tablet's app: the virtual monitor
+    (or a test pattern), its stream, the fingers and the pen, for as long as
+    the app shows it. Callbacks run on the main loop:
+    on_started((width, height, fps)), on_ended(error or None, started),
+    on_paused(paused)."""
+
+    def __init__(self, targets, app_id, mode, bitrate, encoder, touch=True, test=False,
+                 on_started=None, on_ended=None, on_paused=None):
+        self.targets, self.app_id, self.mode = targets, app_id, mode
+        self.bitrate, self.encoder, self.touch, self.test = bitrate, encoder, touch, test
+        self.on_started = on_started or (lambda mode: None)
+        self.on_ended = on_ended or (lambda error, started: None)
+        self.on_paused = on_paused or (lambda paused: None)
+        self.channel = self.monitor = self.streamer = self.sock = None
+        self.tablet_size = None  # what the app said its screen is
+        self.started = False
+        self._stopped = threading.Event()
+
+    def start(self):
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def stop(self):
+        """On the main loop: everything ends now; the app is told by the
+        link's thread (it sends "stop" and closes)."""
+        if self._stopped.is_set():
+            return
+        self._stopped.set()
+        self._teardown()
+
+    # -- the link's thread ------------------------------------------------------
+    def _run(self):
+        error = None
+        try:
+            self.sock, wire = companion.open_link(self.targets, self.app_id)
+            if self._stopped.is_set():
+                return
+            key = os.urandom(32)
+            self.channel = Channel(key)
+            wire.send({"type": "display", "key": key.hex(), "port": self.channel.port})
+            reply = wire.receive()
+            if reply.get("type") == "refused":
+                raise companion.Refused(str(reply.get("reason", "")))
+            if reply.get("type") != "display-ready":
+                raise ValueError(f"the app answered {reply.get('type')!r}")
+            address = self.sock.getpeername()[0]
+            self.channel.app = (address, int(reply["port"]))
+            self.tablet_size = (int(reply["width"]), int(reply["height"]))
+            log(f"app display: {address} shows {self.tablet_size[0]}x{self.tablet_size[1]}"
+                f" at {float(reply.get('refresh', 0)):.0f} Hz")
+            GLib.idle_add(once(self._open))
+            self._hold(wire)
+        except Exception as e:  # noqa: BLE001 - not there, refused, or gone: said to the caller
+            error = e
+        finally:
+            if self.sock is not None:
+                self.sock.close()
+            if not self._stopped.is_set():
+                GLib.idle_add(once(self._ended, error))
+
+    def _hold(self, wire):
+        """While the session lasts: pings (the app lets go of a silent PC),
+        and the end when the app hangs up (Back on the tablet) or stop()."""
+        pinged = time.monotonic()
+        while not self._stopped.is_set():
+            if wire.readable(0.5):
+                wire.receive()  # nothing is expected; EOF raises
+            if time.monotonic() - pinged > 5:
+                wire.send({"type": "ping"})
+                pinged = time.monotonic()
+        try:
+            wire.send({"type": "stop"})
+        except OSError:
+            pass
+
+    # -- the main loop ---------------------------------------------------------
+    def _open(self):
+        if self._stopped.is_set():
+            return
+        if self.test:
+            self._stream("test")
+            return
+        from .display import VirtualMonitor
+        self.monitor = VirtualMonitor(on_ready=self._stream)
+        try:
+            self.monitor.start()
+        except GLib.Error as e:
+            self._ended(e)
+
+    def _stream(self, source):
+        if self._stopped.is_set() or self.streamer is not None:
+            return
+        width, height, fps = self.mode
+        touch = None
+        if self.touch and self.monitor is not None:
+            monitor = self.monitor
+            touch = Input(monitor, (width, height), lambda: pen.for_monitor(monitor, (width, height)))
+        try:
+            self.streamer = AppStreamer(source, self.channel, width, height, fps, self.bitrate, self.encoder,
+                                        on_stats=lambda stats: log("app display:", describe(stats)),
+                                        input=touch,
+                                        on_visible=lambda shown: GLib.idle_add(once(self.on_paused, not shown)))
+            self.streamer.start()
+        except Exception as e:  # noqa: BLE001 - said, not left half-started
+            self._ended(e)
+            return
+        self.started = True
+        self.on_started(self.mode)
+
+    def _ended(self, error=None):
+        if self._stopped.is_set():
+            return
+        self._stopped.set()
+        self._teardown()
+        self.on_ended(error, self.started)
+
+    def _teardown(self):
+        if self.streamer is not None:
+            self.streamer.stop()
+            self.streamer = None
+        if self.monitor is not None:
+            self.monitor.stop()
+            self.monitor = None
+        if self.channel is not None:
+            self.channel.close()
+
+
 def main(argv=None):
     """The desktop (or a test pattern) to the paired tablet's app, with its
     fingers and pen, its delay measured."""
     ap = argparse.ArgumentParser(prog="python3 -m plusone.appdisplay")
     ap.add_argument("address", help="the tablet's address on the network")
     ap.add_argument("--port", type=int, default=companion.APP_PORT)
-    ap.add_argument("--size", default="1920x1200", help="WxH, or native")
+    ap.add_argument("--size", default="1920x1200", help="WxH")
     ap.add_argument("--fps", type=int, default=60)
     ap.add_argument("--bitrate", type=int, default=20000, help="kbit/s")
     ap.add_argument("--encoder", default="auto")
@@ -363,56 +510,20 @@ def main(argv=None):
     paired = companion.Paired().all()
     if len(paired) != 1:
         raise SystemExit("pair exactly one tablet first")
-    app_id = next(iter(paired))[:16]
-    sock, wire = companion.open_link([(args.address, args.port)], app_id)
-    key = os.urandom(32)
-    channel = Channel(key)
+    width, height = map(int, args.size.split("x"))
+    loop = GLib.MainLoop()
+    session = AppDisplay([(args.address, args.port)], next(iter(paired))[:16], (width, height, args.fps),
+                         args.bitrate, media.pick_encoder(args.encoder), test=args.test,
+                         on_ended=lambda error, started: (log("app display: ended", repr(error)), loop.quit()))
+    session.start()
+    GLib.timeout_add_seconds(args.seconds, loop.quit)
     try:
-        wire.send({"type": "display", "key": key.hex(), "port": channel.port})
-        reply = wire.receive()
-        if reply.get("type") != "display-ready":
-            raise SystemExit(f"the app answered {reply}")
-        channel.app = (args.address, int(reply["port"]))
-        log(f"app display: the tablet is {reply['width']}x{reply['height']} at {reply['refresh']:.0f} Hz")
-        width, height = ((int(reply["width"]), int(reply["height"])) if args.size == "native"
-                         else map(int, args.size.split("x")))
-        encoder = media.pick_encoder(args.encoder)
-        on_stats = lambda stats: log("app display:", describe(stats))  # noqa: E731
-        streamers = []
-        loop = GLib.MainLoop()
-
-        def ping():
-            wire.send({"type": "ping"})
-            return True
-
-        if args.test:
-            streamers.append(AppStreamer("test", channel, width, height, args.fps, args.bitrate, encoder, on_stats))
-            streamers[0].start()
-        else:
-            from .display import VirtualMonitor
-            monitor = None
-
-            def ready(node):
-                touch = Input(monitor, (width, height), lambda: pen.for_monitor(monitor, (width, height)))
-                streamers.append(AppStreamer(node, channel, width, height, args.fps, args.bitrate, encoder,
-                                             on_stats, input=touch))
-                streamers[0].start()
-
-            monitor = VirtualMonitor(on_ready=ready)
-            monitor.start()
-        GLib.timeout_add_seconds(5, ping)
-        GLib.timeout_add_seconds(args.seconds, loop.quit)
-        try:
-            loop.run()
-        finally:
-            wire.send({"type": "stop"})
-            for streamer in streamers:
-                streamer.stop()
-            if not args.test:
-                monitor.stop()
+        loop.run()
+    except KeyboardInterrupt:
+        pass
     finally:
-        channel.close()
-        sock.close()
+        session.stop()
+        time.sleep(1)  # the link's thread tells the app
 
 
 if __name__ == "__main__":

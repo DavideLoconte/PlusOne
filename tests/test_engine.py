@@ -10,9 +10,12 @@ from plusone.engine import Controller, Settings, State
 class FakeTablets:
     """The tablet in use (tablets.py), and what verify() says of an address."""
 
-    def __init__(self, active=True, problem=None):
-        self.tablet = types.SimpleNamespace(name="Tab") if active else None
-        self.problem, self.checked = problem, []
+    def __init__(self, active=True, problem=None, app_at=()):
+        self.tablet = types.SimpleNamespace(name="Tab", app_id="0123456789abcdef") if active else None
+        self.problem, self.checked, self.app_at = problem, [], list(app_at)
+
+    def addresses(self, tablet):
+        return self.app_at
 
     def active(self):
         return self.tablet
@@ -166,3 +169,80 @@ def test_the_pen_is_never_the_whole_desktop_s(monkeypatch):
     controller.monitor, controller.mode = object(), (1920, 1080, 60)
     device = controller._make_pen()
     assert made == [] and isinstance(device, engine.pen.PointerPen)
+
+
+class FakeAppDisplay:
+    made = []
+
+    def __init__(self, targets, app_id, mode, bitrate, encoder, **callbacks):
+        self.targets, self.mode, self.callbacks, self.stopped = targets, mode, callbacks, False
+        FakeAppDisplay.made.append(self)
+
+    def start(self):
+        pass
+
+    def stop(self):
+        self.stopped = True
+
+
+def app_controller(monkeypatch, settings=None, app_at=(("10.0.0.7", 47236),)):
+    from plusone import appdisplay
+    FakeAppDisplay.made = []
+    monkeypatch.setattr(appdisplay, "AppDisplay", FakeAppDisplay)
+    monkeypatch.setattr(engine.media, "pick_encoder", lambda preferred: "x264")
+    monkeypatch.setattr(engine.media, "warm_up", lambda name: None)
+    second = []
+    controller = Controller(settings or Settings(), tablets=FakeTablets(app_at=app_at))
+    monkeypatch.setattr(controller, "_start_second_screen", lambda: second.append(1))
+    return controller, second
+
+
+def test_the_app_shows_the_desktop_when_it_answers(monkeypatch):
+    controller, second = app_controller(monkeypatch)
+    controller.start()
+    assert second == [] and len(FakeAppDisplay.made) == 1
+    shown = FakeAppDisplay.made[0]
+    assert shown.targets == [("10.0.0.7", 47236)] and shown.mode == (1920, 1200, 60)
+    assert controller.state == State.CONNECTING
+    shown.callbacks["on_started"]((1920, 1200, 60))
+    assert controller.state == State.STREAMING
+    shown.callbacks["on_paused"](True)
+    assert "paused" in controller.detail[0] and controller.state == State.STREAMING
+    controller.stop()
+    assert shown.stopped and controller.state == State.IDLE and not controller.running
+
+
+def test_second_screen_when_the_app_cannot(monkeypatch):
+    controller, second = app_controller(monkeypatch)
+    controller.start()
+    FakeAppDisplay.made[0].callbacks["on_ended"](OSError("refused"), False)
+    assert second == [1]  # nothing was shown yet: Second Screen instead
+
+
+def test_the_tablet_ending_it_ends_it(monkeypatch):
+    controller, second = app_controller(monkeypatch)
+    controller.start()
+    shown = FakeAppDisplay.made[0]
+    shown.callbacks["on_started"]((1920, 1200, 60))
+    shown.callbacks["on_ended"](EOFError(), True)
+    assert second == [] and controller.state == State.IDLE and not controller.running
+
+
+def test_second_screen_without_the_app_or_when_chosen(monkeypatch):
+    controller, second = app_controller(monkeypatch, app_at=())
+    controller.start()
+    settings = Settings()
+    settings.display_via = "second-screen"
+    other, second_too = app_controller(monkeypatch, settings=settings)
+    other.start()
+    assert second == [1] and second_too == [1] and FakeAppDisplay.made == []
+
+
+def test_a_late_callback_of_an_ended_session_changes_nothing(monkeypatch):
+    controller, second = app_controller(monkeypatch)
+    controller.start()
+    old = FakeAppDisplay.made[0]
+    controller.stop()
+    old.callbacks["on_started"]((1920, 1200, 60))
+    old.callbacks["on_ended"](OSError(), False)
+    assert controller.state == State.IDLE and second == []

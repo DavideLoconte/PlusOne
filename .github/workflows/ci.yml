@@ -61,7 +61,7 @@ jobs:
         run: |
           flatpak build flatpak_app plus-one --help
           flatpak build flatpak_app env PYTHONPATH=/app/lib/plus-one python3 -P -c \
-            "import plusone.app, plusone.engine, plusone.devices, plusone.rtc, plusone.sign, plusone.signing"
+            "import plusone.app, plusone.engine, plusone.devices, plusone.rtc, plusone.sign, plusone.signing, plusone.appdisplay"
       - name: The GStreamer elements Plus One builds its pipelines from
         run: |
           flatpak build flatpak_app python3 -c '
