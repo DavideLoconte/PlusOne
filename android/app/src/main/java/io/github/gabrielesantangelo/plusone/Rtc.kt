@@ -230,6 +230,12 @@ object Rtc {
 
     const val RECORD_FLAG = "record-microphone"
     const val RECORD_FILE = "microphone.raw"
+    /** For measuring (adb only): a file audio-source-<n> in the app's files
+     * records from Android's audio source n (MediaRecorder.AudioSource)
+     * instead of SOURCE; seen when the app starts. By its name: the app may
+     * not read a file adb made. */
+    const val SOURCE_FILE = "audio-source-"
+    const val SOURCE = android.media.MediaRecorder.AudioSource.MIC
 
     /** The factory, one for the process (noise reduction is each audio source's). */
     @Synchronized
@@ -239,8 +245,12 @@ object Rtc {
             .createInitializationOptions())
         // The plain microphone: the voice call source (libwebrtc's default) is
         // far too quiet on a Galaxy Tab. Noise suppression is libwebrtc's own.
+        val source = context.getExternalFilesDir(null)?.list()?.firstNotNullOfOrNull {
+            it.removePrefix(SOURCE_FILE).takeIf { _ -> it.startsWith(SOURCE_FILE) }?.toIntOrNull()
+        } ?: SOURCE
+        Log.i(RtcCapture.TAG, "microphone: audio source $source")
         val audio = JavaAudioDeviceModule.builder(context.applicationContext)
-            .setAudioSource(android.media.MediaRecorder.AudioSource.MIC)
+            .setAudioSource(source)
             .setSamplesReadyCallback { samples -> recording?.write(samples) }
             .setUseHardwareNoiseSuppressor(false)
             .setUseHardwareAcousticEchoCanceler(false)

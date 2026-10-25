@@ -37,6 +37,15 @@ MIC_FEED = "plusone-mic-feed"  # the streams Plus One feeds the microphone with:
 # ns of sound that may wait before the oldest goes: what waits stays, as delay,
 # once the sound comes as fast as it is played (160 ms measured 235 end to end).
 MIC_BEHIND = 60_000_000
+# The tablet's sound, louder: libwebrtc's gain control on Android is a fixed
+# +9 dB, and a tablet's microphone a meter away leaves the voice at -27 dBFS,
+# where calls want about -18. Raised by this much, then a compressor evens out
+# what is loud (4:1 over -10 dBFS, gently) and a limiter keeps it under -1 dBFS:
+# a voice chain as OBS's or Discord's, all GStreamer's own elements.
+MIC_GAIN = 2.8  # +9 dB
+MIC_LEVEL = ("volume volume={gain} "
+             "! audiodynamic mode=compressor characteristics=soft-knee threshold=0.3 ratio=0.35 "
+             "! audiodynamic mode=compressor characteristics=hard-knee threshold=0.89 ratio=0")
 # Software first: little work at these sizes, and decodebin's pick (NVIDIA's,
 # here) held the whole pipeline still until the tablet's first frame.
 H264_DECODERS = ("avdec_h264", "openh264dec", "vah264dec")
@@ -580,11 +589,12 @@ class Microphone(Device):
         # A name of its own: linked by name, and the last session's stream
         # may still be there for a moment (or a second one of this session's).
         name = f"{MIC_FEED}-{next(self._streams)}"
-        # Decoded, and into the source as it is: the tablet's libwebrtc has
-        # already set its level and taken the noise out.
+        # Decoded and made louder (MIC_LEVEL): the tablet's libwebrtc has
+        # already taken the noise out, if asked.
         self.rtc.link(receiver.pipeline, pad,
                       f"rtpopusdepay ! opusdec plc=true ! audioconvert ! audioresample "
-                      f"! audio/x-raw,format=S16LE,rate=48000,channels=1 "
+                      f"! audio/x-raw,format=F32LE,rate=48000,channels=1 ! {MIC_LEVEL.format(gain=MIC_GAIN)} "
+                      f"! audioconvert dithering=none ! audio/x-raw,format=S16LE,rate=48000,channels=1 "
                       f"! queue max-size-time={MIC_BEHIND} max-size-buffers=0 max-size-bytes=0 leaky=downstream "
                       # As it comes, not by the pipeline's clock (not PipeWire's: the sink
                       # came after webrtcbin started). PipeWire is asked to read 10 ms at
