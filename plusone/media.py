@@ -98,6 +98,53 @@ class RtpSender:
         self.sock.close()
 
 
+class Keyframes:
+    """Keyframes on request that a decoder can start from (an IDR, its SPS
+    and PPS before it). GStreamer 1.24's VA encoders answer a force-key-unit
+    event with an I frame that is not an IDR, without the SPS, and only the
+    first time: a decoder that had lost its place waited for the periodic
+    keyframe (KEYFRAME_SECONDS), and one that had none could not start.
+    Flushing them starts their GOP again, with an IDR, at the next frame. It
+    is done on the streaming thread, just before a frame goes in: from
+    another thread the flush could reach the frame being pushed, and the
+    queue in front would stop. NVENC ignores the flush and honours the
+    event; the others get the event."""
+
+    FLUSHED = {"vah264lpenc", "vah264enc"}
+
+    def __init__(self, enc, on_flush=None):
+        """on_flush(): on the streaming thread, after a flush threw away the
+        frames the encoder held."""
+        self.pad = enc.get_static_pad("sink")
+        self.flush = enc.get_factory().get_name() in self.FLUSHED
+        self.on_flush = on_flush or (lambda: None)
+        self.wanted = False
+        self.probe = self.pad.add_probe(Gst.PadProbeType.BUFFER, self._before_frame) if self.flush else None
+
+    def request(self):
+        if self.flush:
+            self.wanted = True
+            return
+        s = Gst.Structure.new_from_string("GstForceKeyUnit, all-headers=(boolean)true")
+        self.pad.send_event(Gst.Event.new_custom(Gst.EventType.CUSTOM_DOWNSTREAM, s))
+
+    def _before_frame(self, pad, _info):
+        if self.wanted:
+            self.wanted = False
+            segment = pad.get_sticky_event(Gst.EventType.SEGMENT, 0)
+            pad.send_event(Gst.Event.new_flush_start())
+            pad.send_event(Gst.Event.new_flush_stop(False))  # the running time goes on
+            if segment is not None:
+                pad.send_event(segment)  # the flush took it
+            self.on_flush()
+        return Gst.PadProbeReturn.OK
+
+    def remove(self):
+        if self.probe is not None:
+            self.pad.remove_probe(self.probe)
+            self.probe = None
+
+
 def pick_encoder(preferred="auto"):
     names = list(ENCODERS) if preferred == "auto" else [preferred]
     for name in names:
@@ -147,6 +194,7 @@ class Streamer:
         self._sink = self.pipeline.get_by_name("out")
         self._sink_handler = self._sink.connect("new-sample", self._send)
         self._cap_keyframes(self.pipeline.get_by_name("enc"), bitrate, fps)
+        self.keyframes = Keyframes(self.pipeline.get_by_name("enc"))
         self._last_keyframe = 0.0
         # Encoded frames of the last seconds, (time, bytes, keyframe): when
         # the tablet loses data, the log says what was being sent.
@@ -176,6 +224,7 @@ class Streamer:
         bus.remove_signal_watch()
         self._sink.disconnect(self._sink_handler)
         self._probe_pad.remove_probe(self._probe)
+        self.keyframes.remove()
 
     def _send(self, appsink):
         """Streaming thread: what the muxer made of one frame, out at once."""
@@ -227,6 +276,4 @@ class Streamer:
         if now - self._last_keyframe < MIN_KEYFRAME_GAP:
             return
         self._last_keyframe = now
-        s = Gst.Structure.new_from_string("GstForceKeyUnit, all-headers=(boolean)true")
-        self.pipeline.get_by_name("enc").get_static_pad("sink").send_event(
-            Gst.Event.new_custom(Gst.EventType.CUSTOM_DOWNSTREAM, s))
+        self.keyframes.request()
