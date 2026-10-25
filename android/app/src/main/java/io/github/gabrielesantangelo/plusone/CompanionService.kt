@@ -265,6 +265,7 @@ class CompanionService : Service() {
                         }
                         "ping" -> wire.send(JSONObject().put("type", "pong"))
                         "camera", "microphone" -> return capture(socket, wire, message, type, pcName)
+                        "display" -> return display(socket, wire, message)
                         "bye" -> return
                     }
                 }
@@ -428,11 +429,49 @@ class CompanionService : Service() {
     private fun lowLatency(capturing: Boolean) {
         val any = synchronized(captures) { captures.isNotEmpty() }
         try {
-            if (capturing || any) wifiLock.acquire() else wifiLock.release()
+            if (capturing || any || displaying) wifiLock.acquire() else wifiLock.release()
         } catch (e: Exception) {
             Log.w(TAG, "Wi-Fi lock: $e")
         }
     }
+
+    /** The PC's desktop on this screen (DisplaySession, DisplayActivity),
+     * until the PC hangs up or says stop. The key for its packets comes
+     * over this paired link, fresh for each session. */
+    private fun display(socket: SSLSocket, wire: Wire, request: JSONObject) {
+        val key = request.optString("key").chunked(2).mapNotNull { it.toIntOrNull(16)?.toByte() }.toByteArray()
+        val port = request.optInt("port")
+        require(key.size == 32 && port in 1..65535) { "bad display request" }
+        if (!(Settings.canDrawOverlays(this) || Front.shown)) {
+            wire.send(JSONObject().put("type", "refused").put("reason", "background"))
+            return
+        }
+        val session = DisplaySession(key, socket.inetAddress, port)
+        DisplaySession.current?.stop()
+        DisplaySession.current = session
+        session.start()
+        try {
+            val mode = getSystemService(android.hardware.display.DisplayManager::class.java)
+                .getDisplay(android.view.Display.DEFAULT_DISPLAY).mode
+            wire.send(JSONObject().put("type", "display-ready").put("port", session.socket.localPort)
+                .put("width", maxOf(mode.physicalWidth, mode.physicalHeight))
+                .put("height", minOf(mode.physicalWidth, mode.physicalHeight))
+                .put("refresh", mode.refreshRate.toDouble()))
+            startActivity(Intent(this, DisplayActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            displaying = true
+            lowLatency(true)
+            socket.soTimeout = RtcCapture.SILENT_PC
+            while (wire.receive().optString("type") != "stop") continue
+        } finally {
+            session.stop()
+            if (DisplaySession.current === session) DisplaySession.current = null
+            android.os.Handler(mainLooper).post { DisplayActivity.ended(session) }
+            displaying = false
+            lowLatency(false)
+        }
+    }
+
+    @Volatile private var displaying = false
 
     /** What the notification says, when only that changed. */
     private fun showCaptures() =

@@ -80,7 +80,7 @@ Priority: optional
 Architecture: all
 Maintainer: $maintainer
 Installed-Size: $size
-Depends: python3 (>= 3.11), python3-gi, python3-gi-cairo, gir1.2-gtk-4.0, gir1.2-adw-1 (>= 1.5), gir1.2-gstreamer-1.0, gir1.2-nm-1.0, gir1.2-poppler-0.18, python3-pypdf, openssl, gstreamer1.0-pipewire, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-libav, gstreamer1.0-nice, gir1.2-gst-plugins-bad-1.0, swh-plugins, pulseaudio-utils, pipewire-bin, network-manager, avahi-daemon, kmod, udev, acl, dbus, polkitd | policykit-1
+Depends: python3 (>= 3.11), python3-gi, python3-gi-cairo, gir1.2-gtk-4.0, gir1.2-adw-1 (>= 1.5), gir1.2-gstreamer-1.0, gir1.2-nm-1.0, gir1.2-poppler-0.18, python3-pypdf, python3-cryptography, openssl, gstreamer1.0-pipewire, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-libav, gstreamer1.0-nice, gir1.2-gst-plugins-bad-1.0, swh-plugins, pulseaudio-utils, pipewire-bin, network-manager, avahi-daemon, kmod, udev, acl, dbus, polkitd | policykit-1
 Recommends: gstreamer1.0-vaapi, gstreamer1.0-plugins-ugly, gstreamer1.0-x, gnome-shell (>= 45), python3-nautilus
 Suggests: adb
 Homepage: https://github.com/GabrieleSantangelo/PlusOne

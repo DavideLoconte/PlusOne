@@ -53,6 +53,17 @@
             android:theme="@style/Theme.PlusOne.Sign"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|density|fontScale|locale|layoutDirection" />
 
+        <!-- The PC's desktop, on the whole screen, landscape as the PC's
+             monitor is; opened by the service when the PC asks. -->
+        <activity
+            android:name=".DisplayActivity"
+            android:exported="false"
+            android:theme="@style/Theme.PlusOne.Sign"
+            android:screenOrientation="sensorLandscape"
+            android:launchMode="singleTask"
+            android:taskAffinity="io.github.gabrielesantangelo.plusone.display"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|navigation|uiMode|density" />
+
         <activity
             android:name=".AllowActivity"
             android:exported="false"
