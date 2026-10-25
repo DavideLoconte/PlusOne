@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.7.0 (in progress)
+## 0.7.0
 
-The desktop in Plus One's app.
+The desktop in Plus One's app, and the tablet's speakers.
 
 - **The second screen through Plus One's app**: with the app on the
   tablet and on the same Wi-Fi, *Use as second screen* (or the Tablet
@@ -18,6 +18,25 @@ The desktop in Plus One's app.
   not on the tablet's screen; Back or *Stop* on the tablet ends it. Without
   the app, or by choice in the preferences, Second Screen as before. New
   dependency: `python3-cryptography`.
+- **The desktop at the tablet's own size**: through the app, Resolution
+  offers the tablet's sizes at its proportions (2880×1800, 2560×1600,
+  2304×1440, 1920×1200...); from 2560 wide the virtual monitor is put at
+  scale 2, sharp text with the room of half the size. The bitrate grows
+  with the pixels. Automatic stays at 1920×1200: larger, the tablet's
+  decoder takes longer (about 45 ms instead of 25 at 2880×1800).
+- **The tablet's speakers**: a sound output, *Tablet speakers*, while the
+  tablet's app is on the network. Its sound goes as it is, 16-bit stereo
+  PCM at 48 kHz in encrypted 5 ms packets, and the app plays it as the
+  tablet's own players do (a first try through libwebrtc, made for calls,
+  squeezed the music); the two clocks' drift is followed by trimming the
+  playback rate. Only while a program plays; the switch makes it the output.
+- **A new window**: a sidebar of what Plus One does (Second screen,
+  Signing, Camera, Microphone, Speakers, Tablets, General), each page with
+  its button and every setting in view; no menu, no Advanced, no
+  preferences dialog. A dot marks what is on, green while it works.
+- **The tablet found sooner**: an ask that the tablet (asleep) did not
+  answer is tried again within seconds, not a minute later; and where its
+  app was last is tried when it is not announced.
 - Fixed: after a loss, Second Screen could stay broken up to 10 s with
   Intel's encoder, which answered keyframe requests with a frame the
   tablet cannot start from, and only once; each request now gets a real

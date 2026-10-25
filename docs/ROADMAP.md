@@ -152,7 +152,7 @@ tablet (one tap on its notification at most) → the ink is under the nib →
 - The S Pen through a small root helper (no group gets `/dev/uhid`);
   Intel's low-power encoder first; preferences on one page.
 
-### 0.7 — The desktop in Plus One's app (steps 1-3 done)
+### 0.7 — The desktop in Plus One's app (done)
 
 The display part of 0.5, now first: the desktop goes to Plus One's app
 instead of Second Screen, which stays as the way without the app.

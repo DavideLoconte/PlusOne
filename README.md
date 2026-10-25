@@ -46,6 +46,9 @@ Through Plus One's small app on the tablet, or the <b>Second Screen</b> feature 
   microphone that every program sees (Chrome, Firefox, Discord, Slack,
   OBS...). The tablet turns them on only while a program uses them, so
   nothing goes over the network otherwise; each has its own switch.
+- **The tablet's speakers for the PC.** A sound output, *Tablet speakers*,
+  there while the tablet is: the sound goes as it is (16-bit stereo PCM at
+  48 kHz, no codec), only while a program plays.
 - **Correct aspect ratio, automatically.** The tablet's preferred mode is read
   from its EDID (1920×1200 on a Tab S10 FE+), so the picture fills the screen.
 - **Simple GNOME app**, in English and Italian.
@@ -66,7 +69,7 @@ Download `plus-one_<version>_all.deb` from the
 [Releases](../../releases) page, then:
 
 ```bash
-sudo apt install ./plus-one_0.6.0_all.deb
+sudo apt install ./plus-one_0.7.0_all.deb
 ```
 
 The package pulls in GTK 4, libadwaita, GStreamer and NetworkManager bindings
@@ -91,7 +94,7 @@ page, then:
 
 ```bash
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-flatpak install --user ./plus-one_v0.6.0_x86_64.flatpak
+flatpak install --user ./plus-one_v0.7.0_x86_64.flatpak
 ```
 
 The GNOME runtime it needs comes from Flathub. Differences from the `.deb`:
@@ -313,6 +316,19 @@ sudo cp data/plus-one-camera-options.conf /etc/modprobe.d/ && sudo cp data/plus-
 Ubuntu's recent kernels include the module; on older ones, `sudo apt install
 v4l2loopback-dkms` first.
 
+### The tablet's speakers
+
+Turn on **Speakers → Tablet speakers** in Plus One's window: the PC's sound
+goes to the tablet at once (the switch makes it the output; GNOME's Quick
+Settings and Sound settings choose it too, as *Tablet speakers (Plus
+One)*). The output is there only while the tablet's app is on the network:
+away, GNOME plays on the PC again. While a program plays, the sound goes as
+it is, 16-bit stereo PCM at 48 kHz in encrypted packets of 5 ms (1.5
+Mbit/s), and the app plays it as the tablet's own players do, with the
+tablet's media volume; nothing goes while nothing plays. On the tablet,
+**For the PC → Speakers** in Plus One's app (on at first) lets the PC use
+them.
+
 ### Recommended once: tablet low-latency mode
 
 Second Screen reads a configuration file, which cuts its internal buffering
@@ -468,7 +484,7 @@ flatpak run org.flatpak.Builder --user --install --force-clean flatpak-build \
 
 1. Bump `__version__` in `plusone/__init__.py` and add a section to
    `CHANGELOG.md`.
-2. Commit, then tag and push: `git tag v0.6.0 && git push origin main v0.6.0`.
+2. Commit, then tag and push: `git tag v0.7.0 && git push origin main v0.7.0`.
 3. The *Release* workflow checks that the tag matches the version, runs the
    tests, builds the `.deb` and the Flatpak bundle and publishes a GitHub
    release with both, the Quick Settings extension zip and the changelog
