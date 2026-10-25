@@ -1,20 +1,18 @@
 """The tablet's camera and microphone as the PC's own: a webcam ("Plus One
-tablet camera", v4l2loopback's device) and a microphone ("Tablet
-microphone", a PipeWire source fed through a pipe), each switched on in the
-window. Nothing goes over the network until a program on the PC uses one:
+tablet camera", v4l2loopback's devices) and a microphone ("Tablet
+microphone", a virtual PipeWire source Plus One feeds), each switched on in
+the window. Nothing goes over the network until a program on the PC uses one:
 then the tablet in use is asked for it (companion.capture), captures and
 encodes it there (H.264, Opus), and stops when the program lets go.
 """
 import array
 import ctypes
-import fcntl
 import glob
 import math
 import os
 import shutil
 import struct
 import subprocess
-import termios
 import threading
 import time
 
@@ -30,7 +28,10 @@ RETRY = 3          # seconds between attempts to reach the tablet while wanted
 REFUSED_RETRY = 10  # seconds, after the app said no (the user may change their mind there)
 IN_USE_AFTER = 0.2  # seconds a program holds the device before the tablet is asked
 IDLE_AFTER = 3      # seconds without one before the tablet stops
-MIC_BACKLOG = 48000 * 2 // 10  # bytes in the pipe (100 ms) past which a piece is dropped, not queued
+MIC_FEED = "plusone-mic-feed"  # the stream Plus One feeds the microphone with
+# ns of sound that may wait before the oldest goes: what waits stays, as delay,
+# once the sound comes as fast as it is played (160 ms measured 235 end to end).
+MIC_BEHIND = 60_000_000
 FLIP = {0: "none", 90: "clockwise", 180: "rotate-180", 270: "counterclockwise"}
 # Software first: little work at these sizes, and decodebin's pick (NVIDIA's,
 # here) held the whole pipeline still until the tablet's first frame.
@@ -363,8 +364,10 @@ class Camera(Device):
 
 
 class Microphone(Device):
-    """The microphone: a PipeWire source read from a pipe (module-pipe-source),
-    which Plus One writes the tablet's sound into while a program records."""
+    """The microphone: a virtual PipeWire source (a null node that programs
+    see as a microphone only), which a stream of Plus One's is linked into
+    while a program records. About 30 ms on the PC (a pipe source was 170
+    and grew with each burst of Wi-Fi); never more than MIC_BEHIND waits."""
 
     def __init__(self, app):
         super().__init__(app, "microphone")
@@ -372,8 +375,6 @@ class Microphone(Device):
         self.links = set()
         self.watch = None
         self.pipeline = None
-        self.pipe = None
-        self.fifo = os.path.join(GLib.get_user_runtime_dir(), "plusone-mic.fifo")
 
     def enable(self, description="Tablet microphone (Plus One)"):
         if self.module:
@@ -383,9 +384,9 @@ class Microphone(Device):
             return
         unload_stale()
         try:
-            out = subprocess.run(["pactl", "load-module", "module-pipe-source", f"source_name={MIC_NAME}",
-                                  f"file={self.fifo}", "format=s16le", "rate=48000", "channels=1",
-                                  f"source_properties=\"device.description='{description}'\""],
+            out = subprocess.run(["pactl", "load-module", "module-null-sink", f"sink_name={MIC_NAME}",
+                                  "media.class=Audio/Source/Virtual", "rate=48000", "channels=1", "channel_map=mono",
+                                  f"sink_properties=\"device.description='{description}'\""],
                                  capture_output=True, text=True, timeout=5, check=True).stdout
             self.module = out.strip()
         except (OSError, subprocess.SubprocessError) as e:
@@ -433,7 +434,7 @@ class Microphone(Device):
                 self._used(bool(self.links))
         stream.read_line_async(GLib.PRIORITY_DEFAULT, None, self._line, watch)
 
-    # -- the tablet's sound into the pipe ---------------------------------------
+    # -- the tablet's sound into the source ---------------------------------------
     def begin(self):
         self.feed = Feed({"type": "microphone", "bitrate": 32000}, self.where, self._info, self._piece,
                          self._problem)
@@ -444,20 +445,23 @@ class Microphone(Device):
         if self.pipeline:
             self.pipeline.set_state(Gst.State.NULL)
             self.pipeline = None
-        if self.pipe is not None:
-            os.close(self.pipe)
-            self.pipe = None
 
     def _info(self, info):
-        """The app's sound (Opus, or plain samples): decoded into the pipe."""
+        """The app's sound (Opus, or plain samples): decoded into a stream of
+        Plus One's, linked into the source by hand (nothing else plays it)."""
         caps = ("audio/x-opus,rate=48000,channels=1,channel-mapping-family=0" if info.get("codec") == "opus"
                 else "audio/x-raw,format=S16LE,rate=48000,channels=1,layout=interleaved")
         decode = "opusdec plc=true ! " if info.get("codec") == "opus" else ""
+        if self.pipeline:
+            self.pipeline.set_state(Gst.State.NULL)
+            self.pipeline = None
         pipeline = Gst.parse_launch(
-            f"appsrc name=src is-live=true do-timestamp=true format=time caps={caps} ! {decode}"
-            f"audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=1 "
-            f"! volume name=gain ! appsink name=out emit-signals=true sync=false")
-        pipeline.get_by_name("out").connect("new-sample", self._write)
+            f"appsrc name=src is-live=true do-timestamp=true format=time max-buffers=3 leaky-type=downstream "
+            f"caps={caps} ! {decode}audioconvert ! audioresample "
+            f"! audio/x-raw,format=S16LE,rate=48000,channels=1 ! volume name=gain "
+            f"! queue max-size-time={MIC_BEHIND} max-size-buffers=0 max-size-bytes=0 leaky=downstream "
+            f"! pipewiresink stream-properties=\"props,node.name={MIC_FEED},node.autoconnect=false,"
+            f"media.type=Audio\"")
         # The tablet's microphone is far too quiet as it comes: brought to a voice's level.
         leveller = Leveller()
         gain = pipeline.get_by_name("gain")
@@ -467,32 +471,33 @@ class Microphone(Device):
             gain.set_property("volume", leveller(array.array("h", buffer.extract_dup(0, buffer.get_size()))))
             return Gst.PadProbeReturn.OK
         gain.get_static_pad("sink").add_probe(Gst.PadProbeType.BUFFER, level)
-        old, self.pipeline = self.pipeline, pipeline
-        if old:
-            old.set_state(Gst.State.NULL)
+        self.pipeline = pipeline
         self.src = pipeline.get_by_name("src")
         pipeline.set_state(Gst.State.PLAYING)
+        # Its ports show once sound flows, which comes on this thread: waited for on another.
+        threading.Thread(target=lambda: link_feed() or log("microphone: could not link Plus One's stream "
+                                                             "into the source"), daemon=True).start()
         GLib.idle_add(once(lambda: self.feed and self._set_state("in use")))
 
     def _piece(self, _header, payload):
         if self.pipeline:
             self.src.emit("push-buffer", Gst.Buffer.new_wrapped(payload))
 
-    def _write(self, sink):
-        sample = sink.emit("pull-sample")
-        data = sample.get_buffer().extract_dup(0, sample.get_buffer().get_size())
-        try:
-            if self.pipe is None:
-                self.pipe = os.open(self.fifo, os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC)
-            # Behind (the source reads at its own pace): this piece goes, the sound stays live.
-            waiting = struct.unpack("i", fcntl.ioctl(self.pipe, termios.FIONREAD, b"\0\0\0\0"))[0]
-            if waiting < MIC_BACKLOG:
-                os.write(self.pipe, data)
-        except BlockingIOError:
-            pass
-        except OSError as e:
-            log("microphone: the pipe:", repr(e))
-        return Gst.FlowReturn.OK
+
+
+def link_feed(wait=5):
+    """Links Plus One's stream into the microphone's source, once PipeWire shows
+    its ports: True if done."""
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        outputs = subprocess.run(["pw-link", "--output"], capture_output=True, text=True).stdout.split()
+        inputs = subprocess.run(["pw-link", "--input"], capture_output=True, text=True).stdout.split()
+        feed = [p for p in outputs if p.startswith(MIC_FEED + ":")]
+        source = [p for p in inputs if p.startswith(MIC_NAME + ":")]
+        if feed and source:
+            return subprocess.run(["pw-link", feed[0], source[0]], capture_output=True).returncode == 0
+        time.sleep(0.05)
+    return False
 
 
 class Leveller:
@@ -551,7 +556,7 @@ def unload_stale():
     except (OSError, subprocess.SubprocessError):
         return
     for line in modules.splitlines():
-        if f"source_name={MIC_NAME}" in line:
+        if f"sink_name={MIC_NAME}" in line or f"source_name={MIC_NAME}" in line:
             subprocess.run(["pactl", "unload-module", line.split()[0]], capture_output=True, timeout=5)
 
 

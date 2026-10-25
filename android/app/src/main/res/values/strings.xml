@@ -32,6 +32,9 @@
     <string name="camera_off">Off: the PC cannot use it.</string>
     <string name="microphone_off">Off: the PC cannot use it.</string>
     <string name="pc_device_denied">Android does not let Plus One use it: allow it in the app\'s settings.</string>
+    <string name="noise_reduction">Noise reduction</string>
+    <string name="noise_on">The microphone without the room\'s noise.</string>
+    <string name="noise_off">The microphone as it is, noise and all.</string>
     <string name="capturing_camera">The PC is using the camera</string>
     <string name="capturing_microphone">The PC is using the microphone</string>
     <string name="capturing_both">The PC is using the camera and the microphone</string>

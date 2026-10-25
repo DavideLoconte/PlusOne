@@ -204,7 +204,7 @@ class CameraCapture(private val context: Context, wire: Wire, request: JSONObjec
 }
 
 /** The microphone, as Opus packets (or plain samples where there is no Opus encoder). */
-class MicCapture(wire: Wire, request: JSONObject) : Capture(wire) {
+class MicCapture(wire: Wire, request: JSONObject, private val noiseReduction: Boolean) : Capture(wire) {
     private val bitrate = request.optInt("bitrate", 32_000).coerceIn(12_000, 128_000)
     private var record: AudioRecord? = null
     private var gain: AutomaticGainControl? = null
@@ -213,15 +213,20 @@ class MicCapture(wire: Wire, request: JSONObject) : Capture(wire) {
     @SuppressLint("MissingPermission")  // CompanionService checks it first
     override fun start(): JSONObject {
         val min = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        // The plain microphone, brought to a microphone's level by Android's own
-        // gain control (the voice call source is far too quiet on a Galaxy Tab),
-        // and its noise suppression where there is one.
-        val record = AudioRecord(MediaRecorder.AudioSource.MIC, RATE, AudioFormat.CHANNEL_IN_MONO,
+        // The plain microphone (the PC brings it to a voice's level: the voice
+        // call source is far too quiet on a Galaxy Tab). Noise reduction:
+        // Android's noise suppressor on it, or else the voice call source,
+        // which has the tablet's own.
+        val source = if (noiseReduction && !NoiseSuppressor.isAvailable()) MediaRecorder.AudioSource.VOICE_COMMUNICATION
+            else MediaRecorder.AudioSource.MIC
+        val record = AudioRecord(source, RATE, AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT, maxOf(min, FRAME_BYTES * 4))
         check(record.state == AudioRecord.STATE_INITIALIZED) { "the microphone is not available" }
         this.record = record
         if (AutomaticGainControl.isAvailable()) gain = AutomaticGainControl.create(record.audioSessionId)?.apply { enabled = true }
-        if (NoiseSuppressor.isAvailable()) quiet = NoiseSuppressor.create(record.audioSessionId)?.apply { enabled = true }
+        if (noiseReduction && NoiseSuppressor.isAvailable()) {
+            quiet = NoiseSuppressor.create(record.audioSessionId)?.apply { enabled = true }
+        }
         val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_OPUS, RATE, 1).apply {
             setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
         }
@@ -234,7 +239,8 @@ class MicCapture(wire: Wire, request: JSONObject) : Capture(wire) {
         record.startRecording()
         Thread({ pump(record, codec) }, "plusone-mic").start()
         if (codec != null) Thread({ drain(codec, "audio") }, "plusone-mic-out").start()
-        Log.i(TAG, "microphone for the PC: ${if (codec != null) "Opus" else "PCM"}, gain control ${gain != null}")
+        Log.i(TAG, "microphone for the PC: ${if (codec != null) "Opus" else "PCM"}, gain control ${gain != null}, " +
+            "noise suppressor ${quiet != null}, voice call source ${source == MediaRecorder.AudioSource.VOICE_COMMUNICATION}")
         return JSONObject().put("type", "microphone").put("codec", if (codec != null) "opus" else "pcm")
             .put("rate", RATE).put("channels", 1)
     }

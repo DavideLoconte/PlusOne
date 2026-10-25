@@ -34,6 +34,13 @@ object Options {
 
     fun setMicrophone(context: Context, on: Boolean) =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("microphone", on).apply()
+
+    /** The microphone for the PC with the room's noise taken out (on at first). */
+    fun noiseReduction(context: Context) =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("noise", true)
+
+    fun setNoiseReduction(context: Context, on: Boolean) =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("noise", on).apply()
 }
 
 /** PCs the user paired with: certificate fingerprint -> name. */

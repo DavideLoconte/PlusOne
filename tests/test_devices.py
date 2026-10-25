@@ -192,7 +192,7 @@ def test_a_stale_microphone_is_removed(monkeypatch):
 
     def run(args, **kwargs):
         ran.append(args)
-        out = "536870913\tmodule-pipe-source\tsource_name=plusone_mic file=/x\n7\tmodule-x\t\n"
+        out = "536870913\tmodule-null-sink\tsink_name=plusone_mic media.class=Audio/Source/Virtual\n7\tmodule-x\t\n"
         return types.SimpleNamespace(stdout=out if args[1] == "list" else "")
     monkeypatch.setattr(devices.subprocess, "run", run)
     devices.unload_stale()

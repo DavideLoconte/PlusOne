@@ -118,6 +118,9 @@ class CompanionService : Service() {
         }
         while (!socket.isClosed) {
             val client = try { socket.accept() as SSLSocket } catch (e: Exception) { break }
+            // Small messages go at once: the microphone's are 100 bytes every 20 ms,
+            // which Nagle's algorithm would hold back for the PC's delayed ACKs.
+            try { client.tcpNoDelay = true } catch (e: Exception) {}
             try {
                 connections.execute { handle(client) }
             } catch (e: RejectedExecutionException) {
@@ -247,7 +250,8 @@ class CompanionService : Service() {
         if (!(if (camera) Options.camera(this) else Options.microphone(this))) return refuse("off")
         val permission = if (camera) Manifest.permission.CAMERA else Manifest.permission.RECORD_AUDIO
         if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) return refuse("permission")
-        val capture = if (camera) CameraCapture(this, wire, request) else MicCapture(wire, request)
+        val capture = if (camera) CameraCapture(this, wire, request)
+            else MicCapture(wire, request, Options.noiseReduction(this))
         synchronized(captures) {
             captures[capture] = kind to socket
             capturingFor = pc
@@ -262,12 +266,14 @@ class CompanionService : Service() {
             }
             wire.send(info)
             showCaptures()
+            lowLatency(true)
             socket.soTimeout = 0  // the PC holds it as long as its program uses the device
             while (wire.receive().optString("type") != "stop") continue
         } finally {
             capture.stop()
             synchronized(captures) { captures.remove(capture) }
             showCaptures()
+            lowLatency(false)
         }
     }
 
@@ -324,6 +330,23 @@ class CompanionService : Service() {
     private fun notification(): android.app.Notification {
         val kinds = synchronized(captures) { captures.values.map { it.first }.toSet() }
         return if (kinds.isEmpty()) Notifications.ready(this) else Notifications.capturing(this, kinds, capturingFor)
+    }
+
+    // Wi-Fi without power saving while the PC uses the camera or the microphone:
+    // saving, it holds packets back and sends them in bunches every 100-300 ms.
+    private val wifiLock by lazy {
+        getSystemService(android.net.wifi.WifiManager::class.java)
+            .createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "plusone:capture")
+            .apply { setReferenceCounted(false) }
+    }
+
+    private fun lowLatency(capturing: Boolean) {
+        val any = synchronized(captures) { captures.isNotEmpty() }
+        try {
+            if (capturing || any) wifiLock.acquire() else wifiLock.release()
+        } catch (e: Exception) {
+            Log.w(TAG, "Wi-Fi lock: $e")
+        }
     }
 
     /** What the notification says, when only that changed. */

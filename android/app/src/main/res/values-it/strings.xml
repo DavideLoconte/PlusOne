@@ -29,6 +29,9 @@
     <string name="camera_off">Spenta: il PC non può usarla.</string>
     <string name="microphone_off">Spento: il PC non può usarlo.</string>
     <string name="pc_device_denied">Android non lo consente a Plus One: permettilo nelle impostazioni dell\'app.</string>
+    <string name="noise_reduction">Riduzione del rumore</string>
+    <string name="noise_on">Il microfono senza il rumore della stanza.</string>
+    <string name="noise_off">Il microfono così com\'è, rumore compreso.</string>
     <string name="capturing_camera">Il PC sta usando la fotocamera</string>
     <string name="capturing_microphone">Il PC sta usando il microfono</string>
     <string name="capturing_both">Il PC sta usando fotocamera e microfono</string>

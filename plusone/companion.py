@@ -273,6 +273,7 @@ def _handshake(target, paired, ask_pairing, expect=None, pin=None, timeout=CONNE
     context.verify_mode = ssl.CERT_NONE
     context.load_cert_chain(cert, key)
     raw = socket.create_connection(target, timeout=timeout)
+    raw.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)  # small messages at once
     try:
         sock = context.wrap_socket(raw)
     except Exception:
