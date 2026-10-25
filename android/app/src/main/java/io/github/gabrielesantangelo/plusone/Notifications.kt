@@ -33,6 +33,21 @@ object Notifications {
             .setOngoing(true)
             .build()
 
+    /** The service's notification while the PC uses the camera or the microphone. */
+    fun capturing(context: Context, kinds: Set<String>, pc: String): Notification =
+        Notification.Builder(context, SERVICE)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(context.getString(when {
+                kinds.size > 1 -> R.string.capturing_both
+                "camera" in kinds -> R.string.capturing_camera
+                else -> R.string.capturing_microphone
+            }))
+            .setContentText(context.getString(R.string.capturing_for, pc))
+            .setContentIntent(PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE))
+            .setOngoing(true)
+            .build()
+
     /** One per code (several PCs may pair at once); 1000 and up, clear of SERVICE_ID. */
     private fun pairingId(code: String) = 1000 + code.toInt()
 

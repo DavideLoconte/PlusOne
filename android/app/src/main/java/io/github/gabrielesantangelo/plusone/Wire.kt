@@ -14,8 +14,9 @@ import java.util.concurrent.TimeUnit
 /**
  * Messages between the PC and the app (plusone/companion.py): a 4-byte
  * big-endian length, a JSON header of that length, and as many payload
- * bytes as the header's "size" says (none without one). Only the PC sends
- * payloads (a PDF), and the app copies them to a file, never into memory.
+ * bytes as the header's "size" says (none without one). The PC sends a PDF
+ * so, which the app copies to a file, never into memory; the app sends the
+ * camera's and the microphone's pieces so (Capture).
  */
 class Wire(private val socket: Socket) {
     private val input = DataInputStream(BufferedInputStream(socket.getInputStream()))
@@ -24,12 +25,17 @@ class Wire(private val socket: Socket) {
     /** Sends header; a peer that stops reading gets the connection closed
      * (a socket write has no timeout of its own, and it would hold this
      * Wire, and whoever waits to answer on it, for ever). */
-    fun send(header: JSONObject) = synchronized(output) {
+    fun send(header: JSONObject) = send(header, null)
+
+    /** Sends header and payload (its size goes in the header). */
+    fun send(header: JSONObject, payload: ByteArray?) = synchronized(output) {
+        if (payload != null) header.put("size", payload.size)
         val bytes = header.toString().toByteArray()
         val guard = WATCHDOG.schedule({ socket.close() }, WRITE_TIMEOUT, TimeUnit.MILLISECONDS)
         try {
             output.writeInt(bytes.size)
             output.write(bytes)
+            payload?.let { output.write(it) }
             output.flush()
         } finally {
             guard.cancel(false)

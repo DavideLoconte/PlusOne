@@ -80,6 +80,10 @@ class MainActivity : AppCompatActivity() {
     private val queueChanged: () -> Unit = { refresh() }
 
     private fun refresh() {
+        // Made again from scratch: where the user had scrolled to stays.
+        val scroller = content.parent as? ScrollView
+        val scrolled = scroller?.scrollY ?: 0
+        scroller?.post { scroller.scrollTo(0, scrolled) }
         content.removeAllViews()
         content.addView(label(getString(R.string.app_name), M.attr.textAppearanceDisplaySmall).apply {
             setPadding(dp(8), dp(32), dp(8), dp(20))
@@ -145,6 +149,12 @@ class MainActivity : AppCompatActivity() {
                 else button(getString(R.string.overlay_allow), Look.TONAL) { allowOverlay() })) { allowOverlay() },
         ))
 
+        section(R.string.heading_pc_devices, listOf(
+            pcDevice(CAMERA, R.drawable.ic_camera, R.string.camera_for_pc, R.string.camera_on, R.string.camera_off),
+            pcDevice(MICROPHONE, R.drawable.ic_microphone, R.string.microphone_for_pc, R.string.microphone_on,
+                R.string.microphone_off),
+        ))
+
         val paired = Paired.all(this)
         section(R.string.heading_paired, if (paired.isEmpty()) {
             listOf(Row(row(R.drawable.ic_computer, getString(R.string.paired_none_title), getString(R.string.paired_none))))
@@ -183,6 +193,56 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
+    /** A switch that lets the PC have the camera or the microphone: Android's
+     * permission is asked for when it is turned on. */
+    private fun pcDevice(kind: String, iconRes: Int, title: Int, on: Int, off: Int): Row {
+        val permission = PERMISSIONS.getValue(kind)
+        val allowed = checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+        val chosen = if (kind == CAMERA) Options.camera(this) else Options.microphone(this)
+        val switch = MaterialSwitch(this).apply {
+            isChecked = chosen && allowed
+            setOnCheckedChangeListener { _, checked ->
+                when {
+                    !checked -> {
+                        setPcDevice(kind, false)
+                        CompanionService.instance?.stopCaptures(kind)
+                        refresh()
+                    }
+                    allowed -> {
+                        setPcDevice(kind, true)
+                        refresh()
+                    }
+                    shouldShowRequestPermissionRationale(permission) || !asked(kind) ->
+                        requestPermissions(arrayOf(permission), REQUESTS.getValue(kind))
+                    else -> {  // denied for good: only the app's settings can change it
+                        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+                        isChecked = false
+                    }
+                }
+            }
+        }
+        val subtitle = when {
+            chosen && !allowed -> R.string.pc_device_denied
+            switch.isChecked -> on
+            else -> off
+        }
+        return Row(row(iconRes, getString(title), getString(subtitle), switch)) { switch.toggle() }
+    }
+
+    private fun setPcDevice(kind: String, on: Boolean) =
+        if (kind == CAMERA) Options.setCamera(this, on) else Options.setMicrophone(this, on)
+
+    /** Whether Android's question was asked already (after a "no", it is not asked again). */
+    private fun asked(kind: String) = getSharedPreferences("asked", MODE_PRIVATE).getBoolean(kind, false)
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, results: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, results)
+        val kind = REQUESTS.entries.firstOrNull { it.value == requestCode }?.key ?: return
+        getSharedPreferences("asked", MODE_PRIVATE).edit().putBoolean(kind, true).apply()
+        setPcDevice(kind, results.firstOrNull() == PackageManager.PERMISSION_GRANTED)
+        refresh()
+    }
+
     private fun section(title: Int, rows: List<Row>) {
         content.addView(sectionTitle(getString(title)))
         content.addView(group(rows))
@@ -219,5 +279,10 @@ class MainActivity : AppCompatActivity() {
     companion object {
         const val MAX_WIDTH = 760  // dp of content
         const val EXTRA_PATH = "path"
+        const val CAMERA = "camera"
+        const val MICROPHONE = "microphone"
+        private val PERMISSIONS = mapOf(CAMERA to Manifest.permission.CAMERA,
+            MICROPHONE to Manifest.permission.RECORD_AUDIO)
+        private val REQUESTS = mapOf(CAMERA to 2, MICROPHONE to 3)
     }
 }

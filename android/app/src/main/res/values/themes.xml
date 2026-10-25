@@ -15,6 +15,15 @@
         <item name="android:windowFullscreen">true</item>
     </style>
 
+    <!-- Nothing at all, for an instant (CaptureActivity). -->
+    <style name="Theme.PlusOne.Capture" parent="Theme.PlusOne">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
+
     <!-- The pairing question, over whatever is on screen. -->
     <style name="Theme.PlusOne.Pair" parent="Theme.Material3Expressive.DayNight.Dialog">
         <item name="windowNoTitle">true</item>

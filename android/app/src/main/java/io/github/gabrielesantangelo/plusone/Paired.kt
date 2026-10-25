@@ -21,6 +21,19 @@ object Options {
 
     fun setScrollPages(context: Context, on: Boolean) =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("scroll", on).apply()
+
+    /** The PC may use the camera, the microphone (while a program there does). Off at first. */
+    fun camera(context: Context) =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("camera", false)
+
+    fun setCamera(context: Context, on: Boolean) =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("camera", on).apply()
+
+    fun microphone(context: Context) =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("microphone", false)
+
+    fun setMicrophone(context: Context, on: Boolean) =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("microphone", on).apply()
 }
 
 /** PCs the user paired with: certificate fingerprint -> name. */

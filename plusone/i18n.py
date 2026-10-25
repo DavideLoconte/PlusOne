@@ -145,6 +145,35 @@ _IT = {
     "Stop": "Interrompi",
     "Sign a PDF…": "Firma un PDF…",
     "Second screen · {width} × {height} at {fps} Hz": "Secondo schermo · {width} × {height} a {fps} Hz",
+    "Tablet camera": "Fotocamera del tablet",
+    "Tablet microphone": "Microfono del tablet",
+    "Needs the v4l2loopback module: see the README": "Serve il modulo v4l2loopback: vedi il README",
+    "Needs PipeWire's pactl and pw-link": "Servono pactl e pw-link di PipeWire",
+    "As a webcam for this PC's programs": "Come webcam per i programmi di questo PC",
+    "As a microphone for this PC's programs": "Come microfono per i programmi di questo PC",
+    "On: the tablet turns its camera on while a program uses it":
+        "Attiva: il tablet accende la fotocamera mentre un programma la usa",
+    "On: the tablet turns its microphone on while a program uses it":
+        "Attivo: il tablet accende il microfono mentre un programma lo usa",
+    "In use": "In uso",
+    "A program uses the camera, but the tablet is not reachable":
+        "Un programma usa la fotocamera, ma il tablet non è raggiungibile",
+    "A program uses the microphone, but the tablet is not reachable":
+        "Un programma usa il microfono, ma il tablet non è raggiungibile",
+    "Not allowed on the tablet: Plus One → For the PC": "Non consentito sul tablet: Plus One → Per il PC",
+    "On the tablet, allow Plus One to use the camera": "Sul tablet, consenti a Plus One di usare la fotocamera",
+    "On the tablet, allow Plus One to use the microphone": "Sul tablet, consenti a Plus One di usare il microfono",
+    "On the tablet, let Plus One display over other apps":
+        "Sul tablet, consenti a Plus One di comparire sopra le altre app",
+    "On the tablet, another app is using the camera": "Sul tablet un'altra app sta usando la fotocamera",
+    "On the tablet, another app is using the microphone": "Sul tablet un'altra app sta usando il microfono",
+    "Camera": "Fotocamera",
+    "The tablet's camera, as a webcam for this PC's programs (switched on in the window).":
+        "La fotocamera del tablet, come webcam per i programmi di questo PC (si attiva dalla finestra).",
+    "Front": "Frontale",
+    "Back": "Posteriore",
+    "Picture": "Immagine",
+    "1080p takes about twice the bandwidth": "1080p usa circa il doppio della banda",
     "On your network": "Sulla tua rete",
     "Not on your network now": "Ora non è sulla tua rete",
     "Pair another tablet…": "Abbina un altro tablet…",

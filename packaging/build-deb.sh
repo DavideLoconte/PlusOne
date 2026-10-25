@@ -14,7 +14,7 @@ rm -rf "$root"
 install -d "$root/DEBIAN" "$root/usr/bin" "$root/usr/lib/$pkg" \
     "$root/usr/share/applications" "$root/usr/share/icons/hicolor/scalable/apps" \
     "$root/usr/share/metainfo" "$root/usr/share/doc/$pkg" "$root/usr/share/dbus-1/services" \
-    "$root/usr/lib/udev/rules.d" "$root/usr/lib/modules-load.d"
+    "$root/usr/lib/udev/rules.d" "$root/usr/lib/modules-load.d" "$root/usr/lib/modprobe.d"
 
 cp -r "$top/plusone" "$root/usr/lib/$pkg/"
 find "$root/usr/lib/$pkg" -name __pycache__ -prune -exec rm -rf {} +
@@ -38,6 +38,9 @@ chmod -R u=rwX,go=rX "$root/usr/share/gnome-shell"
 # S Pen as a real tablet: let the desktop user create virtual HID devices.
 install -m 644 "$top/data/70-$pkg-uhid.rules" "$root/usr/lib/udev/rules.d/"
 install -m 644 "$top/data/$pkg-uhid.conf" "$root/usr/lib/modules-load.d/"
+# The tablet's camera as a webcam: a v4l2loopback device, loaded at boot.
+install -m 644 "$top/data/$pkg-camera.conf" "$root/usr/lib/modules-load.d/"
+install -m 644 "$top/data/$pkg-camera-options.conf" "$root/usr/lib/modprobe.d/$pkg-camera.conf"
 
 install -m 644 "$top/README.md" "$root/usr/share/doc/$pkg/README.md"
 {
@@ -69,7 +72,7 @@ Priority: optional
 Architecture: all
 Maintainer: $maintainer
 Installed-Size: $size
-Depends: python3 (>= 3.10), python3-gi, python3-gi-cairo, gir1.2-gtk-4.0, gir1.2-adw-1 (>= 1.4), gir1.2-gstreamer-1.0, gir1.2-nm-1.0, gir1.2-poppler-0.18, python3-pypdf, openssl, gstreamer1.0-pipewire, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, network-manager, kmod, udev, passwd
+Depends: python3 (>= 3.10), python3-gi, python3-gi-cairo, gir1.2-gtk-4.0, gir1.2-adw-1 (>= 1.5), gir1.2-gstreamer-1.0, gir1.2-nm-1.0, gir1.2-poppler-0.18, python3-pypdf, openssl, gstreamer1.0-pipewire, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-libav, pulseaudio-utils, pipewire-bin, network-manager, kmod, udev, passwd
 Recommends: gstreamer1.0-vaapi, gstreamer1.0-plugins-ugly, gstreamer1.0-x, gnome-shell (>= 45), python3-nautilus
 Suggests: adb
 Homepage: https://github.com/GabrieleSantangelo/PlusOne

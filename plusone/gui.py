@@ -19,6 +19,30 @@ from .rtsp import MODES  # noqa: E402
 MODE_LIST = sorted(((w, h, f) for (w, h, f) in MODES if f == 60), key=lambda m: -m[0] * m[1])
 TABLET_ICON = "plusone-tablet-symbolic"  # icons/
 WEBSITE = "https://github.com/GabrieleSantangelo/PlusOne"
+QUALITY_LIST = ["720p", "1080p"]
+FACING_LIST = ["front", "back"]
+
+
+def device_status(kind, state):
+    """What the window says under the camera's or the microphone's switch."""
+    if state == "setup":
+        return (_("Needs the v4l2loopback module: see the README") if kind == "camera"
+                else _("Needs PipeWire's pactl and pw-link"))
+    camera = kind == "camera"
+    return {
+        "off": _("As a webcam for this PC's programs") if camera else _("As a microphone for this PC's programs"),
+        "ready": _("On: the tablet turns its camera on while a program uses it") if camera
+        else _("On: the tablet turns its microphone on while a program uses it"),
+        "in use": _("In use"),
+        "away": _("A program uses the camera, but the tablet is not reachable") if camera
+        else _("A program uses the microphone, but the tablet is not reachable"),
+        "tablet-off": _("Not allowed on the tablet: Plus One → For the PC"),
+        "tablet-permission": _("On the tablet, allow Plus One to use the camera") if camera
+        else _("On the tablet, allow Plus One to use the microphone"),
+        "tablet-background": _("On the tablet, let Plus One display over other apps"),
+        "tablet-unavailable": _("On the tablet, another app is using the camera") if camera
+        else _("On the tablet, another app is using the microphone"),
+    }.get(state, "")
 CSS = b".pair-code { font-size: 300%; font-weight: 800; letter-spacing: 0.1em; }"
 _resources_added = False
 
@@ -53,7 +77,7 @@ def _spinner(text):
 
 class Window(Adw.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title="Plus One", default_width=440, default_height=560)
+        super().__init__(application=app, title="Plus One", default_width=440, default_height=660)
         self.app = app
         self.controller = app.controller
         _add_resources(self.get_display())
@@ -126,6 +150,15 @@ class Window(Adw.ApplicationWindow):
         for button in (self.screen_button, sign):
             buttons.append(button)
         box.append(buttons)
+        # The tablet's camera and microphone, for this PC's programs.
+        devices = Adw.PreferencesGroup(margin_top=24)
+        self.device_rows = {}
+        for kind, title in (("camera", _("Tablet camera")), ("microphone", _("Tablet microphone"))):
+            row = Adw.SwitchRow(title=title)
+            row.handler = row.connect("notify::active", lambda r, _p, kind=kind: self.app.set_device(kind, r.get_active()))
+            devices.add(row)
+            self.device_rows[kind] = row
+        box.append(Adw.Clamp(maximum_size=420, child=devices))
         return box
 
     # -- state -----------------------------------------------------------------------
@@ -136,6 +169,10 @@ class Window(Adw.ApplicationWindow):
             return
         self.name_label.set_label(tablet.name)
         self._refresh_menu(tablet)
+        for kind, row in self.device_rows.items():
+            with row.handler_block(row.handler):
+                row.set_active(getattr(self.app.settings, kind))
+            row.set_subtitle(device_status(kind, getattr(self.app.devices, kind).state))
         state = self.controller.state
         text = self._status(tablet)
         self.status_label.set_label(text)
@@ -478,6 +515,22 @@ class PreferencesDialog(Adw.PreferencesDialog):
         signing.add(group)
         self.add(signing)
 
+        devices = Adw.PreferencesPage(title=_("Camera"), icon_name="camera-web-symbolic")
+        group = Adw.PreferencesGroup(description=_("The tablet's camera, as a webcam for this PC's programs "
+                                                   "(switched on in the window)."))
+        self.facing_row = Adw.ComboRow(title=_("Camera"), model=Gtk.StringList.new([_("Front"), _("Back")]),
+                                       selected=FACING_LIST.index(s.camera_facing)
+                                       if s.camera_facing in FACING_LIST else 0)
+        self.quality_row = Adw.ComboRow(title=_("Picture"), model=Gtk.StringList.new(
+            ["720p (1280 × 720)", "1080p (1920 × 1080)"]),
+            selected=QUALITY_LIST.index(s.camera_quality) if s.camera_quality in QUALITY_LIST else 0,
+            subtitle=_("1080p takes about twice the bandwidth"))
+        for row in (self.facing_row, self.quality_row):
+            row.connect("notify::selected", self._camera_options)
+            group.add(row)
+        devices.add(group)
+        self.add(devices)
+
         general = Adw.PreferencesPage(title=_("General"), icon_name="preferences-system-symbolic")
         group = Adw.PreferencesGroup()
         background = Adw.SwitchRow(title=_("Ready in the background"), active=s.background,
@@ -518,6 +571,10 @@ class PreferencesDialog(Adw.PreferencesDialog):
         s.touch = self.touch_row.get_active()
         s.use_adb = self.adb_row.get_active()
         self.app.save_settings()
+
+    def _camera_options(self, *_args):
+        self.app.set_camera_options(FACING_LIST[self.facing_row.get_selected()],
+                                    QUALITY_LIST[self.quality_row.get_selected()])
 
     def _show_extension_state(self, enabled):
         if enabled is None:

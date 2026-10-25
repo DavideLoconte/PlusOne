@@ -56,6 +56,11 @@ def make(monkeypatch, tmp_path, tablets=()):
     def changed():
         for listener in list(app.listeners):
             listener()
+    app.devices = types.SimpleNamespace(camera=types.SimpleNamespace(state="off"),
+                                        microphone=types.SimpleNamespace(state="off"))
+    app.set_device = lambda kind, on: (setattr(app.settings, kind, on), changed())
+    app.set_camera_options = lambda facing, quality: (setattr(app.settings, "camera_facing", facing),
+                                                      setattr(app.settings, "camera_quality", quality))
     app.use_tablet = lambda fp: (app.tablets.use(fp), changed())
     app.forget_tablet = lambda fp: (app.tablets.forget(fp), changed())
     return gui.Window(app), app
@@ -163,3 +168,17 @@ def test_preferences_and_log(monkeypatch, tmp_path):
     log = gui.LogDialog(app)
     log._append("another")
     assert log._text() == "a line of the log\nanother\n"
+
+
+def test_the_tablets_camera_and_microphone(monkeypatch, tmp_path):
+    win, app = make(monkeypatch, tmp_path, [(KITCHEN, "Kitchen")])
+    camera = win.device_rows["camera"]
+    assert not camera.get_active() and camera.get_subtitle() == "As a webcam for this PC's programs"
+    camera.set_active(True)
+    assert app.settings.camera
+    app.devices.camera.state = "tablet-permission"
+    win._refresh()
+    assert camera.get_subtitle() == "On the tablet, allow Plus One to use the camera"
+    prefs = gui.PreferencesDialog(app, win)
+    prefs.quality_row.set_selected(1)
+    assert app.settings.camera_quality == "1080p"

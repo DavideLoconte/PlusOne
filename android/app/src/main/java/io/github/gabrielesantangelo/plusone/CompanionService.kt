@@ -1,8 +1,10 @@
 package io.github.gabrielesantangelo.plusone
 
+import android.Manifest
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
@@ -13,6 +15,7 @@ import android.util.Log
 import org.json.JSONObject
 import java.io.File
 import java.security.SecureRandom
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.ThreadPoolExecutor
@@ -39,6 +42,7 @@ class CompanionService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         Notifications.channels(this)
         startForeground(Notifications.SERVICE_ID, Notifications.ready(this),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
@@ -79,6 +83,7 @@ class CompanionService : Service() {
     }
 
     override fun onDestroy() {
+        instance = null
         Jobs.unlisten(queueChanged)
         handler.removeCallbacksAndMessages(null)
         synchronized(this) {
@@ -211,6 +216,7 @@ class CompanionService : Service() {
                             if (Jobs.acknowledge(job, fingerprint)) jobFile(job)?.delete()
                         }
                         "ping" -> wire.send(JSONObject().put("type", "pong"))
+                        "camera", "microphone" -> return capture(socket, wire, message, type, pcName)
                         "bye" -> return
                     }
                 }
@@ -225,6 +231,86 @@ class CompanionService : Service() {
             busy.decrementAndGet()
             lastUse = System.currentTimeMillis()
         }
+    }
+
+    // The camera's and the microphone's captures, each with its connection.
+    private val captures = mutableMapOf<Capture, Pair<String, SSLSocket>>()
+    @Volatile private var elevating: CompletableFuture<Boolean>? = null
+    @Volatile private var capturingFor = ""
+
+    /** A program on the PC uses the camera or the microphone: captured and
+     * sent on this connection until the PC hangs up. Only if the user lets
+     * the PC have it, here. */
+    private fun capture(socket: SSLSocket, wire: Wire, request: JSONObject, kind: String, pc: String) {
+        val camera = kind == "camera"
+        fun refuse(reason: String) = wire.send(JSONObject().put("type", "refused").put("reason", reason))
+        if (!(if (camera) Options.camera(this) else Options.microphone(this))) return refuse("off")
+        val permission = if (camera) Manifest.permission.CAMERA else Manifest.permission.RECORD_AUDIO
+        if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) return refuse("permission")
+        val capture = if (camera) CameraCapture(this, wire, request) else MicCapture(wire, request)
+        synchronized(captures) {
+            captures[capture] = kind to socket
+            capturingFor = pc
+        }
+        try {
+            if (!foreground()) return refuse("background")
+            val info = try {
+                capture.start()
+            } catch (e: Exception) {
+                Log.w(TAG, "$kind not available: $e")
+                return refuse("unavailable")
+            }
+            wire.send(info)
+            socket.soTimeout = 0  // the PC holds it as long as its program uses the device
+            while (wire.receive().optString("type") != "stop") continue
+        } finally {
+            capture.stop()
+            synchronized(captures) { captures.remove(capture) }
+            showForeground()
+        }
+    }
+
+    /** Camera and microphone are only for a foreground service started, or
+     * started again, while the app is in front: for a moment a see-through
+     * activity is (CaptureActivity, which may open over other apps). */
+    private fun foreground(): Boolean {
+        val done = CompletableFuture<Boolean>()
+        elevating = done
+        startActivity(Intent(this, CaptureActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION))
+        return try {
+            done.get(ELEVATE_WAIT, TimeUnit.MILLISECONDS)
+        } catch (e: Exception) {
+            Log.w(TAG, "could not come to the front for the camera or microphone: $e")
+            false
+        }
+    }
+
+    /** From CaptureActivity, while it is in front. */
+    fun elevate() {
+        showForeground()
+        elevating?.complete(true)
+    }
+
+    /** The foreground service's types and notification, as the captures are now. */
+    private fun showForeground() {
+        val kinds = synchronized(captures) { captures.values.map { it.first }.toSet() }
+        var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+        if ("camera" in kinds) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+        if ("microphone" in kinds) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        try {
+            startForeground(Notifications.SERVICE_ID,
+                if (kinds.isEmpty()) Notifications.ready(this) else Notifications.capturing(this, kinds, capturingFor),
+                types)
+        } catch (e: Exception) {
+            Log.w(TAG, "foreground service: $e")
+        }
+    }
+
+    /** The user took the device back from the PC (MainActivity): its captures end. */
+    fun stopCaptures(kind: String) {
+        val sockets = synchronized(captures) { captures.filter { it.value.first == kind }.map { it.value.second } }
+        sockets.forEach { try { it.close() } catch (e: Exception) {} }
     }
 
     /** Numeric comparison: the app commits to its random number, learns the
@@ -318,6 +404,7 @@ class CompanionService : Service() {
         const val SERVICE_TYPE = "_plusone._tcp"
         const val PROTOCOL = 3
         const val PORT = 47236                 // companion.py APP_PORT; another if it is taken
+        const val ELEVATE_WAIT = 5_000L        // ms for CaptureActivity to bring the app in front
         const val MAX_CONNECTIONS = 32
         const val MAX_UNPAIRED = 4             // connections of peers not yet known, at a time
         const val HANDSHAKE_DEADLINE = 20_000L // ms for an unknown peer's whole handshake
@@ -333,6 +420,9 @@ class CompanionService : Service() {
 
         fun deviceName(context: Context): String =
             Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME) ?: Build.MODEL
+
+        /** The running service, for the activities that talk to it. */
+        @Volatile var instance: CompanionService? = null
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, CompanionService::class.java))

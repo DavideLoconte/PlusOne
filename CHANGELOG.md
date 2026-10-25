@@ -23,6 +23,15 @@ Your tablet, and only it.
 - **A new window**: the tablet in use, its state and two buttons (*Use as
   second screen*, *Sign a PDF…*); everything else in the menu: preferences
   (Screen, Signing, General), My signatures, Paired tablets, Log, About.
+- **The tablet's camera and microphone for the PC**: a webcam (*Plus One
+  tablet camera*, a v4l2loopback device that every program sees) and a
+  microphone (*Tablet microphone*, a PipeWire source), each with its own
+  switch in the window. The tablet captures only while a program on the
+  PC uses them, so nothing goes over the network otherwise, and the switch
+  off removes the device. H.264 and Opus encoded on the tablet, sent over
+  the paired, encrypted link; front or back camera, 720p or 1080p. The app
+  lets the PC have them only once the user turns them on there (*For the
+  PC*), and says so in its notification while the PC uses them.
 - The app listens on a fixed port (47236), so the PC finds it over Wi-Fi
   Direct at once. Protocol version 3: update the app and Plus One together.
 

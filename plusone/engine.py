@@ -49,6 +49,11 @@ class Settings:
     # The paired tablet in use (its app's certificate fingerprint, tablets.py):
     # the only one that gets the desktop and the PDFs.
     tablet: str | None = None
+    # Its camera and microphone as the PC's own (devices.py).
+    camera: bool = False
+    camera_facing: str = "front"   # or "back"
+    camera_quality: str = "720p"   # or "1080p"
+    microphone: bool = False
 
 
 class State:

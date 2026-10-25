@@ -29,6 +29,7 @@ from .engine import NOT_ANSWERING, Controller, Settings, State  # noqa: E402
 from .i18n import _  # noqa: E402
 from .nearby import Nearby  # noqa: E402
 from .signing import Signing  # noqa: E402
+from .devices import Devices  # noqa: E402
 from .tablets import Tablets  # noqa: E402
 
 APP_ID = "io.github.gabrielesantangelo.PlusOne"
@@ -233,6 +234,7 @@ class PlusOneApp(Adw.Application):
             action.connect("activate", callback)
             self.add_action(action)
         self.signing = Signing(self)
+        self.devices = Devices(self)
 
     # -- GApplication ------------------------------------------------------
     def do_startup(self):
@@ -244,7 +246,12 @@ class PlusOneApp(Adw.Application):
         # Which tablets have the app, and where: for pairing, signing and
         # checking Second Screen's tablet. Avahi listens anyway.
         self.nearby.start()
+        self.devices.apply()
         self._update_hold()
+
+    def do_shutdown(self):
+        self.devices.shutdown()  # the microphone's source goes with Plus One
+        Adw.Application.do_shutdown(self)
 
     def do_activate(self):
         from .gui import Window
@@ -333,8 +340,10 @@ class PlusOneApp(Adw.Application):
 
     def _update_hold(self):
         # Stay without a window while connected, or always in background mode
-        # (idle costs nothing: the radio is only used while connecting).
-        want = self.settings.background or self.controller.running
+        # (idle costs nothing: the radio is only used while connecting), or
+        # while the tablet's camera or microphone is the PC's.
+        want = (self.settings.background or self.controller.running
+                or self.settings.camera or self.settings.microphone)
         if want and not self._held:
             self.hold()
         elif not want and self._held:
@@ -373,7 +382,28 @@ class PlusOneApp(Adw.Application):
     def use_tablet(self, fingerprint):
         """The paired tablet that gets the desktop and the PDFs from now on."""
         self.tablets.use(fingerprint)
+        self.devices.apply()
         self._on_nearby()
+
+    def set_device(self, name, on):
+        """The tablet's camera or microphone (name: the setting) as the PC's, or not."""
+        if getattr(self.settings, name) == on:
+            return
+        setattr(self.settings, name, on)
+        save_settings(self.settings)
+        self.devices.apply()
+        self._update_hold()
+
+    def set_camera_options(self, facing, quality):
+        changed = quality != self.settings.camera_quality
+        self.settings.camera_facing, self.settings.camera_quality = facing, quality
+        save_settings(self.settings)
+        if changed:
+            self.devices.restart_camera()  # the device's picture size with it
+
+    def devices_changed(self):
+        for listener in list(self.listeners):
+            listener()
 
     def forget_tablet(self, fingerprint):
         """This PC forgets a paired tablet: using it again takes pairing again."""
@@ -381,6 +411,7 @@ class PlusOneApp(Adw.Application):
         if active and active.fingerprint == fingerprint:
             self.controller.stop()  # its session, if it has one, ends with it
         self.tablets.forget(fingerprint)
+        self.devices.apply()
         self._on_nearby()
 
     def set_sign_on_tablet(self, enabled):

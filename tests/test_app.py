@@ -96,7 +96,7 @@ def test_forgetting_the_tablet_in_use_ends_its_session(tmp_path):
     stopped = []
     fake = types.SimpleNamespace(tablets=Tablets(Settings(tablet=kitchen), paired=paired),
                                  controller=types.SimpleNamespace(stop=lambda: stopped.append(True)),
-                                 _on_nearby=lambda: None)
+                                 devices=types.SimpleNamespace(apply=lambda: None), _on_nearby=lambda: None)
     app.PlusOneApp.forget_tablet(fake, office)
     assert stopped == [] and paired.all() == {kitchen: "Kitchen"}
     app.PlusOneApp.forget_tablet(fake, kitchen)

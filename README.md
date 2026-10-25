@@ -36,6 +36,10 @@ It talks to the <b>Second Screen</b> feature Samsung ships for Windows PCs, and 
 - **Wireless, no setup.** Wi-Fi Direct between PC and tablet, no router needed,
   no developer options on the tablet. Reconnects by itself when you reopen
   Second Screen soon after closing it.
+- **The tablet's camera and microphone for the PC.** A webcam and a
+  microphone that every program sees (Chrome, Firefox, Discord, Slack,
+  OBS...). The tablet turns them on only while a program uses them, so
+  nothing goes over the network otherwise; each has its own switch.
 - **Correct aspect ratio, automatically.** The tablet's preferred mode is read
   from its EDID (1920×1200 on a Tab S10 FE+), so the picture fills the screen.
 - **Simple GNOME app**, in English and Italian.
@@ -252,6 +256,31 @@ top bar lists them, to sign them in any order: what you drew on one stays
 there while you look at another. The app's main screen lists them too, under
 **To sign**, and so does a notification.
 
+### The tablet's camera and microphone
+
+Turn on **Tablet camera** and **Tablet microphone** in Plus One's window
+(and, on the tablet, **For the PC → Camera / Microphone** in Plus One's app,
+which asks Android's permission). The PC then has a webcam called *Plus One
+tablet camera* and a microphone called *Tablet microphone (Plus One)*: pick
+them in your video-call program like any other. The tablet captures only
+while a program on the PC uses one of them (a call, the Camera app), and
+stops a few seconds after it lets go; the switch off removes the device from
+the PC altogether. The camera goes as H.264 (2.5 Mbit/s at 720p, about 5 at
+1080p), the microphone as Opus (about 20 kbit/s), encrypted, over your
+Wi-Fi or over Wi-Fi Direct during Second Screen. **Preferences → Camera**
+picks the front or the back camera and 720p or 1080p.
+
+The webcam is a v4l2loopback device. The `.deb` sets it up; from source or
+the Flatpak, once:
+
+```bash
+sudo cp data/plus-one-camera-options.conf /etc/modprobe.d/ && sudo cp data/plus-one-camera.conf /etc/modules-load.d/ \
+    && sudo modprobe v4l2loopback
+```
+
+Ubuntu's recent kernels include the module; on older ones, `sudo apt install
+v4l2loopback-dkms` first.
+
 ### Recommended once: tablet low-latency mode
 
 Second Screen reads a configuration file. Creating it cuts its internal
@@ -314,6 +343,8 @@ latency.
 | Never connects | Reopen Second Screen on the tablet. A VPN with a firewall/kill switch can block the link; turn it off to check. Open *Log* in the window's menu. |
 | *“Plus One does not answer on …”* | Plus One's app must be running on the tablet: open it (and keep *Ready in the background* on in the app). The desktop is only sent once it proved the tablet is yours. |
 | *“This is not …: the desktop was not sent”* | Something else came over Wi-Fi Direct as your tablet, or the tablet in use is another one: check its name in the window. |
+| *Tablet camera* says it needs v4l2loopback | See *The tablet's camera and microphone*: the module is not loaded. |
+| The camera or microphone says the tablet does not allow it | In Plus One's app on the tablet, *For the PC*: turn it on, and allow it when Android asks. |
 | *“… no longer knows this PC”* | The app forgot this PC (reinstalled, or *Forget* on the tablet): pair it again from the window. |
 | *“Connection is not secure”* on the tablet | Shown at every connection: the stream is not HDCP-protected. Harmless. |
 | Picture squashed or with black bars | Use one of the listed modes; the tablet lays out the picture by the negotiated mode. |
@@ -364,6 +395,7 @@ What comes next, and the convenience rules every feature follows, is in
 plusone/          the app: app.py (background app, D-Bus, notifications), gui.py (window),
                   engine.py (ties display, p2p, rtsp, media, uibc, pen together),
                   signing.py + sign.py + pdf.py + ink.py + modeler.py (Sign on Tablet),
+                  devices.py (the tablet's camera and microphone as the PC's),
                   nearby.py (tablets on the network), tablets.py (the paired ones, the one in
                   use, and the check that Second Screen's tablet is it), companion.py (the app's protocol)
 data/gnome-shell/ the Quick Settings extension

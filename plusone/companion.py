@@ -45,6 +45,7 @@ MAX_HEADER = 16 * 1024 * 1024  # the marks of a long document (the app takes as 
 UNPAIRED_HEADER = 4096         # hello and pairing: small, from an app not yet known
 HANDSHAKE_FOR = 20             # seconds for TLS, hello and pairing messages (not the user's answer)
 MAX_NAME = 64
+MAX_PIECE = 4 * 1024 * 1024    # an encoded frame of the camera, at most
 CONFIG = os.path.join(GLib.get_user_config_dir(), "plus-one", "companion")
 _making_identity = threading.Lock()
 
@@ -166,6 +167,17 @@ class Wire:
             left -= len(chunk)
         return b"".join(chunks)
 
+    def receive_piece(self, limit=MAX_PIECE):
+        """(header, payload) of the camera's or the microphone's next piece."""
+        (length,) = struct.unpack(">I", self._exactly(4))
+        if not 0 < length <= UNPAIRED_HEADER:
+            raise ValueError(f"bad header length {length}")
+        header = json.loads(self._exactly(length))
+        size = header.get("size", 0) if isinstance(header, dict) else -1
+        if type(size) is not int or not 0 <= size <= limit:
+            raise ValueError("a piece that is not one")
+        return header, self._exactly(size)
+
     def receive(self, limit=MAX_HEADER):
         """The next message (the app sends headers only), at most limit bytes."""
         (length,) = struct.unpack(">I", self._exactly(4))
@@ -186,6 +198,12 @@ class PairingRefused(Exception):
 class Impostor(PairingRefused):
     """At an address announced for a paired tablet, an app with another
     certificate: someone answering mDNS for it. Never paired with."""
+
+
+class Refused(Exception):
+    """The app did not let the PC have the camera or the microphone: the
+    reason, "off" (not let in the app), "permission" (not by Android),
+    "background" (it could not come to the front to start) or "unavailable"."""
 
 
 class Lost(Exception):
@@ -494,6 +512,27 @@ def _wait(sock, wire, name, job, target, paired, on_opened, on_signatures, locat
             except Exception as e:  # noqa: BLE001 - as above
                 log("companion: lost the tablet again:", repr(e))
     raise Lost(name)
+
+
+def capture(targets, request, expect, paired=None):
+    """(socket, wire, what the app says it sends) once the app at targets
+    (the tablet in use's addresses) captures for the PC: request is
+    {"type": "camera", "facing", "width", "height", "fps", "bitrate"} or
+    {"type": "microphone"}. The pieces follow (Wire.receive_piece) until the
+    socket is closed. Raises Refused, PairingRefused, OSError & co."""
+    sock, wire, _name = _connect_any(targets, paired or Paired(), None, expect)
+    try:
+        wire.send(request)
+        info = wire.receive(UNPAIRED_HEADER)
+        if info.get("type") == "refused":
+            raise Refused(str(info.get("reason", "")))
+        if info.get("type") != request["type"]:
+            raise ValueError(f"the app answered {info.get('type')!r}")
+        sock.settimeout(IO_TIMEOUT)
+    except BaseException:
+        sock.close()
+        raise
+    return sock, wire, info
 
 
 def _finite(value):
