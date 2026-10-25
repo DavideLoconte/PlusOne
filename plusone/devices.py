@@ -36,10 +36,6 @@ LEVEL_EVERY = 20_000_000        # ns: how often the microphone's level is measur
 # ns of sound that may wait before the oldest goes: what waits stays, as delay,
 # once the sound comes as fast as it is played (160 ms measured 235 end to end).
 MIC_BEHIND = 60_000_000
-# ns held back once at the start, then passed on as it comes (not by the clock,
-# which is not PipeWire's here): PipeWire reads 21.3 ms at a time, the tablet
-# sends 20, and without something waiting it found nothing every 320 ms.
-MIC_CUSHION = 30_000_000
 # Software first: little work at these sizes, and decodebin's pick (NVIDIA's,
 # here) held the whole pipeline still until the tablet's first frame.
 H264_DECODERS = ("avdec_h264", "openh264dec", "vah264dec")
@@ -120,9 +116,14 @@ class Feed:
                 self.on_ready()
                 # Held while wanted, the link up and the media flowing: the
                 # app hangs up by closing it, Plus One by closing it too.
+                said = (0, 0, 0)
                 while self._wanted.is_set() and not receiver.failed():
                     if wire.readable(1.0):
                         wire.receive()
+                    losses = receiver.losses()
+                    if losses != said:
+                        log(f"{kind}: lost %d packets, asked again for %d, asked for %d key frames" % losses)
+                        said = losses
             except companion.Refused as e:
                 log(f"{kind}: the tablet said no ({e})")
                 self.on_problem(str(e))
@@ -429,8 +430,10 @@ class Microphone(Device):
             return
         unload_stale()
         try:
+            # No rate of its own: it follows the graph's (Bluetooth headphones
+            # run theirs at 44.1 kHz, and a 48 kHz source went silent in it).
             out = subprocess.run(["pactl", "load-module", "module-null-sink", f"sink_name={MIC_NAME}",
-                                  "media.class=Audio/Source/Virtual", "rate=48000", "channels=1", "channel_map=mono",
+                                  "media.class=Audio/Source/Virtual", "channels=1", "channel_map=mono",
                                   f"sink_properties=\"device.description='{description}'\""],
                                  capture_output=True, text=True, timeout=5, check=True).stdout
             self.module = out.strip()
@@ -503,6 +506,9 @@ class Microphone(Device):
                          f"! audio/x-raw,format=S16LE,rate=48000,channels=1 "
                          f"! level name=meter interval={LEVEL_EVERY} post-messages=true ! volume name=gain "
                          f"! queue max-size-time={MIC_BEHIND} max-size-buffers=0 max-size-bytes=0 leaky=downstream "
+                         # As it comes, not by the pipeline's clock (not PipeWire's: the sink
+                         # came after webrtcbin started); by it, 20 ms packets against PipeWire's
+                         # 21.3 ms reads left it with nothing every 320 ms.
                          f"! pipewiresink sync=false stream-properties=\"props,node.name={MIC_FEED},"
                          f"node.autoconnect=false,media.type=Audio\"")
         self.gain = chain.get_by_name("gain")

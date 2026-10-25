@@ -100,6 +100,25 @@ class Receiver:
             self.watched = True
         return bus
 
+    def losses(self):
+        """(packets lost, retransmissions asked for, key frames asked for) so
+        far, from webrtcbin's statistics."""
+        promise = Gst.Promise.new()
+        self.webrtc.emit("get-stats", None, promise)
+        promise.wait()
+        reply = promise.get_reply()
+        lost = nacks = plis = 0
+        if reply is not None:
+            def each(_field, value):
+                nonlocal lost, nacks, plis
+                if isinstance(value, Gst.Structure) and value.get_value("type") == GstWebRTC.WebRTCStatsType.INBOUND_RTP:
+                    lost += max(0, value.get_value("packets-lost") or 0)
+                    nacks += value.get_value("nack-count") or 0
+                    plis += value.get_value("pli-count") or 0
+                return True
+            reply.foreach(each)
+        return lost, nacks, plis
+
     def failed(self):
         """Whether the connection to the tablet failed or was lost."""
         return self.webrtc.get_property("connection-state") in (

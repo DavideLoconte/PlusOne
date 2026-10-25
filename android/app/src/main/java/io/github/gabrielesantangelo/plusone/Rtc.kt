@@ -44,7 +44,7 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
 
     /** The answer to the PC's offer, ICE candidates gathered in it. Throws if it cannot. */
     fun answer(offer: String): String {
-        val factory = Rtc.factory(context, noiseReduction)
+        val factory = Rtc.factory(context)
         val gathered = CompletableFuture<Unit>()
         val connection = factory.createPeerConnection(
             PeerConnection.RTCConfiguration(emptyList()).apply {
@@ -52,6 +52,9 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
                 bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
                 rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
                 continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
+                // Packets marked by priority (DSCP): Wi-Fi's voice queue for the
+                // sound, which a video key frame's burst then does not hold back.
+                enableDscp = true
             },
             object : PeerConnection.Observer {
                 override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {
@@ -78,10 +81,14 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
         val track = if (camera) cameraTrack(factory) else microphoneTrack(factory)
         tracks = listOf(track)
         val sender = connection.addTrack(track, listOf("plusone"))
-        if (camera) {
-            // Up to the bitrate the PC asked for; congestion control goes lower.
-            sender.parameters = sender.parameters.apply {
-                encodings.forEach { it.maxBitrateBps = request.optInt("bitrate", 2_500_000) }
+        sender.parameters = sender.parameters.apply {
+            encodings.forEach {
+                if (camera) {
+                    // Up to the bitrate the PC asked for; congestion control goes lower.
+                    it.maxBitrateBps = request.optInt("bitrate", 2_500_000)
+                } else {
+                    it.networkPriority = HIGH
+                }
             }
         }
         await { connection.setRemoteDescription(it, SessionDescription(SessionDescription.Type.OFFER, offer)) }
@@ -123,9 +130,8 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
     }
 
     private fun microphoneTrack(factory: PeerConnectionFactory): MediaStreamTrack {
-        // libwebrtc's own processing: its gain control (the Galaxy Tab's
-        // microphone is far too quiet as it comes) and, if asked, its noise
-        // suppression. No echo cancelling: the tablet plays nothing back.
+        // libwebrtc's own processing: its gain control and, if asked, its
+        // noise suppression. No echo cancelling: the tablet plays nothing back.
         val constraints = MediaConstraints().apply {
             mandatory += MediaConstraints.KeyValuePair("googAutoGainControl", "true")
             mandatory += MediaConstraints.KeyValuePair("googNoiseSuppression", noiseReduction.toString())
@@ -168,6 +174,7 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
     companion object {
         const val TAG = "PlusOne"
         const val WAIT = 5_000L    // ms for each step of the answer
+        const val HIGH = 3         // webrtc::Priority::kHigh
         const val GATHER = 5_000L  // ms for ICE's candidates, at most
     }
 }
@@ -176,19 +183,18 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
 object Rtc {
     val egl: EglBase by lazy { EglBase.create() }
     private var factory: PeerConnectionFactory? = null
-    private var noise: Boolean? = null
 
-    /** The factory, made again when the noise reduction asked for changes
-     * (the audio device's own, Android's, goes on or off with it). */
+    /** The factory, one for the process (noise reduction is each audio source's). */
     @Synchronized
-    fun factory(context: Context, noiseReduction: Boolean): PeerConnectionFactory {
-        factory?.let { if (noise == noiseReduction) return it }
-        if (factory == null && noise == null) {
-            PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(context.applicationContext)
-                .createInitializationOptions())
-        }
+    fun factory(context: Context): PeerConnectionFactory {
+        factory?.let { return it }
+        PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(context.applicationContext)
+            .createInitializationOptions())
+        // The plain microphone: the voice call source (libwebrtc's default) is
+        // far too quiet on a Galaxy Tab. Noise suppression is libwebrtc's own.
         val audio = JavaAudioDeviceModule.builder(context.applicationContext)
-            .setUseHardwareNoiseSuppressor(noiseReduction)
+            .setAudioSource(android.media.MediaRecorder.AudioSource.MIC)
+            .setUseHardwareNoiseSuppressor(false)
             .setUseHardwareAcousticEchoCanceler(false)
             .createAudioDeviceModule()
         val made = PeerConnectionFactory.builder()
@@ -198,7 +204,6 @@ object Rtc {
             .createPeerConnectionFactory()
         audio.release()  // the factory holds it now
         factory = made
-        noise = noiseReduction
         return made
     }
 }
