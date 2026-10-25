@@ -128,8 +128,9 @@ def _box(page, name):
     """A page box as (left, bottom, right, top), corners in any order put
     right; None if missing or empty."""
     try:
-        values = [float(v) for v in page[name]]
-    except (KeyError, TypeError, ValueError):
+        # Each corner may be an indirect object (a height kept elsewhere).
+        values = [float(v.get_object() if hasattr(v, "get_object") else v) for v in page[name].get_object()]
+    except (KeyError, TypeError, ValueError, AttributeError):
         return None
     if len(values) != 4:
         return None
@@ -180,6 +181,32 @@ def output_path(src):
     while os.path.exists(candidate):
         candidate, n = f"{base}-signed-{n}{ext or '.pdf'}", n + 1
     return candidate
+
+
+MAX_SIZE = 256 * 1024 * 1024  # bytes: what the tablet's app takes (Wire.kt MAX_PAYLOAD)
+
+
+def problem(path):
+    """Why path cannot be signed, or None: an English template (i18n) with
+    its arguments. Checked before anything goes to the tablet."""
+    try:
+        if not os.path.isfile(path):
+            return "{name} is not a file", {}
+        if os.path.getsize(path) > MAX_SIZE:
+            return "{name} is too big to sign: more than {size} MB", {"size": MAX_SIZE // (1024 * 1024)}
+        with open(path, "rb") as f:
+            if b"%PDF-" not in f.read(1024):
+                return "{name} is not a PDF", {}
+    except OSError as e:
+        return "{name} cannot be read: {error}", {"error": e.strerror or str(e)}
+    from pypdf import PdfReader
+    try:
+        reader = PdfReader(path)
+        if reader.is_encrypted and not reader.decrypt(""):
+            return "{name} needs a password to open: unlock it first", {}
+    except Exception:  # noqa: BLE001 - one poppler may still read: the window says if not
+        pass
+    return None
 
 
 def digitally_signed(src):
@@ -260,10 +287,12 @@ def _pypdf_before(version):
         return False
 
 
-def save_signed(src, marks_by_page, dst=None):
+def save_signed(src, marks_by_page, dst=None, like=None):
     """Write src with marks_by_page ({page index: [Stroke | Text]}) on top;
     marks for a page it does not have are left out. Returns the path
-    written (never over an existing file unless dst says so)."""
+    written: dst, or name-signed.pdf next to like (src when not given),
+    never over an existing file. like: the original, when src is a copy
+    of it (signing.py): its folder and permissions."""
     from pypdf import PdfReader, PdfWriter
     from pypdf.generic import DictionaryObject
 
@@ -279,15 +308,34 @@ def save_signed(src, marks_by_page, dst=None):
             continue
         page = pages[index]
         _stamp(writer, page, _ink_form(writer, marks, *display_size(page)))
-    dst = dst or output_path(src)
-    # A temporary file of our own next to dst, then the signed copy in one
-    # step, with the original's permissions (not the umask's).
-    fd, tmp = tempfile.mkstemp(prefix=".plus-one-", suffix=".part", dir=os.path.dirname(dst) or ".")
+    like = like or src
+    folder = os.path.dirname(dst or like) or "."
+    # A temporary file of our own next to the result, then the signed copy in
+    # one step, with the original's permissions (not the umask's).
+    fd, tmp = tempfile.mkstemp(prefix=".plus-one-", suffix=".part", dir=folder)
     try:
         with os.fdopen(fd, "wb") as f:
             writer.write(f)
-        os.chmod(tmp, os.stat(src).st_mode & 0o777)
-        os.replace(tmp, dst)
+        try:
+            os.chmod(tmp, os.stat(like).st_mode & 0o777)
+        except OSError:
+            pass  # a mount that keeps its own (SMB through gvfs): the file is still whole
+        if dst:
+            os.replace(tmp, dst)
+            return dst
+        # A name nobody took: link() fails rather than replace what appeared
+        # since output_path() looked.
+        while True:
+            dst = output_path(like)
+            try:
+                os.link(tmp, dst)
+                break
+            except FileExistsError:
+                continue
+            except OSError:
+                os.replace(tmp, dst)  # no hard links there (some mounts): as before
+                return dst
+        os.unlink(tmp)
     except BaseException:
         try:
             os.unlink(tmp)

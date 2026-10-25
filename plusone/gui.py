@@ -277,6 +277,7 @@ class PairDialog(Adw.Dialog):
         self.on_paired = on_paired or (lambda name: None)
         self.answer = None      # (threading.Event, [bool]) while the user compares the code
         self.closed = False
+        self.attempt = 0        # each tablet chosen is one; an older one's answers are not this one's
         self.nav = Adw.NavigationView()
         self.set_child(self.nav)
 
@@ -322,6 +323,9 @@ class PairDialog(Adw.Dialog):
 
     def _pair(self, app_id, name):
         """The code page; pairing runs in a thread, asking self._ask."""
+        self._answered(False)  # one still comparing (gone back from): not paired
+        self.attempt += 1
+        attempt = self.attempt
         self.stage = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18, valign=Gtk.Align.CENTER,
                              margin_start=24, margin_end=24)
         self.stage.append(_spinner(_("Connecting to {name}…").format(name=name)))
@@ -330,20 +334,26 @@ class PairDialog(Adw.Dialog):
 
         def work():
             try:
-                fingerprint, paired_name = companion.pair(targets, self._ask)
+                fingerprint, paired_name = companion.pair(targets, lambda n, code: self._ask(attempt, n, code))
             except companion.PairingRefused:
-                GLib.idle_add(once(self._failed, _("Not paired: the code was not confirmed on both screens")))
+                GLib.idle_add(once(self._failed, attempt, _("Not paired: the code was not confirmed on both screens")))
             except Exception as e:  # noqa: BLE001 - shown to the user
                 log("pairing:", repr(e))
-                GLib.idle_add(once(self._failed, _("{name} did not answer").format(name=name)))
+                GLib.idle_add(once(self._failed, attempt, _("{name} did not answer").format(name=name)))
             else:
-                GLib.idle_add(once(self._done, fingerprint, paired_name))
+                GLib.idle_add(once(self._done, attempt, fingerprint, paired_name))
         threading.Thread(target=work, daemon=True).start()
 
-    def _ask(self, name, code):
-        """From the pairing thread: blocks until the user compares the code."""
+    def _current(self, attempt):
+        return not self.closed and attempt == self.attempt
+
+    def _ask(self, attempt, name, code):
+        """From the pairing thread: blocks until the user compares the code;
+        no at once when the dialog closed or another tablet was chosen."""
+        if not self._current(attempt):
+            return False
         answered, answer = self.answer = (threading.Event(), [])
-        GLib.idle_add(once(self._show_code, code))
+        GLib.idle_add(once(self._show_code, attempt, code))
         if not answered.wait(companion.PAIRING_TIMEOUT):
             log("pairing: the code was not confirmed in time")
         return bool(answer and answer[0])
@@ -354,7 +364,9 @@ class PairDialog(Adw.Dialog):
             self.answer[1].append(yes)
             self.answer[0].set()
 
-    def _show_code(self, code):
+    def _show_code(self, attempt, code):
+        if not self._current(attempt):
+            return
         self._clear()
         self.stage.append(Gtk.Label(label=f"{code[:3]} {code[3:]}", selectable=True,
                                     css_classes=["title-1", "numeric", "pair-code"]))
@@ -374,15 +386,17 @@ class PairDialog(Adw.Dialog):
         self._clear()
         self.stage.append(_spinner(_("Confirm on the tablet…")))
 
-    def _done(self, fingerprint, name):
+    def _done(self, attempt, fingerprint, name):
         if self.closed:
+            return
+        if attempt != self.attempt:  # paired all the same: in use only if it is the one shown
             return
         self.app.use_tablet(fingerprint)
         self.on_paired(name)
         self.close()
 
-    def _failed(self, text):
-        if self.closed:
+    def _failed(self, attempt, text):
+        if not self._current(attempt):
             return
         self._clear()
         self.stage.append(Gtk.Label(label=text, wrap=True, justify=Gtk.Justification.CENTER))

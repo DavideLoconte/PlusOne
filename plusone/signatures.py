@@ -91,10 +91,24 @@ def save(signatures, removed, path=None):
     write_private(path or PATH, {"signatures": signatures[:MAX_SIGNATURES], "removed": removed[-KEEP_REMOVED:]})
 
 
+def thin(signature):
+    """signature with at most MAX_POINTS samples, as valid() takes them back
+    (else it is "saved", and dropped at the next load): every n-th, ends kept."""
+    strokes = signature["strokes"]
+    step = -(-sum(len(s) for s in strokes) // MAX_POINTS)
+    if step <= 1:
+        return signature
+    return dict(signature, strokes=[[p for i, p in enumerate(s) if i % step == 0 or i == len(s) - 1]
+                                    for s in strokes])
+
+
 def add(signature, path=None):
-    """Keeps a normalized signature, first in the list; returns it with its id."""
+    """Keeps a normalized signature, first in the list; returns it with its
+    id. ValueError if it is no signature (nothing in it, numbers that are not)."""
     signatures, removed = load(path)
-    kept = dict(signature, id=uuid.uuid4().hex)
+    kept = dict(thin(signature), id=uuid.uuid4().hex)
+    if not valid(kept):
+        raise ValueError("not a signature")
     save([kept] + signatures, removed, path)
     return kept
 

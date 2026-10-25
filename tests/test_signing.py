@@ -1,9 +1,11 @@
 """Signing on the tablet: requests, windows and the connection opened for them."""
 from gi.repository import GLib
+import pytest
 
 from plusone import i18n
 from plusone import companion
 from plusone.engine import NOT_ANSWERING, Settings, State
+from plusone import signing as signing_module
 from plusone.signing import Signing
 from plusone.tablets import Tablets
 
@@ -69,6 +71,14 @@ class FakeApp:
     def save_settings(self):
         pass
 
+    held = 0
+
+    def hold(self):
+        self.held += 1
+
+    def release(self):
+        self.held -= 1
+
 
 class FakeWindow:
     def __init__(self, path):
@@ -76,6 +86,14 @@ class FakeWindow:
 
     def present(self):
         self.presented += 1
+
+
+@pytest.fixture(autouse=True)
+def pdfs(tmp_path, monkeypatch):
+    """The PDFs the tests sign, and where the copies sent to the app go."""
+    for name in ("form.pdf", "other.pdf"):
+        (tmp_path / name).write_bytes(b"%PDF-1.4\n%%EOF\n")
+    monkeypatch.setattr(signing_module, "SENT", str(tmp_path / "sent"))
 
 
 def make(monkeypatch, paired=True):
@@ -153,17 +171,24 @@ def test_the_tablets_app_signs_when_it_is_on_the_network(monkeypatch, tmp_path):
     marks = {"pages": [{"page": 1, "marks": [
         {"type": "stroke", "width": 1.2, "color": [0, 0, 0], "points": [10, 20, 0.5, 30, 40, 0.6]}]}]}
     asked, saved = [], []
-    monkeypatch.setattr(companion, "sign", lambda target, path, **kw: asked.append((target, path, kw["expect"]))
-                        or marks)
+    monkeypatch.setattr(companion, "sign", lambda target, path, **kw: asked.append(
+        (target, path, kw["expect"], kw["title"])) or marks)
     import plusone.pdf
-    monkeypatch.setattr(plusone.pdf, "save_signed", lambda path, m: saved.append(m) or path + ".signed")
+    monkeypatch.setattr(plusone.pdf, "save_signed",
+                        lambda src, m, like: saved.append((src, m, like)) or like + ".signed")
     path = str(tmp_path / "form.pdf")
     signing.request(path)
     assert spin(lambda: saved)
-    assert asked == [([("10.0.0.2", 40000)], path, APP)] and app.controller.starts == 0  # no Second Screen
-    stroke = saved[0][1][0]
+    # The copy sent is what was signed and what the marks go on; the result next to the original.
+    (target, sent, expect, title), = asked
+    assert target == [("10.0.0.2", 40000)] and expect == APP and title == "form.pdf"
+    assert sent.startswith(str(tmp_path / "sent")) and app.controller.starts == 0  # no Second Screen
+    src, marks_saved, like = saved[0]
+    assert src == sent and like == path
+    stroke = marks_saved[1][0]
     assert stroke.points == [(10, 20, 0.5), (30, 40, 0.6)] and stroke.width == 1.2
     assert spin(lambda: path not in signing.in_app)
+    assert spin(lambda: app.held == 0) and not (tmp_path / "sent").exists() or not list((tmp_path / "sent").iterdir())
 
 
 def test_an_unreachable_app_falls_back_to_second_screen(monkeypatch, tmp_path):
@@ -224,3 +249,48 @@ def test_a_dropped_link_finds_the_same_tablet_again(monkeypatch):
     app.nearby.companions = {"a": ("10.0.0.2", 1000, "Kitchen", "aaaa"), "b": ("10.0.0.9", 2001, "Office", "bbbb")}
     assert signing._locate_app("bbbb") == [("10.0.0.9", 2001)]
     assert signing._locate_app("cccc") is None
+
+
+def test_signed_on_the_tablet_is_never_lost_for_a_folder_that_takes_nothing(monkeypatch, tmp_path):
+    app, signing, _, _ = make(monkeypatch)
+    app.nearby.app_on = ("10.0.0.2", 40000, "Galaxy Tab", APP)
+    marks = {"pages": [{"page": 0, "marks": [
+        {"type": "stroke", "width": 1.2, "color": [0, 0, 0], "points": [10, 20, 0.5, 30, 40, 0.6]}]}]}
+    monkeypatch.setattr(companion, "sign", lambda target, path, **kw: marks)
+    documents = tmp_path / "Documents"
+    documents.mkdir()
+    monkeypatch.setattr(signing_module.GLib, "get_user_special_dir", lambda which: str(documents))
+    import plusone.pdf
+    path = str(tmp_path / "form.pdf")
+
+    def save(src, m, like):
+        if like == path:
+            raise PermissionError(13, "Permission denied")  # a read-only folder
+        return like.replace(".pdf", "-signed.pdf")
+    monkeypatch.setattr(plusone.pdf, "save_signed", save)
+    results = []
+    monkeypatch.setattr(signing, "_signed", lambda result, certified=False: results.append(result))
+    signing.request(path)
+    assert spin(lambda: results)
+    assert results == [str(documents / "form-signed.pdf")]
+
+
+def test_what_is_not_a_pdf_is_said_before_it_goes():
+    import plusone.pdf
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".pdf") as f:
+        f.write(b"just text")
+        f.flush()
+        assert plusone.pdf.problem(f.name)[0] == "{name} is not a PDF"
+    assert plusone.pdf.problem("/no/such.pdf")[0] == "{name} is not a file"
+
+
+def test_a_long_signature_is_thinned_not_lost(tmp_path):
+    from plusone import signatures
+    stroke = [[i / 30000, 0.1, 0.5] for i in range(30000)]
+    path = str(tmp_path / "signatures.json")
+    kept = signatures.add({"width": 120.0, "strokes": [stroke]}, path)
+    loaded, _removed = signatures.load(path)
+    assert [s["id"] for s in loaded] == [kept["id"]]  # there after a load, not dropped
+    points = loaded[0]["strokes"][0]
+    assert len(points) <= signatures.MAX_POINTS and points[0] == stroke[0] and points[-1] == stroke[-1]

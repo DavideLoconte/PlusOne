@@ -316,8 +316,10 @@ class PlusOneApp(Adw.Application):
             listener(line)
 
     def window_closed(self):
-        # Without the background mode, closing the window ends Plus One.
-        if not self.settings.background:
+        # Without the background mode, closing the window ends Plus One; not
+        # while a PDF is being signed on the tablet's monitor (it would go).
+        signing = self.signing
+        if not self.settings.background and not (signing.windows or signing.queue or signing.opening):
             self.controller.stop()
 
     def save_settings(self):

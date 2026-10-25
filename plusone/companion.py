@@ -28,6 +28,7 @@ import struct
 import subprocess
 import threading
 import time
+import unicodedata
 import uuid
 
 from gi.repository import GLib
@@ -403,7 +404,7 @@ def _answer(wire, job, on_opened, name, on_signatures):
 
 
 def sign(target, path, paired=None, on_opened=None, pen=None, signatures=None,
-         on_signatures=None, locate=None, resume_for=RESUME_FOR, turn=None, expect=None):
+         on_signatures=None, locate=None, resume_for=RESUME_FOR, turn=None, expect=None, title=None):
     """Blocking (run it in a thread): send the PDF at path to the app at
     target ((host, port), or a list of them: the addresses the app was
     announced at, tried in turn) and wait for the user to sign it there.
@@ -429,7 +430,7 @@ def sign(target, path, paired=None, on_opened=None, pen=None, signatures=None,
         _turns.wait(turn)
         _places.acquire()
         try:
-            sock, wire, name, job = _send(target, path, paired, pen, signatures, expect)
+            sock, wire, name, job = _send(target, path, paired, pen, signatures, expect, title)
         except BaseException:
             _places.release()
             raise
@@ -456,7 +457,7 @@ def _connect_any(targets, paired, ask_pairing, expect):
     raise error or OSError("no address for the tablet")
 
 
-def _send(target, path, paired, pen, signatures, expect):
+def _send(target, path, paired, pen, signatures, expect, title=None):
     """(socket, wire, tablet name, job id) once the PDF is on the tablet."""
     sock, wire, name = _connect_any(target, paired, None, expect)
     job = uuid.uuid4().hex
@@ -464,7 +465,7 @@ def _send(target, path, paired, pen, signatures, expect):
         with open(path, "rb") as f:
             pdf = f.read()
         sock.settimeout(IO_TIMEOUT * 4)  # a big PDF over slow Wi-Fi
-        header = {"type": "sign", "job": job, "title": os.path.basename(path)}
+        header = {"type": "sign", "job": job, "title": title or os.path.basename(path)}
         if pen:
             header["pen"] = pen
         if signatures:
@@ -519,6 +520,10 @@ def _finite(value):
     return number
 
 
+# Characters that reverse how the text around them reads (an "exe.pdf" trick).
+BIDI_OVERRIDES = set("\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
+
+
 def to_marks(result):
     """The app's marks as plusone/pdf.py takes them: {page index: [Stroke |
     Text]}. What does not make sense (not a page index, not finite, a colour
@@ -544,7 +549,10 @@ def to_marks(result):
                     if points and 0 < width <= 100:
                         found.append(Stroke(points, width=width, color=color))
                 elif mark.get("type") == "text" and isinstance(mark.get("text"), str):
-                    text = "".join(ch for ch in mark["text"] if ch.isprintable())[:500]
+                    # Controls and direction overrides out; joiners (Persian,
+                    # emoji) kept, which isprintable() took too.
+                    text = "".join(ch for ch in mark["text"] if unicodedata.category(ch) != "Cc"
+                                   and ch not in BIDI_OVERRIDES)[:500]
                     size = _finite(mark.get("size", 11.0))
                     if text and 0 < size <= 500:
                         found.append(Text(_finite(mark["x"]), _finite(mark["y"]), text, size=size, color=color,

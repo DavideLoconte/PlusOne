@@ -9,7 +9,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gtk  # noqa: E402
 
-from . import signatures  # noqa: E402
+from . import log, signatures  # noqa: E402
 from .i18n import _  # noqa: E402
 from .ink import ERASER_RADIUS, NO_PRESSURE, normalize, touches  # noqa: E402
 from .pdf import Stroke, draw_marks  # noqa: E402
@@ -171,7 +171,11 @@ class SignaturePad(Adw.Window):
                    for s in self.strokes if s]
         if not strokes:
             return
-        kept = signatures.add(normalize(strokes))
+        try:
+            kept = signatures.add(normalize(strokes))
+        except (OSError, ValueError) as e:
+            log("signature not saved:", repr(e))  # the pad stays open: nothing drawn is lost
+            return
         self.close()
         if self.on_saved:
             self.on_saved(kept)

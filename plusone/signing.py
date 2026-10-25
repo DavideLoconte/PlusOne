@@ -9,7 +9,10 @@ with a notification; if the tablet does not come, the notification offers
 signing on the PC.
 """
 import os
+import shutil
+import tempfile
 import threading
+import uuid
 
 from gi.repository import Gio, GLib
 
@@ -22,6 +25,9 @@ NOTIFICATION = "sign"
 UPDATE = "update"
 # Shared with the signing window (sign.py).
 PEN = os.path.join(GLib.get_user_config_dir(), "plus-one", "pen.json")
+# The PDFs as they were sent to the tablet's app: signed, that copy is what
+# the marks go on (the original may change or move meanwhile).
+SENT = os.path.join(GLib.get_user_cache_dir(), "plus-one", "signing")
 
 
 class Signing:
@@ -30,7 +36,7 @@ class Signing:
         self.queue = []            # paths waiting for the tablet
         self.opening = set()       # paths waiting for the tablet's monitor
         self.windows = []
-        self.in_app = set()        # paths the tablet's app is signing
+        self.in_app = {}           # paths the tablet's app is signing -> that request's token
         self.tablet = None         # its name
         self.signed = []           # signed in a row (several PDFs sent at once): one notification
         self.connected_for_us = False
@@ -45,6 +51,15 @@ class Signing:
         the network, else through Second Screen."""
         path = os.path.abspath(path)
         log("signing", path)
+        from .pdf import problem
+        wrong = problem(path)
+        if wrong:
+            # Not a PDF, too big, locked: said now, not after signing it.
+            template, args = wrong
+            note = Gio.Notification.new(_("Cannot sign {name}").format(name=os.path.basename(path)))
+            note.set_body(_(template).format(name=os.path.basename(path), **args))
+            self.app.send_notification(NOTIFICATION, note)
+            return
         if self.app.tablets.active() is None:
             note = Gio.Notification.new(_("No tablet paired"))
             note.set_body(_("Pair your tablet in Plus One to sign {name} on it")
@@ -89,7 +104,20 @@ class Signing:
     def _sign_in_app(self, path, target):
         targets, tablet, app_id = target
         log(f"signing in the app on {tablet}: {path}")
-        self.in_app.add(path)
+        try:
+            os.makedirs(SENT, mode=0o700, exist_ok=True)
+            fd, sent = tempfile.mkstemp(suffix=".pdf", dir=SENT)
+            with os.fdopen(fd, "wb") as f, open(path, "rb") as original:
+                shutil.copyfileobj(original, f)
+        except OSError as e:
+            note = Gio.Notification.new(_("Cannot open {name}").format(name=os.path.basename(path)))
+            note.set_body(e.strerror or str(e))
+            self.app.send_notification(NOTIFICATION, note)
+            return
+        token = uuid.uuid4().hex
+        self.in_app[path] = token
+        # Plus One stays until the answer comes, window closed or not.
+        self.app.hold()
         self._notify_in_app(path, _("Sending {name} to Plus One on {tablet}"), tablet)
 
         from .ink import load_pen
@@ -109,10 +137,10 @@ class Signing:
         def work():
             result = error = None
             try:
-                result = companion.sign(targets, path, pen=pen, signatures=ours, expect=app_id,
+                result = companion.sign(targets, sent, pen=pen, signatures=ours, expect=app_id,
                                         on_signatures=theirs, on_opened=opened,
                                         locate=lambda: self._locate_app(app_id),
-                                        turn=turn)
+                                        turn=turn, title=os.path.basename(path))
             except companion.PairingRefused:
                 error = "refused"
             except companion.Lost:
@@ -123,7 +151,7 @@ class Signing:
             except Exception as e:  # noqa: BLE001 - whatever it was, Second Screen instead
                 error = e
             finally:
-                GLib.idle_add(once(self._app_done, path, result, error))
+                GLib.idle_add(once(self._app_done, path, token, sent, result, error))
         threading.Thread(target=work, daemon=True).start()
 
     def _find_app(self):
@@ -139,35 +167,52 @@ class Signing:
         restarts): that tablet's addresses, not another's."""
         return self.app.nearby.addresses(app_id) or None
 
-    def _app_done(self, path, result, error):
-        if path not in self.in_app:
-            return  # the user chose to sign on the PC meanwhile
-        self.in_app.discard(path)
+    def _app_done(self, path, token, sent, result, error):
+        saving = False
+        try:
+            saving = self._answer(path, token, sent, result, error)
+        finally:
+            if not saving:
+                self._forget_sent(sent)
+
+    def _forget_sent(self, sent):
+        try:
+            os.unlink(sent)
+        except OSError:
+            pass
+        self.app.release()
+
+    def _answer(self, path, token, sent, result, error):
+        """What the tablet's app answered for one PDF: True while its signed
+        copy is being saved (which ends the request), else done."""
+        if self.in_app.get(path) != token:
+            return False  # the user chose to sign on the PC meanwhile (or asked again since)
+        del self.in_app[path]
         if error == "refused":
             log("companion: the tablet does not know this PC")
             note = Gio.Notification.new(_("Not paired"))
             note.set_body(_("{name} no longer knows this PC: pair it again").format(name=self.tablet))
             note.set_default_action("app.show")
             self.app.send_notification(NOTIFICATION, note)
-            return
+            return False
         if error == "incompatible":
             note = Gio.Notification.new(_("Update Plus One"))
             note.set_body(_("The app on the tablet and Plus One on this PC are different versions: "
                             "signing with Second Screen instead"))
             self.app.send_notification(UPDATE, note)
             self._second_screen(path)
-            return
+            return False
         if error == "lost":
             note = Gio.Notification.new(_("Lost the tablet"))
             note.set_body(_("What was signed on the tablet did not reach the PC: {name} is unchanged")
                           .format(name=os.path.basename(path)))
             self.app.send_notification(NOTIFICATION, note)
-            return
+            return False
         if error is not None:
             # The app did not answer: Second Screen instead.
             log("signing in the app failed:", repr(error))
             self._second_screen(path)
-            return
+            return False
         if isinstance(result, dict):
             self._keep_from_app(result)
         marks = companion.to_marks(result) if result else {}
@@ -179,17 +224,30 @@ class Signing:
                 self._notify_in_app(left, _("Sign {name} on {tablet}"), self.tablet)
             elif not self.signed:
                 self.app.withdraw_notification(NOTIFICATION)
-            return
+            return False
 
         def save():
+            # On the copy that was signed, next to the original; where that
+            # folder takes nothing (read-only, gone), in Documents: what was
+            # signed on the tablet is not lost for it.
             from .pdf import digitally_signed, save_signed
             try:
-                done = save_signed(path, marks)
+                done = save_signed(sent, marks, like=path)
+            except OSError as e:
+                log("signing: not next to the original:", repr(e))
+                folder = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DOCUMENTS) or GLib.get_home_dir()
+                try:
+                    done = save_signed(sent, marks, like=os.path.join(folder, os.path.basename(path)))
+                except Exception as e2:  # noqa: BLE001 - shown to the user
+                    log("signing: could not save:", repr(e2))
+                    done = e2
             except Exception as e:  # noqa: BLE001 - shown to the user
                 log("signing: could not save:", repr(e))
                 done = e
-            GLib.idle_add(once(self._app_saved, done, digitally_signed(path)))
+            certified = digitally_signed(sent)
+            GLib.idle_add(once(self._app_saved, done, certified, sent))
         threading.Thread(target=save, daemon=True).start()
+        return True
 
     @staticmethod
     def _merge_signatures(found):
@@ -210,7 +268,9 @@ class Signing:
             except (KeyError, TypeError, ValueError, OSError) as e:
                 log("signing: pen from the tablet not kept:", repr(e))
 
-    def _app_saved(self, result, certified=False):
+    def _app_saved(self, result, certified=False, sent=None):
+        if sent:
+            self._forget_sent(sent)
         if isinstance(result, Exception):
             note = Gio.Notification.new(_("Could not save: {error}").format(error=result))
             self.app.send_notification(NOTIFICATION, note)
@@ -276,9 +336,9 @@ class Signing:
         self.opening.discard(path)
         try:
             window = SignWindow(self.app, path, lambda result: self._done(window, path, result))
-        except GLib.Error as e:
+        except Exception as e:  # noqa: BLE001 - GLib.Error mostly (damaged, a password), but whatever it is
             note = Gio.Notification.new(_("Cannot open {name}").format(name=os.path.basename(path)))
-            note.set_body(e.message)
+            note.set_body(getattr(e, "message", None) or str(e))
             self.app.send_notification(NOTIFICATION, note)
             self._maybe_disconnect()
             return
@@ -324,7 +384,7 @@ class Signing:
     # -- notification actions --------------------------------------------------
     def _sign_here(self, _action, param):
         path = param.get_string()
-        self.in_app.discard(path)  # whatever the app sends back now is ignored
+        self.in_app.pop(path, None)  # whatever the app sends back now is ignored
         if path in self.queue:
             self.queue.remove(path)
         self.app.withdraw_notification(NOTIFICATION)

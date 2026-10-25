@@ -122,7 +122,8 @@ def test_date_and_save(window):
     out = results[0]
     assert out == str(src).replace(".pdf", "-signed.pdf")
     text = pypdf.PdfReader(out).pages[0].extract_text()
-    assert time.strftime("%d/%m/%Y") in text and "Original text page 1" in text
+    import datetime
+    assert sign.date_text(datetime.date.today()) in text and "Original text page 1" in text
 
 
 def test_no_way_out_while_saving(window):

@@ -175,3 +175,30 @@ def test_a_digital_signature_is_noticed(tmp_path):
     with open(src, "wb") as f:
         writer.write(f)
     assert digitally_signed(str(src))
+
+
+def test_a_pdf_that_needs_a_password_is_said_before_it_goes(tmp_path):
+    from pypdf import PdfWriter
+    from plusone.pdf import problem
+    writer = PdfWriter()
+    writer.add_blank_page(200, 200)
+    writer.encrypt("secret")
+    path = tmp_path / "locked.pdf"
+    with open(path, "wb") as f:
+        writer.write(f)
+    assert problem(str(path))[0] == "{name} needs a password to open: unlock it first"
+
+
+def test_page_boxes_with_indirect_corners(tmp_path):
+    # A height kept as an indirect object: the box as poppler reads it, not US Letter.
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.generic import ArrayObject, FloatObject, NameObject
+    from plusone.pdf import visible_box
+    writer = PdfWriter()
+    page = writer.add_blank_page(300, 400)
+    height = writer._add_object(FloatObject(400))
+    page[NameObject("/MediaBox")] = ArrayObject([FloatObject(0), FloatObject(0), FloatObject(300), height])
+    path = tmp_path / "indirect.pdf"
+    with open(path, "wb") as f:
+        writer.write(f)
+    assert visible_box(PdfReader(str(path)).pages[0]) == (0.0, 0.0, 300.0, 400.0)

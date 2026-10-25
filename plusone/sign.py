@@ -157,8 +157,10 @@ class PageRaster:
     every erased one."""
 
     def __init__(self, index, scale, page, size):
-        self.index, self.scale, self.page = index, scale, page
         w, h = size
+        # Cairo's surfaces are at most 32767 pixels a side (a long receipt, zoomed).
+        scale = min(scale, 32767 / max(w, 1e-6), 32767 / max(h, 1e-6))
+        self.index, self.scale, self.page = index, scale, page
         self.surface = cairo.ImageSurface(cairo.FORMAT_RGB24, max(1, int(w * scale)), max(1, int(h * scale)))
         self.drawn = ()        # marks on the surface (where rendered), in order
         self.tiles = {}        # (column, row) -> texture, made when first needed
@@ -270,11 +272,23 @@ def _overlap(a, b):
     return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
 
+def date_text(day):
+    """A date as the user's locale writes it (GTK set the locale): 05/10 is
+    October in Italy, May in the US. Without one (C), ISO 8601: unambiguous."""
+    import locale
+    language, _encoding = locale.getlocale(locale.LC_TIME)
+    return day.strftime("%x") if language and language not in ("C", "POSIX") else day.isoformat()
+
+
 def open_document(path):
     """A Poppler document, or raise GLib.Error (missing, damaged, password)."""
     doc = Poppler.Document.new_from_file(Gio.File.new_for_path(path).get_uri(), None)
     if doc.get_n_pages() == 0:
         raise GLib.Error("the PDF has no pages")  # shown as "Cannot open"
+    for i in range(doc.get_n_pages()):
+        width, height = doc.get_page(i).get_size()
+        if not (width > 0 and height > 0):  # a crop box outside its media box, say
+            raise GLib.Error(f"page {i + 1} has no size")
     return doc
 
 
@@ -438,11 +452,15 @@ class PageArea(Gtk.Widget):
 
     def _scroll(self, controller, dx, dy):
         state = controller.get_current_event_state()
+        # A mouse wheel says notches; a touchpad, pixels, many events a gesture.
+        wheel = controller.get_unit() == Gdk.ScrollUnit.WHEEL
         if state & Gdk.ModifierType.CONTROL_MASK:
             x, y = self.get_width() / 2, self.get_height() / 2
-            self.view.zoom_at(self.view.zoom * (0.9 if dy > 0 else 1.1), x, y)
+            factor = (0.9 if dy > 0 else 1.1) if wheel else math.exp(-dy * 0.01)
+            self.view.zoom_at(self.view.zoom * factor, x, y)
         else:
-            self.view.pan(-dx * 40, -dy * 40)
+            step = 40 if wheel else 1
+            self.view.pan(-dx * step, -dy * step)
         self.queue_draw()
         return True
 
@@ -764,7 +782,9 @@ class PageArea(Gtk.Widget):
                     start = math.degrees(math.atan2(point[1] - centre[1], point[0] - centre[0]))
                     self._grab = ("turn", centre, start, chosen.matrix, chosen.angle)
                 else:
-                    self._grab = ("scale", corners[(part + 2) % 4], corners[part], chosen.matrix)
+                    # From where the pointer took the handle (drawn on a box grown
+                    # for small marks): the size it had there, no jump.
+                    self._grab = ("scale", corners[(part + 2) % 4], point, chosen.matrix)
                 self._grabbed = -1 if part == 5 else part
                 self._stepped = False
                 self.queue_draw()
@@ -979,7 +999,10 @@ class SignWindow(Adw.ApplicationWindow):
     _css_loaded = False
 
     def __init__(self, app, path, on_done):
-        """on_done(signed path or None) runs once, when the window closes."""
+        """on_done(signed path or None) runs once, when the window closes.
+        Raises GLib.Error for a PDF it cannot open, before it is a window
+        (one made would hold the application)."""
+        doc = open_document(path)
         super().__init__(application=app, title=os.path.basename(path),
                          default_width=1000, default_height=820)
         if not SignWindow._css_loaded:
@@ -987,7 +1010,7 @@ class SignWindow(Adw.ApplicationWindow):
             SignWindow._css_loaded = True
         self.path = path
         self.on_done = on_done
-        self.doc = open_document(path)
+        self.doc = doc
         self.index = 0
         self.marks = {}       # page index -> [Stroke | Text]
         self.history = []     # (page index, its marks before a change), for undo
@@ -1279,7 +1302,7 @@ class SignWindow(Adw.ApplicationWindow):
         return True
 
     def _undo(self):
-        if self.history:
+        if self.history and not self._saving:
             index, marks = self.history[-1]
             if self.selection is not None and self.selection.page == index:
                 # The step restores the page as a whole: the selection was in it.
@@ -1293,6 +1316,8 @@ class SignWindow(Adw.ApplicationWindow):
         self._update()
 
     def _clear_page(self):
+        if self._saving:
+            return
         self.deselect()
         marks = self.marks.pop(self.index, [])
         if marks:
@@ -1301,9 +1326,11 @@ class SignWindow(Adw.ApplicationWindow):
 
     def _update(self):
         strokes = [m for m in self.marks.get(self.index, []) if isinstance(m, Stroke)]
-        self.undo.set_sensitive(bool(self.history))
+        saving = getattr(self, "_saving", False)
+        self.undo.set_sensitive(bool(self.history) and not saving)
         self.keep_button.set_visible(self.signature is None and bool(strokes))
-        self.done.set_sensitive(any(self.marks.values()) or self.selection is not None)
+        # While the copy is written, nothing changes and Done is not pressed twice.
+        self.done.set_sensitive(not saving and (any(self.marks.values()) or self.selection is not None))
         self.area.queue_draw()
 
     # -- selection -------------------------------------------------------------
@@ -1425,12 +1452,16 @@ class SignWindow(Adw.ApplicationWindow):
         self.deselect()
         strokes = [m for m in self.marks.get(self.index, []) if isinstance(m, Stroke)]
         if strokes:
-            signatures.add(normalize(strokes))
+            try:
+                signatures.add(normalize(strokes))
+            except (OSError, ValueError) as e:
+                self.toast(_("Could not save: {error}").format(error=getattr(e, "strerror", None) or e))
+                return
             self._signatures_changed()
             self.toast(_("Saved: next time, “My signature” places it with one tap"))
 
     def _place_date(self):
-        today = datetime.date.today().strftime("%d/%m/%Y")
+        today = date_text(datetime.date.today())
         self._arm(lambda x, y: [Text(x, y, today, color=self.pen_color)], _("Tap where the date goes"))
 
     def _ask_text(self):

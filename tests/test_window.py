@@ -116,7 +116,7 @@ def test_the_first_answer_to_the_code_counts(monkeypatch, tmp_path):
     dialog = gui.PairDialog(app)
     dialog.stage = Gtk.Box()
     results = []
-    asking = threading.Thread(target=lambda: results.append(dialog._ask("Tab", "123456")))
+    asking = threading.Thread(target=lambda: results.append(dialog._ask(dialog.attempt, "Tab", "123456")))
     asking.start()
     assert spin(lambda: dialog.answer is not None)
     dialog._answered(True)
@@ -182,3 +182,18 @@ def test_the_tablets_camera_and_microphone(monkeypatch, tmp_path):
     prefs = gui.PreferencesDialog(app, win)
     prefs.quality_row.set_selected(1)
     assert app.settings.camera_quality == "1080p"
+
+
+def test_a_closed_pairing_dialog_answers_no_at_once(monkeypatch, tmp_path):
+    # Closed before the code came: the tablet is not left asking for two minutes.
+    _win, app = make(monkeypatch, tmp_path)
+    dialog = gui.PairDialog(app)
+    dialog.closed = True
+    assert dialog._ask(dialog.attempt, "Tab", "123456") is False
+
+
+def test_an_older_attempt_does_not_answer_the_new_one(monkeypatch, tmp_path):
+    _win, app = make(monkeypatch, tmp_path)
+    dialog = gui.PairDialog(app)
+    dialog.attempt = 2  # another tablet chosen since attempt 1
+    assert dialog._ask(1, "Old", "111111") is False
