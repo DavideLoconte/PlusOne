@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# A newer push makes the older run of the same branch pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-24.04
@@ -15,8 +20,16 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           persist-credentials: false
-      - name: Build test container
-        run: docker build -f Dockerfile.ci -t plus-one-ci .
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+      - name: Build test container (its packages cached between runs)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.ci
+          tags: plus-one-ci
+          load: true
+          cache-from: type=gha,scope=ci
+          cache-to: type=gha,mode=max,scope=ci
       - name: Tests, package build and lintian
         run: |
           mkdir -p dist
@@ -39,8 +52,15 @@ jobs:
         with:
           bundle: plus-one.flatpak
           manifest-path: packaging/flatpak/io.github.gabrielesantangelo.PlusOne.yml
+          build-dir: flatpak_app
           # libnm only rebuilds when the manifest changes.
           cache-key: flatpak-builder-${{ hashFiles('packaging/flatpak/*.yml') }}
+      - name: Plus One starts in the Flatpak (libnm, GStreamer, libadwaita, Poppler there)
+        run: |
+          manifest=packaging/flatpak/io.github.gabrielesantangelo.PlusOne.yml
+          flatpak-builder --run flatpak_app "$manifest" plus-one --help
+          flatpak-builder --run flatpak_app "$manifest" env PYTHONPATH=/app/lib/plus-one python3 -P -c \
+            "import plusone.app, plusone.engine, plusone.devices, plusone.rtc, plusone.sign, plusone.signing"
 
   android:
     runs-on: ubuntu-24.04
@@ -48,8 +68,27 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
+      - name: Build container (the Android SDK cached between runs)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc  # v7.4.0
+        with:
+          context: .
+          file: Dockerfile.android
+          tags: plus-one-android
+          load: true
+          cache-from: type=gha,scope=android
+          cache-to: type=gha,mode=max,scope=android
+      - name: Gradle's downloads, cached between runs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gradle
+          key: gradle-${{ hashFiles('android/**/*.kts', 'android/gradle/**', 'Dockerfile.android') }}
+          restore-keys: gradle-
       - name: Companion app, in the same container as locally (lint errors fail it)
         run: tools/android-docker.sh lint assembleDebug
+        env:
+          PLUSONE_IMAGE_BUILT: "1"
+          PLUSONE_GRADLE_CACHE: ${{ runner.temp }}/gradle
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: apk
