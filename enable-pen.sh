@@ -1,24 +1,25 @@
 #!/bin/sh
-# Optional, needs sudo once (source installs; the .deb does this itself): lets
-# the plus-one group's members create virtual HID devices (/dev/uhid), so the
-# S Pen becomes a real Linux tablet with pressure and tilt, and adds you to
-# it. Note: any program you run could then also create virtual input devices
-# (same trust level as /dev/uinput access).
-# Undo: sudo gpasswd -d $USER plus-one && sudo rm /etc/udev/rules.d/70-plus-one-uhid.rules \
-#            /etc/modules-load.d/plus-one-uhid.conf && sudo udevadm trigger
+# Optional, needs sudo once (source installs; the .deb does this itself): the
+# S Pen's helper, so the pen becomes a real Linux tablet with pressure and
+# tilt. It runs as root only when Plus One asks (D-Bus activation), only for
+# the session in front of the PC (polkit), and makes the pen's virtual HID
+# device and nothing else: no group gets /dev/uhid (which could make keyboards).
+# Undo: sudo rm /usr/local/lib/plus-one/pen-helper \
+#            /usr/local/share/dbus-1/system-services/io.github.gabrielesantangelo.PlusOne.Pen.service \
+#            /etc/dbus-1/system.d/io.github.gabrielesantangelo.PlusOne.Pen.conf \
+#            /usr/share/polkit-1/actions/io.github.gabrielesantangelo.plusone.policy
 set -e
 here="$(dirname "$(readlink -f "$0")")"
-groupadd --system -f plus-one
-install -m 644 "$here/data/70-plus-one-uhid.rules" /etc/udev/rules.d/
+helper="$here/data/pen-helper"
+install -Dm 755 "$helper/plus-one-pen-helper" /usr/local/lib/plus-one/pen-helper
+install -d /usr/local/share/dbus-1/system-services
+sed 's|^Exec=/usr/lib/plus-one/pen-helper$|Exec=/usr/local/lib/plus-one/pen-helper|' \
+    "$helper/io.github.gabrielesantangelo.PlusOne.Pen.service" \
+    > /usr/local/share/dbus-1/system-services/io.github.gabrielesantangelo.PlusOne.Pen.service
+install -Dm 644 "$helper/io.github.gabrielesantangelo.PlusOne.Pen.conf" /etc/dbus-1/system.d/
+install -Dm 644 "$helper/io.github.gabrielesantangelo.plusone.policy" /usr/share/polkit-1/actions/
 # /dev/uhid is only a placeholder until the module loads; load it now and at boot.
 install -m 644 "$here/data/plus-one-uhid.conf" /etc/modules-load.d/
-udevadm control --reload
 modprobe uhid
-udevadm trigger --action=change --subsystem-match=misc --sysname-match=uhid
-udevadm settle
-if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != root ]; then
-    usermod -aG plus-one "$SUDO_USER"
-    echo "Done: $SUDO_USER is in the plus-one group. Log out and back in for the pen's pressure."
-else
-    echo "Done. Join the group (sudo usermod -aG plus-one \$USER), then log out and back in."
-fi
+dbus-send --system --type=method_call --dest=org.freedesktop.DBus / org.freedesktop.DBus.ReloadConfig
+echo "Done: the S Pen has its pressure from Plus One's next session (no need to log out)."

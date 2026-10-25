@@ -70,25 +70,29 @@ def test_feed_gives_every_report_to_each_reader():
 
 
 def test_why_the_pen_has_no_pressure(monkeypatch):
-    import grp
-    import os
-    import pwd
-    import types
+    # No group to join any more: the helper, or nothing.
     from plusone import pen
-    group = types.SimpleNamespace(gr_gid=4242, gr_mem=["someone"])
-    monkeypatch.setattr(pwd, "getpwuid", lambda uid: types.SimpleNamespace(pw_name="me"))
-    monkeypatch.setattr(os, "getgroups", lambda: [1000])
     monkeypatch.setattr(pen, "uhid_available", lambda: False)
-
-    def no_group(name):
-        raise KeyError(name)
-    monkeypatch.setattr(grp, "getgrnam", no_group)
     assert pen.uhid_missing() == "set up"
-    monkeypatch.setattr(grp, "getgrnam", lambda name: group)
-    assert pen.uhid_missing() == "join"
-    group.gr_mem.append("me")
-    assert pen.uhid_missing() == "log in"
-    monkeypatch.setattr(os, "getgroups", lambda: [1000, 4242])
-    assert pen.uhid_missing() == "set up"  # in it, and still no access: no rule
     monkeypatch.setattr(pen, "uhid_available", lambda: True)
     assert pen.uhid_missing() is None
+
+
+def test_the_helper_takes_only_pen_reports(monkeypatch):
+    # The helper's socket carries the pen's 10-byte reports and nothing else.
+    import socket
+    from plusone import pen
+    ours, theirs = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    device = pen.HelperPen(ours)
+    device.report(b"\x14" + bytes(9))      # a pen report
+    device.report(b"\x01\x02\x03")          # not one: not sent
+    assert theirs.recv(64) == b"\x14" + bytes(9)
+    theirs.setblocking(False)
+    try:
+        theirs.recv(64)
+        raise AssertionError("more than the pen's report went")
+    except BlockingIOError:
+        pass
+    device.close()
+    theirs.setblocking(True)
+    assert theirs.recv(64) == b""  # closed: the helper takes its pen away

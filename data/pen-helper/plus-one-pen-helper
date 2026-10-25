@@ -1,0 +1,170 @@
+#!/usr/bin/python3 -P
+"""Plus One's S Pen with pressure and tilt, for the session in front of the
+PC. As root (D-Bus activated on the system bus), one virtual HID tablet per
+caller on /dev/uhid, with the S Pen's own descriptor, fed only the pen's
+reports, which the caller sends through a socket it gets from Open().
+Polkit says who may: the active local session (the action below).
+
+Not a /dev/uhid file descriptor handed out: its holder could destroy the
+pen and create a keyboard on it. Through the socket only 10-byte pen
+reports pass; anything else is dropped. The pen goes when the socket closes.
+
+--session: on the session bus, as the user, no polkit (for trying it out:
+then it can do only what the user could already)."""
+import os
+import socket
+import struct
+import sys
+
+import gi
+
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib  # noqa: E402
+
+NAME = "io.github.gabrielesantangelo.PlusOne.Pen"
+PATH = "/io/github/gabrielesantangelo/PlusOne/Pen"
+ACTION = "io.github.gabrielesantangelo.plusone.pen"
+XML = f"""<node><interface name="{NAME}">
+  <method name="Open"><arg name="reports" type="h" direction="out"/></method>
+</interface></node>"""
+UHID = "/dev/uhid"
+UHID_DESTROY, UHID_CREATE2, UHID_INPUT2 = 1, 11, 12
+BUS_VIRTUAL = 0x06
+VENDOR, PRODUCT = 0x04E8, 0x5350  # as plusone/pen.py: GNOME maps it onto the virtual monitor by these
+DEVICE_NAME = "Plus One S Pen"
+REPORT_ID, REPORT_SIZE = 0x14, 10
+# plusone/pen.py S_PEN: Digitizer / Pen / Stylus, nothing else.
+S_PEN = bytes.fromhex(
+    "050d0902a10185140920a10009420944093c0945093215002501750195058102950381030501"
+    "093075109501a4550d65133500463a2027ff7f000081020931462c1827ff7f00008102b4050d"
+    "093026001081027508093d15a6255a8102093e8102c0c0")
+MAX_PENS = 4   # at once, all callers together
+IDLE = 60      # seconds without a pen before the helper exits (activated again on demand)
+
+pens = {}      # our end's fd -> Pen
+loop = GLib.MainLoop()
+idle_source = None
+
+
+class Pen:
+    def __init__(self):
+        self.uhid = os.open(UHID, os.O_RDWR | os.O_CLOEXEC | os.O_NONBLOCK)
+        try:
+            os.write(self.uhid, struct.pack("<I128s64s64sHHIIII", UHID_CREATE2, DEVICE_NAME.encode(),
+                                            b"plus-one", b"", len(S_PEN), BUS_VIRTUAL, VENDOR, PRODUCT, 1, 0)
+                     + S_PEN)
+        except OSError:
+            os.close(self.uhid)
+            raise
+        self.ours, self.theirs = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        self.ours.setblocking(False)
+        self.watches = [
+            GLib.io_add_watch(self.ours.fileno(), GLib.PRIORITY_HIGH,
+                              GLib.IOCondition.IN | GLib.IOCondition.HUP | GLib.IOCondition.ERR, self._report),
+            # The kernel's start/open notifications: read, or its queue fills.
+            GLib.io_add_watch(self.uhid, GLib.PRIORITY_DEFAULT, GLib.IOCondition.IN, self._drain),
+        ]
+        pens[self.ours.fileno()] = self
+
+    def _report(self, _fd, condition):
+        if condition & (GLib.IOCondition.HUP | GLib.IOCondition.ERR):
+            self.close()
+            return False
+        try:
+            data = self.ours.recv(64)
+        except BlockingIOError:
+            return True
+        except OSError:
+            self.close()
+            return False
+        if not data:
+            self.close()
+            return False
+        if len(data) == REPORT_SIZE and data[0] == REPORT_ID:  # the pen's, and only that
+            try:
+                os.write(self.uhid, struct.pack("<IH", UHID_INPUT2, len(data)) + data)
+            except OSError:
+                pass
+        return True
+
+    def _drain(self, _fd, _condition):
+        try:
+            os.read(self.uhid, 4380)
+        except OSError:
+            pass
+        return True
+
+    def close(self):
+        if pens.pop(self.ours.fileno(), None) is None:
+            return
+        for watch in self.watches:
+            GLib.source_remove(watch)
+        try:
+            os.write(self.uhid, struct.pack("<I", UHID_DESTROY))
+        except OSError:
+            pass
+        os.close(self.uhid)
+        self.ours.close()
+        arm_idle()
+
+
+def authorized(bus, sender):
+    if bus is None:
+        return True  # --session: the user's own rights
+    subject = ("system-bus-name", {"name": GLib.Variant("s", sender)})
+    reply = bus.call_sync("org.freedesktop.PolicyKit1", "/org/freedesktop/PolicyKit1/Authority",
+                          "org.freedesktop.PolicyKit1.Authority", "CheckAuthorization",
+                          GLib.Variant("((sa{sv})sa{ss}us)", (subject, ACTION, {}, 0, "")),
+                          GLib.VariantType("((bba{ss}))"), Gio.DBusCallFlags.NONE, 10000, None)
+    return reply.unpack()[0][0]
+
+
+def method_call(connection, sender, _path, _interface, method, _params, invocation, polkit_bus):
+    if method != "Open":
+        invocation.return_dbus_error("org.freedesktop.DBus.Error.UnknownMethod", method)
+        return
+    try:
+        if not authorized(polkit_bus, sender):
+            invocation.return_dbus_error("org.freedesktop.DBus.Error.AccessDenied",
+                                         "not the session in front of this PC")
+            return
+        if len(pens) >= MAX_PENS:
+            invocation.return_dbus_error("org.freedesktop.DBus.Error.LimitsExceeded", "too many pens")
+            return
+        pen = Pen()
+    except (GLib.Error, OSError) as e:
+        invocation.return_dbus_error("org.freedesktop.DBus.Error.Failed", str(e))
+        return
+    fds = Gio.UnixFDList.new()
+    fds.append(pen.theirs.fileno())
+    pen.theirs.close()  # the list holds its own copy
+    invocation.return_value_with_unix_fd_list(GLib.Variant("(h)", (0,)), fds)
+    arm_idle()
+
+
+def arm_idle():
+    global idle_source
+    if idle_source:
+        GLib.source_remove(idle_source)
+    idle_source = GLib.timeout_add_seconds(IDLE, lambda: (not pens and loop.quit()) or True)
+
+
+def main():
+    session = "--session" in sys.argv[1:]
+    bus_type = Gio.BusType.SESSION if session else Gio.BusType.SYSTEM
+    interface = Gio.DBusNodeInfo.new_for_xml(XML).interfaces[0]
+
+    def acquired(connection, _name):
+        polkit_bus = None if session else connection
+        connection.register_object(PATH, interface,
+                                   lambda *a: method_call(*a, polkit_bus), None, None)
+
+    Gio.bus_own_name(bus_type, NAME, Gio.BusNameOwnerFlags.NONE, acquired, None, lambda *a: loop.quit())
+    arm_idle()
+    loop.run()
+    for pen in list(pens.values()):
+        pen.close()
+
+
+if __name__ == "__main__":
+    main()

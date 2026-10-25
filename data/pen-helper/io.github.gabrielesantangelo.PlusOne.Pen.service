@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=io.github.gabrielesantangelo.PlusOne.Pen
+Exec=/usr/lib/plus-one/pen-helper
+User=root

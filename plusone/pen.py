@@ -14,20 +14,18 @@ The reports are also published, all of them, to readers in this process
 (`feed`): the signing window draws with those.
 """
 import collections
-import grp
 import os
-import pwd
 import select
+import socket
 import struct
 import threading
 import time
 
-from gi.repository import Gio
+from gi.repository import Gio, GLib
 
 from . import log
 
 UHID_PATH = "/dev/uhid"
-UHID_GROUP = "plus-one"  # data/70-plus-one-uhid.rules
 UHID_DESTROY, UHID_CREATE2, UHID_INPUT2 = 1, 11, 12
 BUS_VIRTUAL = 0x06
 VENDOR, PRODUCT = 0x04E8, 0x5350  # Samsung vendor id, "SP"
@@ -90,24 +88,77 @@ class Feed:
 feed = Feed()
 
 
+HELPER = "io.github.gabrielesantangelo.PlusOne.Pen"  # data/pen-helper
+HELPER_PATH = "/io/github/gabrielesantangelo/PlusOne/Pen"
+
+
+def helper_bus():
+    """The bus Plus One's pen helper is on (the system's, or for trying it
+    out the session's), or None when it is not there."""
+    for bus_type in (Gio.BusType.SYSTEM, Gio.BusType.SESSION):
+        try:
+            bus = Gio.bus_get_sync(bus_type, None)
+            names = set()
+            for method in ("ListNames", "ListActivatableNames"):
+                names.update(bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+                                           method, None, GLib.VariantType("(as)"), Gio.DBusCallFlags.NONE,
+                                           2000, None).unpack()[0])
+            if HELPER in names:
+                return bus
+        except GLib.Error:
+            continue
+    return None
+
+
 def uhid_available():
-    return os.access(UHID_PATH, os.R_OK | os.W_OK)
+    """Whether the pen can be a tablet with pressure: the helper, or /dev/uhid itself."""
+    return helper_bus() is not None or os.access(UHID_PATH, os.R_OK | os.W_OK)
+
+
+def tablet_pen():
+    """The S Pen as a pen tablet: through the helper (the only way with the
+    .deb: no group with /dev/uhid), else /dev/uhid directly if this user may."""
+    bus = helper_bus()
+    if bus is not None:
+        try:
+            reply, fds = bus.call_with_unix_fd_list_sync(HELPER, HELPER_PATH, HELPER, "Open", None,
+                                                         GLib.VariantType("(h)"), Gio.DBusCallFlags.NONE,
+                                                         10000, None, None)
+            return HelperPen(socket.socket(fileno=fds.get(reply.unpack()[0])))
+        except GLib.Error as e:
+            log("pen: the helper said no:", e.message)
+    if os.access(UHID_PATH, os.R_OK | os.W_OK):
+        return UhidPen()
+    return None
 
 
 def uhid_missing():
-    """Why the pen has no pressure, or None if it has it: "join" (the user is
-    not in the plus-one group), "log in" (joined, but not in this session
-    yet) or "set up" (no such group here: no rule, or a Flatpak)."""
-    if uhid_available():
-        return None
-    try:
-        group = grp.getgrnam(UHID_GROUP)
-        user = pwd.getpwuid(os.getuid()).pw_name
-    except KeyError:
-        return "set up"
-    if group.gr_gid in os.getgroups():
-        return "set up"
-    return "log in" if user in group.gr_mem else "join"
+    """Why the pen has no pressure, or None if it has it: "set up" (no
+    helper: from source without enable-pen.sh, or a Flatpak on a PC without
+    the .deb)."""
+    return None if uhid_available() else "set up"
+
+
+class HelperPen:
+    """The pen tablet the helper made for us: its reports go to it through
+    the socket (it checks each is one), and it goes when the socket closes."""
+
+    def __init__(self, sock):
+        self.sock = sock
+        self.sock.setblocking(False)
+        log("pen: virtual HID tablet created by the helper (pressure and tilt)")
+
+    def report(self, data):
+        if is_report(data):
+            try:
+                self.sock.send(data)
+            except BlockingIOError:
+                pass  # the helper behind: this one report goes, not the session
+            except OSError:
+                pass
+
+    def close(self):
+        self.sock.close()
 
 
 class UhidPen:

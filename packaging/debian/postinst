@@ -1,27 +1,32 @@
 #!/bin/sh
 set -e
 if [ "$1" = "configure" ]; then
-    # Who may create the S Pen's device (/dev/uhid): this group's members.
-    groupadd --system -f plus-one
     # Not in a chroot or an image being built: no modules, no devices there.
     if [ -d /run/systemd/system ] && ! ischroot 2>/dev/null; then
-        # Apply the S Pen rule now: /dev/uhid only exists once the module is loaded.
-        udevadm control --reload 2>/dev/null || true
+        # The S Pen's helper and its policy: D-Bus reads them again.
+        dbus-send --system --type=method_call --dest=org.freedesktop.DBus / \
+            org.freedesktop.DBus.ReloadConfig 2>/dev/null || true
         modprobe uhid 2>/dev/null || true
-        # Up to 0.4 whoever was logged in had it (an ACL, from a uaccess tag
-        # udev keeps): removed and added again, so that tag goes, then the
-        # ACL. A change event alone gave it back.
+        # /dev/uhid is root's alone again: up to 0.5 a group had it (and up
+        # to 0.4 whoever was logged in, through an ACL from a uaccess tag udev
+        # keeps). Removed and added again, so that tag goes; group, mode and
+        # ACL put back by hand (udev keeps what a rule once set).
+        udevadm control --reload 2>/dev/null || true
         udevadm trigger --action=remove --subsystem-match=misc --sysname-match=uhid 2>/dev/null || true
         udevadm trigger --action=add --subsystem-match=misc --sysname-match=uhid 2>/dev/null || true
         udevadm settle 2>/dev/null || true
-        setfacl -b /dev/uhid 2>/dev/null || true
+        if [ -e /dev/uhid ]; then
+            chgrp root /dev/uhid 2>/dev/null || true
+            chmod 600 /dev/uhid 2>/dev/null || true
+            setfacl -b /dev/uhid 2>/dev/null || true
+        fi
         # The camera's loopback device, if the kernel has the module (else
         # v4l2loopback-dkms brings it); Plus One says so in its window otherwise.
         modprobe v4l2loopback 2>/dev/null || true
     fi
-    if [ -z "$2" ] || dpkg --compare-versions "$2" lt 0.5; then
-        echo "Plus One: for the S Pen's pressure and tilt, join the plus-one group once:"
-        echo "    sudo usermod -aG plus-one \$USER    (then log out and back in)"
+    if [ -n "$2" ] && dpkg --compare-versions "$2" lt 0.6 && getent group plus-one >/dev/null; then
+        echo "Plus One: the S Pen no longer needs the plus-one group (a helper makes it);"
+        echo "    sudo groupdel plus-one    removes it, if nothing else of yours uses it."
     fi
 fi
 exit 0

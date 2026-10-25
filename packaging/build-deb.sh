@@ -14,7 +14,8 @@ rm -rf "$root"
 install -d "$root/DEBIAN" "$root/usr/bin" "$root/usr/lib/$pkg" \
     "$root/usr/share/applications" "$root/usr/share/icons/hicolor/scalable/apps" \
     "$root/usr/share/metainfo" "$root/usr/share/doc/$pkg" "$root/usr/share/dbus-1/services" \
-    "$root/usr/lib/udev/rules.d" "$root/usr/lib/modules-load.d" "$root/usr/lib/modprobe.d"
+    "$root/usr/lib/modules-load.d" "$root/usr/lib/modprobe.d" \
+    "$root/usr/share/dbus-1/system-services" "$root/usr/share/dbus-1/system.d" "$root/usr/share/polkit-1/actions"
 
 cp -r "$top/plusone" "$root/usr/lib/$pkg/"
 find "$root/usr/lib/$pkg" -name __pycache__ -prune -exec rm -rf {} +
@@ -36,8 +37,14 @@ install -Dm 644 "$top/data/nautilus/plus-one-sign.py" "$root/usr/share/nautilus-
 install -d "$root/usr/share/gnome-shell/extensions"
 cp -r "$top/data/gnome-shell/." "$root/usr/share/gnome-shell/extensions/"
 chmod -R u=rwX,go=rX "$root/usr/share/gnome-shell"
-# S Pen as a real tablet: let the desktop user create virtual HID devices.
-install -m 644 "$top/data/70-$pkg-uhid.rules" "$root/usr/lib/udev/rules.d/"
+# S Pen as a real tablet: a helper (root, D-Bus activated) makes the pen's
+# virtual HID device for the session in front of the PC (polkit), and takes
+# only pen reports; nobody gets /dev/uhid itself (which could make keyboards).
+install -m 755 "$top/data/pen-helper/plus-one-pen-helper" "$root/usr/lib/$pkg/pen-helper"
+install -m 644 "$top/data/pen-helper/io.github.gabrielesantangelo.PlusOne.Pen.service" \
+    "$root/usr/share/dbus-1/system-services/"
+install -m 644 "$top/data/pen-helper/io.github.gabrielesantangelo.PlusOne.Pen.conf" "$root/usr/share/dbus-1/system.d/"
+install -m 644 "$top/data/pen-helper/io.github.gabrielesantangelo.plusone.policy" "$root/usr/share/polkit-1/actions/"
 install -m 644 "$top/data/$pkg-uhid.conf" "$root/usr/lib/modules-load.d/"
 # The tablet's camera as a webcam: a v4l2loopback device, loaded at boot.
 install -m 644 "$top/data/$pkg-camera.conf" "$root/usr/lib/modules-load.d/"
@@ -73,7 +80,7 @@ Priority: optional
 Architecture: all
 Maintainer: $maintainer
 Installed-Size: $size
-Depends: python3 (>= 3.11), python3-gi, python3-gi-cairo, gir1.2-gtk-4.0, gir1.2-adw-1 (>= 1.5), gir1.2-gstreamer-1.0, gir1.2-nm-1.0, gir1.2-poppler-0.18, python3-pypdf, openssl, gstreamer1.0-pipewire, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-libav, gstreamer1.0-nice, gir1.2-gst-plugins-bad-1.0, swh-plugins, pulseaudio-utils, pipewire-bin, network-manager, avahi-daemon, kmod, udev, passwd, acl
+Depends: python3 (>= 3.11), python3-gi, python3-gi-cairo, gir1.2-gtk-4.0, gir1.2-adw-1 (>= 1.5), gir1.2-gstreamer-1.0, gir1.2-nm-1.0, gir1.2-poppler-0.18, python3-pypdf, openssl, gstreamer1.0-pipewire, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-libav, gstreamer1.0-nice, gir1.2-gst-plugins-bad-1.0, swh-plugins, pulseaudio-utils, pipewire-bin, network-manager, avahi-daemon, kmod, udev, acl, dbus, polkitd | policykit-1
 Recommends: gstreamer1.0-vaapi, gstreamer1.0-plugins-ugly, gstreamer1.0-x, gnome-shell (>= 45), python3-nautilus
 Suggests: adb
 Homepage: https://github.com/GabrieleSantangelo/PlusOne

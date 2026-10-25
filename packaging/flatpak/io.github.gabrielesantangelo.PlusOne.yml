@@ -18,6 +18,8 @@ finish-args:
   - --talk-name=org.gnome.Mutter.DisplayConfig
   - --talk-name=org.gnome.NetworkDisplays  # to warn when it holds the Wi-Fi Direct device
   - --system-talk-name=org.freedesktop.NetworkManager
+  # The S Pen's helper on the host (from the .deb or enable-pen.sh), for its pressure.
+  - --system-talk-name=io.github.gabrielesantangelo.PlusOne.Pen
   # Finding the tablets' app (mDNS): without it nothing can be paired.
   - --system-talk-name=org.freedesktop.Avahi
   # The tablet's microphone: a PipeWire source made with pactl.

@@ -1,4 +1,0 @@
-# The S Pen's pressure and tilt: Plus One creates a virtual HID device. Only
-# the plus-one group's members may (sudo usermod -aG plus-one $USER): any
-# program they run could create a keyboard or a mouse too.
-KERNEL=="uhid", SUBSYSTEM=="misc", GROUP="plus-one", MODE="0660"

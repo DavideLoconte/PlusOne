@@ -215,6 +215,9 @@ _IT = {
         "Non abbinato: il codice non è stato confermato su entrambi gli schermi",
     "{name} did not answer": "{name} non ha risposto",
     "Try again": "Riprova",
+    "Without Plus One's pen helper (the .deb installs it) the S Pen works as a mouse, without pressure":
+        "Senza l'aiutante di Plus One per la penna (lo installa il .deb) la S Pen funziona come un mouse, "
+        "senza pressione",
     "In use by {programs}": "In uso da {programs}",
     "Install Plus One on the tablet too, then pair it to use it as a second screen, to sign PDFs and as a webcam.":
         "Installa Plus One anche sul tablet, poi abbinalo per usarlo come secondo schermo, per firmare i PDF "

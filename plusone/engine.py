@@ -329,8 +329,11 @@ class Controller:
             except Exception as e:  # noqa: BLE001 - the pointer pen then
                 log("pen: not mapped to the monitor:", repr(e))
             if mapped:
-                return pen.UhidPen()
-            log("pen: the tablet's monitor not known to map it onto: the pointer instead")
+                device = pen.tablet_pen()
+                if device is not None:
+                    return device
+            else:
+                log("pen: the tablet's monitor not known to map it onto: the pointer instead")
         if self.mode is None:
             raise RuntimeError("no mode yet")
         return pen.PointerPen(self.monitor, self.mode[:2])

@@ -521,12 +521,11 @@ class PreferencesDialog(Adw.PreferencesDialog):
         self.bitrate_row.set_title(_("Quality"))
         self.bitrate_row.set_subtitle(_("Mbit/s: higher is sharper but uses more bandwidth"))
         self.bitrate_row.set_value(s.bitrate / 1000)
-        # Its subtitle says how to get the pen's pressure: a command to copy.
+        # Its subtitle says how to get the pen's pressure.
         self.touch_row = Adw.SwitchRow(title=_("Touch and S Pen"), active=s.touch, subtitle_selectable=True,
                                        subtitle={
-            "join": _("The S Pen has no pressure: sudo usermod -aG plus-one $USER, then log in again"),
-            "log in": _("Log out and back in for the S Pen's pressure"),
-            "set up": _("Without access to /dev/uhid the S Pen works as a mouse, without pressure"),
+            "set up": _("Without Plus One's pen helper (the .deb installs it) the S Pen works as a mouse, "
+                        "without pressure"),
         }.get(pen.uhid_missing(), ""))
         has_adb = shutil.which("adb") is not None
         self.adb_row = Adw.SwitchRow(title=_("Open Second Screen from here"), active=s.use_adb and has_adb,
