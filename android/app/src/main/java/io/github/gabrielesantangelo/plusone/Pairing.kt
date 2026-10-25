@@ -162,10 +162,12 @@ class PairingReceiver : BroadcastReceiver() {
     }
 }
 
-/** Ready again after a restart. */
+/** Ready again after a restart, and after an update (which stops the app:
+ * a PDF sent then found no app, and went to Second Screen instead). */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED && Options.alwaysReady(context)) {
+        val again = intent.action == Intent.ACTION_BOOT_COMPLETED || intent.action == Intent.ACTION_MY_PACKAGE_REPLACED
+        if (again && Options.alwaysReady(context)) {
             CompanionService.start(context)
         }
     }

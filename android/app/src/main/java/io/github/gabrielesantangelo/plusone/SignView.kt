@@ -364,11 +364,22 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
      * beside it they would be cut off, and still sent). */
     private fun onPage(p: Int, x: Float, y: Float) = pageRect(p).contains(x, y)
 
-    /** The view or the marks changed: draw again, and say what is to render now. */
+    /** The view or the marks changed: draw again, and say what is to render
+     * now. Only noted here: the scene is made once a frame (freshScene), not
+     * on every pen sample (the eraser and the lasso changed it hundreds of
+     * times a second, for one frame shown). */
     private fun changed(eraser: FloatArray? = null) {
-        if (continuous) follow()
-        scene = snapshot(eraser)
+        sceneDirty = true
+        sceneEraser = eraser
         requestScene()
+    }
+
+    /** The scene as things are now, made if anything changed since. */
+    private fun freshScene() {
+        if (!sceneDirty) return
+        sceneDirty = false
+        if (continuous) follow()
+        scene = snapshot(sceneEraser)
         want()
     }
 
@@ -487,6 +498,8 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
     // at a time then, at most once a frame; the latest wins.
     private var sceneInFlight = false
     private var sceneWanted = false
+    private var sceneDirty = false          // changed() since the scene was made
+    private var sceneEraser: FloatArray? = null
     private var frameWaiting = false
 
     private var sceneSent = 0L
@@ -509,6 +522,12 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
         postOnAnimation {
             frameWaiting = false
             if (sceneInFlight || !sceneWanted) return@postOnAnimation
+            // A stroke being drawn lives in the front-buffered layer, which a
+            // new multi-buffered frame would hide until pen-up (a tile coming
+            // in made the ink drawn so far vanish): the scene waits for the
+            // commit, which asks for it again.
+            if (stroke != null) return@postOnAnimation
+            freshScene()
             sceneWanted = false
             sceneInFlight = true
             sceneSent = SystemClock.uptimeMillis()
@@ -667,6 +686,7 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
                     changed()  // the eraser's ring goes
                 } else if (done != null) {
                     addMarks(strokePage, listOf(Stroke(done.toArray(), penWidth, penColor)))
+                    freshScene()  // the stroke in it, before commit draws it
                     sceneInFlight = true  // commit draws the multi-buffered layer too
                     sceneSent = SystemClock.uptimeMillis()
                     front.commit()
