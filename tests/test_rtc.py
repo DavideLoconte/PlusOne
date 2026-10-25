@@ -45,3 +45,48 @@ def test_what_breaks_in_the_pipeline_ends_the_session():
         assert "no stream" in receiver.failed()
     finally:
         receiver.close()
+
+
+def test_receivers_leave_nothing_behind():
+    # Each session's webrtcbin, ICE agent and sockets go with it (a signal
+    # handler holding the Receiver once kept about 56 fds a session).
+    import gc
+    import os
+
+    def fds():
+        return len(os.listdir("/proc/self/fd"))
+    rtc.Receiver("audio", lambda receiver, pad: None).close()  # what is made once per process
+    gc.collect()
+    before = fds()
+    for _ in range(4):
+        receiver = rtc.Receiver("audio", lambda receiver, pad: None)
+        receiver.offer()
+        receiver.close()
+    del receiver
+    gc.collect()
+    assert fds() - before < 8
+
+
+def test_media_only_from_the_certificate_the_answer_names():
+    import base64
+    import hashlib
+    import types
+    der = b"the app's certificate"
+    pem = "-----BEGIN CERTIFICATE-----\n" + base64.b64encode(der).decode() + "\n-----END CERTIFICATE-----\n"
+    digest = hashlib.sha256(der).hexdigest().upper()
+    fingerprint = ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))
+    linked = []
+    receiver = rtc.Receiver("audio", lambda receiver, pad: linked.append(pad))
+    try:
+        transport = types.SimpleNamespace(get_property=lambda name: pem)
+        receiver.transceiver = types.SimpleNamespace(
+            get_property=lambda name: types.SimpleNamespace(get_property=lambda name: transport))
+        receiver.fingerprint = fingerprint
+        receiver._pad_added(None, "pad")
+        assert linked == ["pad"] and receiver.broken is None
+        receiver.fingerprint = "00:" + fingerprint[3:]
+        receiver._pad_added(None, "pad 2")
+        assert linked == ["pad"] and "another certificate" in receiver.broken
+    finally:
+        receiver.transceiver = None
+        receiver.pipeline.set_state(rtc.Gst.State.NULL)

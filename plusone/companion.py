@@ -313,7 +313,8 @@ def _handshake(target, paired, ask_pairing, expect=None, pin=None, timeout=CONNE
             if not accepted or answer.get("type") != "pair-ok":
                 raise PairingRefused(name)
             paired.add(fp, name)
-            sock.settimeout(IO_TIMEOUT)
+        # The handshake's budget (0.1 s at worst by now) is no timeout for what follows.
+        sock.settimeout(IO_TIMEOUT)
         return sock, wire, name, fp, hello
     except Exception:
         sock.close()

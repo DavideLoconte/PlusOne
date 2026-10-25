@@ -356,17 +356,41 @@ def test_switched_on_only_with_a_tablet(monkeypatch):
     app = types.SimpleNamespace(settings=types.SimpleNamespace(camera=True, microphone=False),
                                 tablets=types.SimpleNamespace(active=lambda: None))
     manager = devices.Devices.__new__(devices.Devices)
-    manager.app = app
+    manager.app, manager.tablet = app, None
     manager.camera = types.SimpleNamespace(enable=lambda: calls.append("camera on"),
-                                           disable=lambda: calls.append("camera off"))
+                                           disable=lambda: calls.append("camera off"),
+                                           renew=lambda: calls.append("camera renewed"))
     manager.microphone = types.SimpleNamespace(enable=lambda: calls.append("mic on"),
                                                disable=lambda: calls.append("mic off"))
     manager.apply()
     assert calls == ["camera off", "mic off"]  # no tablet paired: neither
-    app.tablets.active = lambda: object()
+    one, other = types.SimpleNamespace(fingerprint="aa" * 32), types.SimpleNamespace(fingerprint="bb" * 32)
+    app.tablets.active = lambda: one
     calls.clear()
     manager.apply()
+    assert calls == ["camera on", "camera renewed", "mic off"]
+    calls.clear()
+    manager.apply()  # the same tablet: a session in progress goes on
     assert calls == ["camera on", "mic off"]
+    app.tablets.active = lambda: other  # another tablet in use: not one more moment from the first
+    calls.clear()
+    manager.apply()
+    assert calls == ["camera on", "camera renewed", "mic off"]
+
+
+def test_a_dropped_session_shows_black_not_the_last_picture(monkeypatch):
+    later = []
+    monkeypatch.setattr(devices.GLib, "idle_add", lambda call: later.append(call))
+    camera = devices.Camera(FakeApp())
+    camera.feed = object()
+    camera.producer = object()
+    camera.black, camera.live = "black pad", "live pad"
+    chosen = []
+    camera.selector = types.SimpleNamespace(set_property=lambda name, value: chosen.append(value))
+    camera._problem("away")
+    for call in later:
+        call()
+    assert chosen == ["black pad"]
 
 
 def test_a_stale_microphone_is_removed(monkeypatch):

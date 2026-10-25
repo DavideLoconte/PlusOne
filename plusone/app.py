@@ -112,9 +112,10 @@ def launcher():
 
 def exec_arg(command):
     """command as one argument of a desktop entry's Exec line: quoted, as
-    the Desktop Entry spec wants a path with spaces (or a %) to be."""
+    the Desktop Entry spec wants a path with spaces (or a %) to be; then
+    escaped again as a key file's string value (a backslash doubled)."""
     escaped = "".join("\\" + c if c in '"`$\\' else c for c in command).replace("%", "%%")
-    return f'"{escaped}"'
+    return '"' + escaped.replace("\\", "\\\\") + '"'
 
 
 def set_autostart(enabled, config_dir=None):
@@ -539,4 +540,15 @@ def replace_older_instance():
 def main(argv=None):
     log("Plus One", sys.argv[1:] or "")
     replace_older_instance()
-    return PlusOneApp().run(argv if argv is not None else sys.argv[:1])
+    app = PlusOneApp()
+    # On logout (or replace_older_instance's SIGTERM): do_shutdown runs, and
+    # takes the microphone's source with it, not left in the sound settings.
+    try:  # GLib >= 2.80 moved it; the old name warns in newer PyGObject (as __main__)
+        gi.require_version("GLibUnix", "2.0")
+        from gi.repository import GLibUnix
+        signal_add = GLibUnix.signal_add
+    except (ValueError, ImportError, AttributeError):
+        signal_add = GLib.unix_signal_add
+    for number in (signal.SIGTERM, signal.SIGINT):
+        signal_add(GLib.PRIORITY_DEFAULT, number, lambda: app.quit() or False)
+    return app.run(argv if argv is not None else sys.argv[:1])

@@ -6,6 +6,7 @@ then the tablet in use is asked for it over WebRTC (rtc.py), and lets go of
 it when the program does.
 """
 import ctypes
+import functools
 import glob
 import itertools
 import json
@@ -65,8 +66,10 @@ PLAIN_LEVEL = "volume volume=2.0"  # +6 dB
 H264_DECODERS = ("avdec_h264", "openh264dec", "vah264dec")
 
 
+@functools.lru_cache(maxsize=None)
 def ladspa(suffix):
-    """The element of the LADSPA plugin whose element name ends so, or None."""
+    """The element of the LADSPA plugin whose element name ends so, or None
+    (once per run: a scan of the whole registry)."""
     for factory in Gst.Registry.get().get_feature_list(Gst.ElementFactory):
         name = factory.get_name()
         if name.startswith("ladspa-") and name.endswith(suffix):
@@ -149,67 +152,86 @@ class Feed:
     def _run(self):
         kind = self.request["type"]
         while self._wanted.is_set():
+            delay = self._session(kind)
+            if delay:
+                self._wait(delay)  # after the session's link and webrtcbin are closed
+        log(f"{kind}: the tablet stopped")
+
+    def _session(self, kind):
+        """One session with the tablet in use, until it ends: seconds to
+        wait before the next, or None."""
+        sock = receiver = None
+        try:
             where = self.where()
             if not where or not where[0]:
                 self.on_problem("away")
-                self._wait(RETRY)
-                continue
-            sock = receiver = None
-            try:
-                sock, wire = companion.open_link(where[0], where[1])
-                self._sock = sock
-                if not self._wanted.is_set():
-                    continue  # stopped while it connected: stop() had no socket to close
-                receiver = self.receiver()
-                wire.send(dict(self.request, sdp=receiver.offer()))
-                reply = wire.receive()
-                if reply.get("type") == "refused":
-                    raise companion.Refused(str(reply.get("reason", "")))
-                if reply.get("type") != "answer":
-                    raise ValueError(f"the app answered {reply.get('type')!r}")
-                receiver.answer(str(reply.get("sdp", "")))
-                log(f"{kind}: from the tablet, over WebRTC")
-                self.on_ready()
-                # Held while wanted, the link up and the media flowing: the
-                # app hangs up by closing it, Plus One by closing it too. The
-                # pings tell the app this PC is still there (else it lets go).
-                said, heard, last, pinged = (0, 0, 0), 0, time.monotonic(), time.monotonic()
-                while self._wanted.is_set():
-                    problem = receiver.failed()
-                    if problem:
-                        raise ConnectionError(problem)
-                    if wire.readable(1.0):
-                        wire.receive()
-                    if time.monotonic() - pinged > KEEPALIVE:
-                        wire.send({"type": "ping"})
-                        pinged = time.monotonic()
-                    received, *losses = receiver.losses()
-                    if received > heard:
-                        heard, last = received, time.monotonic()
-                    elif time.monotonic() - last > SILENT_FOR:
-                        # Connected, and yet nothing comes: made again.
-                        raise TimeoutError(f"nothing from the tablet for {SILENT_FOR} s")
-                    if tuple(losses) != said:
-                        said = tuple(losses)
-                        log(f"{kind}: {received} packets, lost %d, asked again for %d, asked for %d key frames" % said)
-            except companion.Refused as e:
-                log(f"{kind}: the tablet said no ({e})")
-                self.on_problem(str(e))
-                # Turned off or not allowed there: the user has to act; else soon.
-                self._wait(REFUSED_RETRY if str(e) in ("off", "permission") else RETRY)
-            except Exception as e:  # noqa: BLE001 - not there, not answering, or gone: again in a while
-                if self._wanted.is_set():
-                    log(f"{kind}: no tablet:", repr(e))
-                    self.on_problem("away")
-                    self._wait(RETRY)
-            finally:
-                if receiver is not None:
-                    receiver.close()
-                if sock is not None:
-                    sock.close()
-                self._sock = None
-        log(f"{kind}: the tablet stopped")
+                return RETRY
+            sock, wire = companion.open_link(where[0], where[1])
+            self._sock = sock
+            if not self._wanted.is_set():
+                return None  # stopped while it connected: stop() had no socket to close
+            receiver = self.receiver()
+            wire.send(dict(self.request, sdp=receiver.offer()))
+            reply = wire.receive()
+            if reply.get("type") == "refused":
+                raise companion.Refused(str(reply.get("reason", "")))
+            if reply.get("type") != "answer":
+                raise ValueError(f"the app answered {reply.get('type')!r}")
+            receiver.answer(str(reply.get("sdp", "")))
+            log(f"{kind}: from the tablet, over WebRTC")
+            self.on_ready()
+            self._hold(kind, wire, receiver)
+            return None
+        except companion.Refused as e:
+            log(f"{kind}: the tablet said no ({e})")
+            self.on_problem(str(e))
+            # Turned off or not allowed there: the user has to act; else soon.
+            return REFUSED_RETRY if str(e) in ("off", "permission") else RETRY
+        except companion.PairingRefused as e:
+            # The tablet forgot this PC (or is another): pairing again is the user's.
+            log(f"{kind}: the tablet does not know this PC ({e})")
+            self.on_problem("unpaired")
+            return REFUSED_RETRY
+        except companion.Incompatible as e:
+            log(f"{kind}: {e}")
+            self.on_problem("version")
+            return REFUSED_RETRY
+        except Exception as e:  # noqa: BLE001 - not there, not answering, or gone: again in a while
+            if not self._wanted.is_set():
+                return None
+            log(f"{kind}: no tablet:", repr(e))
+            self.on_problem("away")
+            return RETRY
+        finally:
+            if receiver is not None:
+                receiver.close()
+            if sock is not None:
+                sock.close()
+            self._sock = None
 
+    def _hold(self, kind, wire, receiver):
+        """While wanted, the link up and the media flowing: the app hangs up
+        by closing it, Plus One by closing it too. The pings tell the app
+        this PC is still there (else it lets go)."""
+        said, heard, last, pinged = (0, 0, 0), 0, time.monotonic(), time.monotonic()
+        while self._wanted.is_set():
+            problem = receiver.failed()
+            if problem:
+                raise ConnectionError(problem)
+            if wire.readable(1.0):
+                wire.receive()
+            if time.monotonic() - pinged > KEEPALIVE:
+                wire.send({"type": "ping"})
+                pinged = time.monotonic()
+            received, *losses = receiver.losses()
+            if received > heard:
+                heard, last = received, time.monotonic()
+            elif time.monotonic() - last > SILENT_FOR:
+                # Connected, and yet nothing comes: made again.
+                raise TimeoutError(f"nothing from the tablet for {SILENT_FOR} s")
+            if tuple(losses) != said:
+                said = tuple(losses)
+                log(f"{kind}: {received} packets, lost %d, asked again for %d, asked for %d key frames" % said)
 
 class Opened:
     """How many times a device file is open now, by anyone, from inotify's
@@ -223,9 +245,13 @@ class Opened:
         self.count = self.baseline = 0
         libc = ctypes.CDLL(None, use_errno=True)
         self.fd = libc.inotify_init1(os.O_NONBLOCK | os.O_CLOEXEC)
-        if self.fd < 0 or libc.inotify_add_watch(self.fd, path.encode(), self.IN_OPEN | self.IN_CLOSE_WRITE
-                                                  | self.IN_CLOSE_NOWRITE) < 0:
+        if self.fd < 0:
             raise OSError(ctypes.get_errno(), "inotify")
+        if libc.inotify_add_watch(self.fd, path.encode(), self.IN_OPEN | self.IN_CLOSE_WRITE
+                                  | self.IN_CLOSE_NOWRITE) < 0:
+            error = ctypes.get_errno()
+            os.close(self.fd)
+            raise OSError(error, "inotify")
         self.source = GLib.io_add_watch(GLib.IOChannel.unix_new(self.fd), GLib.PRIORITY_DEFAULT,
                                         GLib.IOCondition.IN, self._read)
 
@@ -332,7 +358,7 @@ class Device:
 
     def _settle(self, in_use):
         self._timer = None
-        if in_use == self._in_use or self.state in ("off", "setup", "webrtc"):
+        if in_use == self._in_use or self.state in ("off", "setup", "webrtc", "decoder"):
             return
         self._in_use = in_use
         if in_use:
@@ -354,6 +380,16 @@ class Device:
         if self.feed:
             self.feed.stop()
             self.feed = None
+
+    def _ready(self):
+        GLib.idle_add(once(lambda: self.feed and self._set_state("in use")))
+
+    def renew(self):
+        """What a session asks for changed (the tablet in use, the noise
+        reduction): one in progress is made again with it."""
+        if self.feed:
+            self.end()
+            self.begin()
 
 
 class Camera(Device):
@@ -381,35 +417,46 @@ class Camera(Device):
         if self.rtc is None:
             self._set_state("webrtc")
             return
-        if not paths or self.decoder is None:
+        if not paths:
             self._set_state("setup")
             return
-        width, height, _bitrate = QUALITIES.get(self.app.settings.camera_quality, QUALITIES["720p"])
+        if self.decoder is None:
+            self._set_state("decoder")
+            return
+        width, height, _bitrate = self.size = QUALITIES.get(self.app.settings.camera_quality, QUALITIES["720p"])
         self.out = (f"video/x-raw,format=YUY2,width={width},height={height},framerate={FPS}/1,"
                     f"pixel-aspect-ratio=1/1,interlace-mode=progressive,colorimetry=bt601,chroma-site=jpeg")
-        for path in paths:
-            writer = Gst.parse_launch(f"appsrc name=frames is-live=true do-timestamp=true format=time "
-                                      f"caps={self.out} ! v4l2sink device={path} sync=false")
-            bus = writer.get_bus()
-            bus.add_signal_watch()
-            bus.connect("message::error", self._error)
-            # Watched before the writer opens it, which it keeps open: what is
-            # open once it plays is Plus One's, anything more another program's.
-            opened = Opened(path, self._opened)
-            writer.set_state(Gst.State.PLAYING)
-            writer.get_state(2 * Gst.SECOND)
-            opened.started()
-            self.writers.append(writer)
-            self.opened.append(opened)
-        self.frames = [writer.get_by_name("frames") for writer in self.writers]
-        self._produce()
+        try:
+            for path in paths:
+                writer = Gst.parse_launch(f"appsrc name=frames is-live=true do-timestamp=true format=time "
+                                          f"caps={self.out} ! v4l2sink device={path} sync=false")
+                self.writers.append(writer)  # from now on disable() takes it down
+                bus = writer.get_bus()
+                bus.add_signal_watch()
+                bus.connect("message::error", self._error)
+                # Watched before the writer opens it, which it keeps open: what is
+                # open once it plays is Plus One's, anything more another program's.
+                opened = Opened(path, self._opened)
+                self.opened.append(opened)
+                if writer.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
+                    raise RuntimeError(f"cannot write to {path}")
+                writer.get_state(2 * Gst.SECOND)
+                opened.started()
+            self.frames = [writer.get_by_name("frames") for writer in self.writers]
+            self._produce()
+        except (GLib.Error, OSError, RuntimeError) as e:
+            log("camera: not on:", getattr(e, "message", None) or str(e))
+            self.disable()
+            self._set_state("setup")
+            return
         self._set_state("ready")
         log("camera: on, as", ", ".join(paths))
         self._opened(None)  # a program that had it open already
 
     def _produce(self):
         """Black, or the tablet's picture once it decodes: into the writer."""
-        width, height, _bitrate = QUALITIES.get(self.app.settings.camera_quality, QUALITIES["720p"])
+        width, height, _bitrate = self.size  # the writers' (enable()), whatever the setting says now
+        self._produced = time.monotonic()
         raw = f"video/x-raw,format=I420,width={width},height={height},framerate={FPS}/1,pixel-aspect-ratio=1/1"
         self.raw = raw
         producer = Gst.parse_launch(
@@ -486,8 +533,14 @@ class Camera(Device):
         self.src.emit("push-buffer", sink.emit("pull-sample").get_buffer())
         return Gst.FlowReturn.OK
 
-    def _ready(self):
-        GLib.idle_add(once(lambda: self.feed and self._set_state("in use")))
+    def _problem(self, reason):
+        super()._problem(reason)
+        # The session dropped: black, not the last picture frozen, until the tablet's comes again.
+        GLib.idle_add(once(self._black))
+
+    def _black(self):
+        if self.producer:
+            self.selector.set_property("active-pad", self.black)
 
     def _decoded(self, _pad, _info):
         if self.feed and self.selector.get_property("active-pad") != self.live:
@@ -498,10 +551,14 @@ class Camera(Device):
         error, _debug = message.parse_error()
         log("camera:", error.message)
         if self.producer and bus is self.producer.get_bus():
-            # The tablet's picture broke it: made again, black until the next key frame.
+            # The tablet's picture broke it: made again, black until the next key frame
+            # (not at once again and again, should it keep breaking).
             bus.remove_signal_watch()
             self.producer.set_state(Gst.State.NULL)
-            self._produce()
+            self.producer = None
+            wait = max(0, 2 - (time.monotonic() - self._produced))
+            GLib.timeout_add(int(wait * 1000), once(lambda: self.writers and self.producer is None
+                                                    and self._produce()))
 
 
 class Microphone(Device):
@@ -551,7 +608,10 @@ class Microphone(Device):
             self.watch.force_exit()
             self.watch = None
         if self.module:
-            subprocess.run(["pactl", "unload-module", self.module], capture_output=True, timeout=5)
+            try:
+                subprocess.run(["pactl", "unload-module", self.module], capture_output=True, timeout=5)
+            except (OSError, subprocess.SubprocessError) as e:
+                log("microphone: its source not removed:", repr(e))
             self.module = None
         self.links.clear()
         self._in_use = False
@@ -628,12 +688,6 @@ class Microphone(Device):
         self.feed = Feed(request, self.where, self._receiver, self._ready, self._problem)
         self.feed.start()
 
-    def renew(self):
-        """Its noise reduction changed: a session in progress is made again with it."""
-        if self.feed:
-            self.end()
-            self.begin()
-
     def end(self):
         self.stop_feed()
 
@@ -664,9 +718,6 @@ class Microphone(Device):
         # linked, the program would hear nothing: the session is made again.
         threading.Thread(target=lambda: link_feed(name) or receiver.fail("could not link Plus One's stream "
                                                                          "into the source"), daemon=True).start()
-
-    def _ready(self):
-        GLib.idle_add(once(lambda: self.feed and self._set_state("in use")))
 
 
 def link_feed(name, wait=5):
@@ -730,7 +781,10 @@ def unload_stale():
         return
     for line in modules.splitlines():
         if f"sink_name={MIC_NAME}" in line or f"source_name={MIC_NAME}" in line:
-            subprocess.run(["pactl", "unload-module", line.split()[0]], capture_output=True, timeout=5)
+            try:
+                subprocess.run(["pactl", "unload-module", line.split()[0]], capture_output=True, timeout=5)
+            except (OSError, subprocess.SubprocessError):
+                pass
 
 
 class Devices:
@@ -740,13 +794,20 @@ class Devices:
         self.app = app
         self.camera = Camera(app)
         self.microphone = Microphone(app)
+        self.tablet = None  # the fingerprint of the tablet in use, as last applied
 
     def apply(self):
         settings = self.app.settings
-        tablet = self.app.tablets.active() is not None
+        active = self.app.tablets.active()
+        fingerprint = active.fingerprint if active is not None else None
+        changed, self.tablet = fingerprint != self.tablet, fingerprint
         for device, on in ((self.camera, settings.camera), (self.microphone, settings.microphone)):
-            if on and tablet:
+            if on and active is not None:
                 device.enable()
+                if changed:
+                    # Another tablet in use (or this one forgotten): not one
+                    # more moment from the one before.
+                    device.renew()
             else:
                 device.disable()
 

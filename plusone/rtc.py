@@ -5,6 +5,8 @@ sends. webrtcbin does the rest: ICE (host addresses: the same network),
 DTLS-SRTP, the jitter buffer, retransmissions and key frame requests, and
 the transport-wide feedback the app's congestion control works from.
 """
+import base64
+import hashlib
 import time
 
 import gi
@@ -44,21 +46,48 @@ class Receiver:
     def __init__(self, kind, on_pad):
         self.kind = kind
         self.broken = None
+        self.on_pad = on_pad
+        self.fingerprint = None  # the app's DTLS certificate's, from its answer
         self.pipeline = Gst.Pipeline.new(f"plusone-{kind}")
         self.webrtc = Gst.ElementFactory.make("webrtcbin", "webrtc")
         self.webrtc.set_property("bundle-policy", BUNDLE_MAX)
         self.webrtc.set_property("latency", JITTER[kind])
         self.pipeline.add(self.webrtc)
-        self.webrtc.connect("pad-added", lambda _webrtc, pad: on_pad(self, pad))
+        # Disconnected in close(): a handler holding this Receiver kept it,
+        # its webrtcbin, ICE agent and sockets (about 56 fds) alive for good.
+        self._handlers = [self.webrtc.connect("pad-added", self._pad_added)]
         for state in ("connection-state", "ice-connection-state"):
-            self.webrtc.connect(f"notify::{state}", lambda w, spec: log(
-                f"{kind}: WebRTC {spec.name}", w.get_property(spec.name).value_nick))
+            self._handlers.append(self.webrtc.connect(f"notify::{state}", lambda w, spec: log(
+                f"{kind}: WebRTC {spec.name}", w.get_property(spec.name).value_nick)))
         # An SSRC, or webrtcbin makes no offer (1.24); this side's, for its RTCP.
-        transceiver = self.webrtc.emit("add-transceiver", GstWebRTC.WebRTCRTPTransceiverDirection.RECVONLY,
-                                       Gst.Caps.from_string(f"{CAPS[kind]},ssrc=(uint){SSRC[kind]}"))
+        self.transceiver = self.webrtc.emit("add-transceiver", GstWebRTC.WebRTCRTPTransceiverDirection.RECVONLY,
+                                            Gst.Caps.from_string(f"{CAPS[kind]},ssrc=(uint){SSRC[kind]}"))
         if kind == "video":
-            transceiver.set_property("do-nack", True)  # lost packets asked for again
+            self.transceiver.set_property("do-nack", True)  # lost packets asked for again
         self.pipeline.set_state(Gst.State.PLAYING)
+
+    def _pad_added(self, _webrtc, pad):
+        # The media come once DTLS is done: from the app only if its
+        # certificate is the one its answer named (the paired link vouches
+        # for the answer; webrtcbin itself checks no fingerprint), else
+        # whoever won the handshake on the network would be the camera.
+        problem = self._peer_problem()
+        if problem:
+            log(f"{self.kind}: {problem}")
+            self.fail(problem)
+            return
+        self.on_pad(self, pad)
+
+    def _peer_problem(self):
+        transport = self.transceiver.get_property("receiver").get_property("transport")
+        pem = transport.get_property("remote-certificate") if transport else None
+        if not pem or not self.fingerprint:
+            return "no certificate to check the media's sender by"
+        body = "".join(line for line in pem.strip().splitlines() if not line.startswith("-----"))
+        digest = hashlib.sha256(base64.b64decode(body)).hexdigest().upper()
+        if ":".join(digest[i:i + 2] for i in range(0, len(digest), 2)) != self.fingerprint:
+            return "the media came with another certificate than the app's: not taken"
+        return None
 
     def offer(self):
         """The offer, as SDP text, with this side's ICE candidates in it."""
@@ -85,6 +114,11 @@ class Receiver:
         # GStreamer's parser takes about anything: an answer has this one medium.
         if result != GstSdp.SDPResult.OK or sdp.medias_len() != 1 or sdp.get_media(0).get_media() != self.kind:
             raise ValueError("the app's answer is not one")
+        fingerprints = {line.split(None, 1)[1].strip().upper() for line in text.splitlines()
+                        if line.lower().startswith("a=fingerprint:sha-256 ") and len(line.split(None, 1)) == 2}
+        if len(fingerprints) != 1:
+            raise ValueError("the app's answer has no one SHA-256 fingerprint")
+        self.fingerprint = fingerprints.pop()
         applied = Gst.Promise.new()
         self.webrtc.emit("set-remote-description",
                          GstWebRTC.WebRTCSessionDescription.new(GstWebRTC.WebRTCSDPType.ANSWER, sdp), applied)
@@ -133,7 +167,14 @@ class Receiver:
         return None
 
     def close(self):
+        if self.pipeline is None:
+            return
         self.pipeline.set_state(Gst.State.NULL)
+        for handler in self._handlers:
+            self.webrtc.disconnect(handler)
+        self._handlers = []
+        self.on_pad = None
+        self.transceiver = self.webrtc = self.pipeline = None
 
 
 def link(pipeline, pad, description):

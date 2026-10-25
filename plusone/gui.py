@@ -32,6 +32,8 @@ def device_status(kind, state):
                 else _("Needs PipeWire's pactl and pw-link"))
     if state == "webrtc":
         return _("Needs WebRTC for GStreamer: gstreamer1.0-nice and gir1.2-gst-plugins-bad-1.0")
+    if state == "decoder":
+        return _("Needs an H.264 decoder: gstreamer1.0-libav")
     camera = kind == "camera"
     return {
         "off": _("As a webcam for this PC's programs") if camera else _("As a microphone for this PC's programs"),
@@ -46,6 +48,8 @@ def device_status(kind, state):
         "tablet-background": _("On the tablet, let Plus One display over other apps"),
         "tablet-unavailable": _("On the tablet, another app is using the camera") if camera
         else _("On the tablet, another app is using the microphone"),
+        "tablet-unpaired": _("The tablet no longer knows this PC: pair it again"),
+        "tablet-version": _("Plus One on the tablet and on this PC are different versions: update them"),
     }.get(state, "")
 CSS = b".pair-code { font-size: 300%; font-weight: 800; letter-spacing: 0.1em; }"
 _resources_added = False
@@ -235,7 +239,8 @@ class Window(Adw.ApplicationWindow):
         PairDialog(self.app, on_paired=self._paired).present(self)
 
     def _paired(self, name):
-        self.toasts.add_toast(Adw.Toast(title=_("Paired with {name}").format(name=name)))
+        # The name is the tablet's own: shown as text, not markup.
+        self.toasts.add_toast(Adw.Toast(title=_("Paired with {name}").format(name=GLib.markup_escape_text(name))))
 
     def _show_signatures(self):
         from .ink import load_pen

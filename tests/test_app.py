@@ -101,3 +101,16 @@ def test_forgetting_the_tablet_in_use_ends_its_session(tmp_path):
     assert stopped == [] and paired.all() == {kitchen: "Kitchen"}
     app.PlusOneApp.forget_tablet(fake, kitchen)
     assert stopped == [True] and paired.all() == {} and fake.tablets.active() is None
+
+
+def test_exec_lines_survive_the_key_file(tmp_path):
+    # A launcher path with what the Desktop Entry spec and key files escape.
+    from gi.repository import GLib
+    from plusone.app import exec_arg
+    command = "/home/a b/$x`y\\z\"w%/bin/plus-one"
+    keyfile = GLib.KeyFile()
+    data = f"[Desktop Entry]\nExec={exec_arg(command)} --sign %F\n"
+    keyfile.load_from_data(data, len(data.encode()), GLib.KeyFileFlags.NONE)
+    exec_line = keyfile.get_string("Desktop Entry", "Exec")
+    ok, argv = GLib.shell_parse_argv(exec_line.replace("%%", "%"))
+    assert ok and argv[0] == command and argv[1:] == ["--sign", "%F"]
