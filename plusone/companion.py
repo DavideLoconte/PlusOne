@@ -515,14 +515,40 @@ def _wait(sock, wire, name, job, target, paired, on_opened, on_signatures, locat
     raise Lost(name)
 
 
-def capture(targets, request, expect, paired=None):
-    """(socket, wire, what the app says it sends) once the app at targets
-    (the tablet in use's addresses) captures for the PC: request is
-    {"type": "camera", "facing", "width", "height", "fps", "bitrate"} or
-    {"type": "microphone"}. The pieces follow (Wire.receive_piece) until the
-    socket is closed. Raises Refused, PairingRefused, OSError & co."""
+class _TcpLink:
+    """A capture's pieces on its TLS link itself (when UDP does not get through)."""
+
+    def __init__(self, sock, wire):
+        self.sock, self.wire = sock, wire
+
+    def receive_piece(self):
+        return self.wire.receive_piece()
+
+    def key_frame(self):
+        pass  # nothing is lost on the way
+
+    def close(self):
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        self.sock.close()
+
+
+def capture(targets, request, expect, paired=None, udp=True):
+    """(link, what the app says it sends) once the app at targets (the tablet
+    in use's addresses) captures for the PC: request is {"type": "camera",
+    "facing", "width", "height", "fps", "bitrate"} or {"type": "microphone"}.
+    link.receive_piece() gives the pieces, over UDP (datagrams.py) unless udp
+    is False, until link.close(). Raises Refused, PairingRefused, OSError & co."""
+    from . import datagrams
     sock, wire, _name = _connect_any(targets, paired or Paired(), None, expect)
+    dgram = None
     try:
+        if udp:
+            dgram = socket.socket(socket.AF_INET6 if sock.family == socket.AF_INET6 else socket.AF_INET,
+                                  socket.SOCK_DGRAM)
+            request = dict(request, transport="udp")
         wire.send(request)
         info = wire.receive(UNPAIRED_HEADER)
         if info.get("type") == "refused":
@@ -530,10 +556,16 @@ def capture(targets, request, expect, paired=None):
         if info.get("type") != request["type"]:
             raise ValueError(f"the app answered {info.get('type')!r}")
         sock.settimeout(IO_TIMEOUT)
+        if dgram is not None and "udp" in info:
+            return datagrams.Link(sock, wire, info, dgram), info
     except BaseException:
         sock.close()
+        if dgram is not None:
+            dgram.close()
         raise
-    return sock, wire, info
+    if dgram is not None:
+        dgram.close()
+    return _TcpLink(sock, wire), info
 
 
 def _finite(value):

@@ -32,11 +32,12 @@ import kotlin.math.abs
 
 /**
  * The tablet's camera or microphone for the PC (plusone/devices.py): what
- * it captures, encoded here (H.264, Opus) and sent on the connection the PC
- * asked on, until it hangs up. The PC asks only while one of its programs
- * uses the device, so nothing goes over the network otherwise.
+ * it captures, encoded here (H.264, Opus) and sent to the PC that asked
+ * (Out: as datagrams, or on its connection), until it hangs up. The PC asks
+ * only while one of its programs uses the device, so nothing goes over the
+ * network otherwise.
  */
-abstract class Capture(protected val wire: Wire) {
+abstract class Capture(protected val out: Out) {
     @Volatile protected var stopped = false
 
     /** Starts capturing; returns what the PC is to expect. Throws if it cannot. */
@@ -45,14 +46,12 @@ abstract class Capture(protected val wire: Wire) {
     /** Ends it, whichever thread asks (the PC hung up, the link broke). */
     abstract fun stop()
 
+    /** The PC lost a frame: the next one is a key frame, which needs no other. */
+    open fun keyFrame() {}
+
     /** Sends one encoded piece; a link that is gone ends the capture. */
     protected fun send(type: String, info: MediaCodec.BufferInfo, data: ByteArray) {
-        try {
-            wire.send(JSONObject().put("type", type).put("pts", info.presentationTimeUs)
-                .put("key", info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0), data)
-        } catch (e: IOException) {
-            stop()
-        }
+        if (!out.piece(type, info, data)) stop()
     }
 
     /** The codec's output, sent as it comes, until stopped; then the codec goes. */
@@ -88,7 +87,7 @@ abstract class Capture(protected val wire: Wire) {
 }
 
 /** The camera, as H.264 frames the size and rate the PC asked for (about). */
-class CameraCapture(private val context: Context, wire: Wire, request: JSONObject) : Capture(wire) {
+class CameraCapture(private val context: Context, out: Out, request: JSONObject) : Capture(out) {
     private val facing = if (request.optString("facing") == "back") CameraCharacteristics.LENS_FACING_BACK
         else CameraCharacteristics.LENS_FACING_FRONT
     private val wanted = Size(request.optInt("width", 1280).coerceIn(320, 1920),
@@ -100,6 +99,15 @@ class CameraCapture(private val context: Context, wire: Wire, request: JSONObjec
     private val executor = Executor { handler.post(it) }
     @Volatile private var camera: CameraDevice? = null
     @Volatile private var session: CameraCaptureSession? = null
+    @Volatile private var encoder: MediaCodec? = null
+
+    override fun keyFrame() {
+        try {
+            encoder?.setParameters(android.os.Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) })
+        } catch (e: IllegalStateException) {
+            // Stopped meanwhile.
+        }
+    }
 
     @SuppressLint("MissingPermission")  // CompanionService checks it first
     override fun start(): JSONObject {
@@ -127,6 +135,7 @@ class CameraCapture(private val context: Context, wire: Wire, request: JSONObjec
         codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         val surface = codec.createInputSurface()
         codec.start()
+        encoder = codec
         Thread({ drain(codec, "video") }, "plusone-camera-out").start()
 
         try {
@@ -204,7 +213,7 @@ class CameraCapture(private val context: Context, wire: Wire, request: JSONObjec
 }
 
 /** The microphone, as Opus packets (or plain samples where there is no Opus encoder). */
-class MicCapture(wire: Wire, request: JSONObject, private val noiseReduction: Boolean) : Capture(wire) {
+class MicCapture(out: Out, request: JSONObject, private val noiseReduction: Boolean) : Capture(out) {
     private val bitrate = request.optInt("bitrate", 32_000).coerceIn(12_000, 128_000)
     private var record: AudioRecord? = null
     private var gain: AutomaticGainControl? = null
@@ -283,5 +292,107 @@ class MicCapture(wire: Wire, request: JSONObject, private val noiseReduction: Bo
     companion object {
         const val RATE = 48_000
         const val FRAME_BYTES = RATE / 50 * 2  // 20 ms of 16-bit mono
+    }
+}
+
+
+/** Where a capture's encoded pieces go. */
+interface Out {
+    /** Sends one piece; false if the PC is gone. */
+    fun piece(type: String, info: MediaCodec.BufferInfo, data: ByteArray): Boolean
+}
+
+/** On the PC's TLS link itself: when UDP does not get through. */
+class WireOut(private val wire: Wire) : Out {
+    override fun piece(type: String, info: MediaCodec.BufferInfo, data: ByteArray) = try {
+        wire.send(JSONObject().put("type", type).put("pts", info.presentationTimeUs)
+            .put("key", info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0), data)
+        true
+    } catch (e: IOException) {
+        false
+    }
+}
+
+/**
+ * As datagrams (plusone/datagrams.py): nothing waits for a lost packet, as
+ * on TCP. Each one a 24-byte header (as associated data) and up to PART bytes
+ * of a piece sealed with AES-256-GCM, under a key made for this capture and
+ * given to the PC over TLS; the nonce is the salt and the sequence number.
+ * They go where a "punch" came from: the token, from the TLS peer's address.
+ */
+class DatagramOut(private val peer: java.net.InetAddress) : Out, java.io.Closeable {
+    private val random = java.security.SecureRandom()
+    private val key = ByteArray(32).also { random.nextBytes(it) }
+    private val salt = ByteArray(4).also { random.nextBytes(it) }
+    private val token = ByteArray(16).also { random.nextBytes(it) }
+    private val socket = java.net.DatagramSocket(0)
+    private val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
+    private val secret = javax.crypto.spec.SecretKeySpec(key, "AES")
+    @Volatile private var to: java.net.InetSocketAddress? = null
+    private var sequence = 0
+    private var frame = 0
+
+    init {
+        Thread(::listen, "plusone-punches").apply { isDaemon = true }.start()
+    }
+
+    /** What the PC needs, added to the capture's answer (over TLS). */
+    fun describe(answer: JSONObject): JSONObject = answer.put("udp", socket.localPort).put("key", hex(key))
+        .put("salt", hex(salt)).put("token", hex(token))
+
+    private fun listen() {
+        val buffer = ByteArray(64)
+        while (!socket.isClosed) {
+            val packet = java.net.DatagramPacket(buffer, buffer.size)
+            try {
+                socket.receive(packet)
+            } catch (e: IOException) {
+                break
+            }
+            if (same(packet.address, peer) && packet.length == token.size &&
+                token.contentEquals(buffer.copyOf(packet.length))) {
+                to = java.net.InetSocketAddress(packet.address, packet.port)
+            }
+        }
+    }
+
+    @Synchronized
+    override fun piece(type: String, info: MediaCodec.BufferInfo, data: ByteArray): Boolean {
+        val where = to ?: return !socket.isClosed  // the PC's first punch is on its way
+        var flags = 0
+        if (info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0) flags = flags or 1
+        if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) flags = flags or 2
+        val parts = maxOf(1, (data.size + PART - 1) / PART)
+        try {
+            for (part in 0 until parts) {
+                val header = java.nio.ByteBuffer.allocate(HEADER).put('P'.code.toByte()).put('1'.code.toByte())
+                    .put((if (type == "video") 'v' else 'a').code.toByte()).put(flags.toByte())
+                    .putInt(sequence).putInt(frame).putShort(part.toShort()).putShort(parts.toShort())
+                    .putLong(info.presentationTimeUs).array()
+                val nonce = java.nio.ByteBuffer.allocate(12).put(salt).putLong(sequence.toLong() and 0xffffffffL).array()
+                cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, secret, javax.crypto.spec.GCMParameterSpec(128, nonce))
+                cipher.updateAAD(header)
+                val sealed = cipher.doFinal(data, part * PART, minOf(PART, data.size - part * PART))
+                socket.send(java.net.DatagramPacket(header + sealed, header.size + sealed.size, where))
+                sequence++
+            }
+        } catch (e: IOException) {
+            return !socket.isClosed  // a datagram that could not go is a lost one, not a lost PC
+        }
+        frame++
+        return true
+    }
+
+    override fun close() = socket.close()
+
+    companion object {
+        const val HEADER = 24
+        const val PART = 1200  // bytes of a piece per datagram: under any LAN's MTU, sealed and with headers
+
+        private fun hex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }
+
+        /** The same host, an IPv4 one written as IPv6 ("::ffff:a.b.c.d") or not. */
+        private fun same(a: java.net.InetAddress, b: java.net.InetAddress) =
+            a.hostAddress?.removePrefix("::ffff:") == b.hostAddress?.removePrefix("::ffff:")
     }
 }

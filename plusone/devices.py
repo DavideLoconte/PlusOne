@@ -54,8 +54,9 @@ class Feed:
         self.where = where  # () -> (addresses, app id) of the tablet in use, or None
         self.on_info, self.on_piece, self.on_problem = on_info, on_piece, on_problem
         self._wanted = threading.Event()
-        self._sock = None
+        self._link = None
         self._thread = None
+        self.udp = True  # until it does not get through
 
     def start(self):
         if self._wanted.is_set():
@@ -66,12 +67,9 @@ class Feed:
 
     def stop(self):
         self._wanted.clear()
-        sock, self._sock = self._sock, None
-        if sock is not None:
-            try:
-                sock.shutdown(2)
-            except OSError:
-                pass
+        link, self._link = self._link, None
+        if link is not None:
+            link.close()
 
     def _wait(self, seconds):
         end = time.monotonic() + seconds
@@ -87,7 +85,7 @@ class Feed:
                 self._wait(RETRY)
                 continue
             try:
-                sock, wire, info = companion.capture(where[0], self.request, where[1])
+                link, info = companion.capture(where[0], self.request, where[1], udp=self.udp)
             except companion.Refused as e:
                 log(f"{kind}: the tablet said no ({e})")
                 self.on_problem(str(e))
@@ -99,18 +97,23 @@ class Feed:
                 self.on_problem("away")
                 self._wait(RETRY)
                 continue
-            self._sock = sock
-            log(f"{kind}: from the tablet", {k: v for k, v in info.items() if k != "type"})
+            self._link = link
+            log(f"{kind}: from the tablet", {k: v for k, v in info.items() if k not in ("type", "key", "token", "salt")})
             self.on_info(info)
+            pieces = 0
             try:
                 while self._wanted.is_set():
-                    self.on_piece(*wire.receive_piece())
+                    self.on_piece(*link.receive_piece())
+                    pieces += 1
             except Exception as e:  # noqa: BLE001 - the link went, or it was stopped
                 if self._wanted.is_set():
                     log(f"{kind}: lost the tablet:", repr(e))
+                    if "udp" in info and not pieces:
+                        log(f"{kind}: UDP does not get through: over TCP from now on")
+                        self.udp = False
             finally:
-                sock.close()
-                self._sock = None
+                link.close()
+                self._link = None
         log(f"{kind}: the tablet stopped")
 
 
