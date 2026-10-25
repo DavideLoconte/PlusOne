@@ -53,7 +53,7 @@ Download `plus-one_<version>_all.deb` from the
 [Releases](../../releases) page, then:
 
 ```bash
-sudo apt install ./plus-one_0.4.0_all.deb
+sudo apt install ./plus-one_0.5.0_all.deb
 ```
 
 The package pulls in GTK 4, libadwaita, GStreamer and NetworkManager bindings
@@ -86,7 +86,7 @@ page, then:
 
 ```bash
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-flatpak install --user ./plus-one_v0.4.0_x86_64.flatpak
+flatpak install --user ./plus-one_v0.5.0_x86_64.flatpak
 ```
 
 The GNOME runtime it needs comes from Flathub. Differences from the `.deb`:
@@ -389,7 +389,7 @@ flatpak run org.flatpak.Builder --user --install --force-clean flatpak-build \
 
 1. Bump `__version__` in `plusone/__init__.py` and add a section to
    `CHANGELOG.md`.
-2. Commit, then tag and push: `git tag v0.4.0 && git push origin main v0.4.0`.
+2. Commit, then tag and push: `git tag v0.5.0 && git push origin main v0.5.0`.
 3. The *Release* workflow checks that the tag matches the version, runs the
    tests, builds the `.deb` and the Flatpak bundle and publishes a GitHub
    release with both, the Quick Settings extension zip and the changelog
