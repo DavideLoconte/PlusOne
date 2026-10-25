@@ -23,8 +23,9 @@ def test_only_the_wi_fi_direct_group_gets_the_desktop(monkeypatch):
     import types
     controller = Controller(Settings())
     controller._running = True
-    controller.link = types.SimpleNamespace(networks=(ipaddress.ip_network("192.168.49.0/24"),),
-                                            owns=lambda a: a.startswith("192.168.49."), connected=False)
+    network = ipaddress.ip_network("192.168.49.0/24")
+    controller.link = types.SimpleNamespace(network=lambda: network, connected=False,
+                                            owns=lambda a: ipaddress.ip_address(a) in network)
     assert controller._from_tablet("192.168.49.7")
     assert not controller._from_tablet("192.168.1.20")
     served = []

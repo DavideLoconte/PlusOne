@@ -60,11 +60,22 @@ def test_never_gives_up_during_an_attempt():
         GLib.source_remove(link._give_up_source)
 
 
-def test_the_group_network_is_the_tablets():
+def test_the_group_network_is_the_tablets(monkeypatch):
     import ipaddress
+    from plusone import p2p
     link = link_in(None)
-    link.networks = (ipaddress.ip_network("192.168.49.0/24"),)
+    link.iface = None
+    assert link.network() is None and not link.owns("192.168.49.1")  # no group yet
+    link.iface = "p2p-wlan0-0"
+    monkeypatch.setattr(p2p, "interface_network",
+                        lambda name: ipaddress.ip_network("192.168.49.0/24") if name == "p2p-wlan0-0" else None)
     assert link.owns("192.168.49.1") and not link.owns("192.168.1.20") and not link.owns("nonsense")
+
+
+def test_an_interface_s_network():
+    from plusone.p2p import interface_network
+    assert str(interface_network("lo")) == "127.0.0.0/8"
+    assert interface_network("no-such-iface") is None
 
 
 def test_a_known_display_by_name_or_mac():

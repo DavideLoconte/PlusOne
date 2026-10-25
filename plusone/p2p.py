@@ -12,7 +12,10 @@ The Intel AX211 firmware sometimes crashes while joining the tablet's group
 half-made group for a minute or more, deaf to new attempts, until Second
 Screen is closed and reopened on it.
 """
+import fcntl
 import ipaddress
+import socket
+import struct
 import time
 
 from gi.repository import GLib, NM
@@ -33,6 +36,22 @@ def _path(obj):
     """D-Bus object path of a libnm object. NM.Device.get_path() is something
     else: the udev path, None for every virtual device (docker, VPN...)."""
     return NM.Object.get_path(obj)
+
+
+SIOCGIFADDR, SIOCGIFNETMASK = 0x8915, 0x891B
+
+
+def interface_network(name):
+    """The IPv4 network of interface name, as the kernel has it now; None
+    while it has no address (DHCP not done yet) or is gone."""
+    request = struct.pack("256s", name.encode()[:15])
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            address = socket.inet_ntoa(fcntl.ioctl(s.fileno(), SIOCGIFADDR, request)[20:24])
+            mask = socket.inet_ntoa(fcntl.ioctl(s.fileno(), SIOCGIFNETMASK, request)[20:24])
+    except OSError:
+        return None
+    return ipaddress.ip_network(f"{address}/{mask}", strict=False)
 
 
 def is_wfd_sink(peer):
@@ -71,9 +90,9 @@ class P2PLink:
             match = [match]
         self.match = [m.lower() for m in match] if match else None
         self.peer = None
-        # The group's IPv4 networks once it is up: where the tablet's RTSP
-        # connection may come from (read from other threads: replaced whole).
-        self.networks = ()
+        # The group's network interface once it is up: the tablet's RTSP
+        # connection must come from its network (read from other threads).
+        self.iface = None
         self.ac = None
         self.attempt = 0
         self.connected = False
@@ -84,13 +103,18 @@ class P2PLink:
             return any(m == mac or (m and m in name) for m in self.match)
         return is_wfd_sink(peer)
 
+    def network(self):
+        """The group's IPv4 network, None until the group is up with an address."""
+        iface = self.iface
+        return interface_network(iface) if iface else None
+
     def owns(self, address):
         """Whether address is on the group's network: the tablet's, not the LAN's."""
+        network = self.network()
         try:
-            ip = ipaddress.ip_address(address)
+            return network is not None and ipaddress.ip_address(address) in network
         except ValueError:
             return False
-        return any(ip in network for network in self.networks)
 
     def start(self):
         # An Intel firmware crash makes NetworkManager drop the P2P device and
@@ -265,11 +289,9 @@ class P2PLink:
             # A recreated device becomes usable here: search again.
             self._find()
         elif new == NM.DeviceState.ACTIVATED:
-            config = dev.get_ip4_config()
-            self.networks = tuple(
-                ipaddress.ip_network(f"{a.get_address()}/{a.get_prefix()}", strict=False)
-                for a in (config.get_addresses() if config else []))
-            log("Wi-Fi Direct group up", ", ".join(map(str, self.networks)))
+            # The group's interface (p2p-wlan0-0, say), not the P2P device's.
+            self.iface = dev.get_ip_iface() or dev.get_iface()
+            log("Wi-Fi Direct group up on", self.iface, self.network() or "(no address yet)")
             GLib.timeout_add_seconds(RTSP_DEADLINE, self._rtsp_deadline, self.attempt)
         elif new == NM.DeviceState.FAILED and not self.connected and self.peer and not self.stopped:
             log(f"Wi-Fi Direct attempt {self.attempt} failed (reason {reason})")
@@ -277,7 +299,7 @@ class P2PLink:
 
     def stop(self):
         self.stopped = True
-        self.networks = ()
+        self.iface = None
         if self._give_up_source:
             GLib.source_remove(self._give_up_source)
             self._give_up_source = None

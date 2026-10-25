@@ -221,10 +221,9 @@ class Controller:
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
             link = self.link
-            if link and link.owns(address):
-                return True
-            if link and link.networks:
-                return False
+            network = link.network() if link else None
+            if network is not None:
+                return link.owns(address)
             time.sleep(0.1)
         return False
 
