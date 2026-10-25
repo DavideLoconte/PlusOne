@@ -94,71 +94,82 @@ def test_nothing_while_switched_off(monkeypatch):
     assert device.calls == [] and device.state == "off"
 
 
-class FakeLink:
-    def __init__(self, pieces, raise_after=None):
-        self.pieces, self.raise_after, self.closed = list(pieces), raise_after, threading.Event()
+class FakeWire:
+    """The paired link as the feed uses it: what it sends, the app's answer."""
 
-    def receive_piece(self):
-        if self.pieces:
-            return self.pieces.pop(0)
-        if self.raise_after is not None:
-            raise self.raise_after
-        self.closed.wait(5)  # until stop() hangs up
+    def __init__(self, reply):
+        self.sent, self.reply, self.hung_up = [], reply, threading.Event()
+
+    def send(self, message):
+        self.sent.append(message)
+
+    def receive(self, *args):
+        if self.reply is not None:
+            reply, self.reply = self.reply, None
+            return reply
         raise EOFError
 
+    def readable(self, timeout):
+        return self.hung_up.wait(timeout)
+
+
+class FakeSock:
+    def __init__(self, wire):
+        self.wire = wire
+
+    def shutdown(self, how):
+        self.wire.hung_up.set()
+
     def close(self):
-        self.closed.set()
+        pass
 
 
-def test_the_feed_asks_the_tablet_in_use_and_hangs_up(monkeypatch):
-    pieces, asked = [], []
-    link = FakeLink([({"type": "audio"}, b"ab")] * 3)
+class FakeReceiver:
+    def __init__(self):
+        self.answered, self.closed = None, False
 
-    def capture(targets, request, expect, udp=True):
-        asked.append((targets, request["type"], expect, udp))
-        return link, {"type": "microphone", "codec": "opus", "udp": 4000}
-    monkeypatch.setattr(companion, "capture", capture)
-    infos = []
+    def offer(self):
+        return "v=0 offer"
+
+    def answer(self, sdp):
+        self.answered = sdp
+
+    def failed(self):
+        return False
+
+    def close(self):
+        self.closed = True
+
+
+def test_the_feed_offers_and_hangs_up(monkeypatch):
+    wire = FakeWire({"type": "answer", "sdp": "v=0 answer"})
+    opened = []
+    monkeypatch.setattr(companion, "open_link", lambda targets, expect: opened.append((targets, expect))
+                        or (FakeSock(wire), wire))
+    receivers, ready = [], []
     feed = devices.Feed({"type": "microphone"}, lambda: ([("10.0.0.2", 47236)], "a1b2"),
-                        infos.append, lambda h, p: pieces.append(p), lambda reason: None)
+                        lambda: receivers.append(FakeReceiver()) or receivers[-1], lambda: ready.append(1),
+                        lambda reason: None)
     feed.start()
-    assert spin(lambda: len(pieces) == 3)
+    assert spin(lambda: ready)
+    assert wire.sent == [{"type": "microphone", "sdp": "v=0 offer"}] and receivers[0].answered == "v=0 answer"
+    assert opened == [([("10.0.0.2", 47236)], "a1b2")]
     feed.stop()
     feed._thread.join(5)
-    assert asked == [([("10.0.0.2", 47236)], "microphone", "a1b2", True)] and infos[0]["codec"] == "opus"
-    assert link.closed.is_set()
-
-
-def test_udp_that_does_not_get_through_falls_back_to_tcp(monkeypatch):
-    monkeypatch.setattr(devices, "RETRY", 0.01)
-    asked = []
-
-    def capture(targets, request, expect, udp=True):
-        asked.append(udp)
-        if udp:
-            return FakeLink([], raise_after=TimeoutError("no datagram")), {"type": "camera", "udp": 4000}
-        return FakeLink([({"type": "video"}, b"x")]), {"type": "camera"}
-    monkeypatch.setattr(companion, "capture", capture)
-    got = []
-    feed = devices.Feed({"type": "camera"}, lambda: ([("10.0.0.2", 47236)], "a1b2"),
-                        lambda info: None, lambda h, p: got.append(p), lambda reason: None)
-    feed.start()
-    assert spin(lambda: got)
-    feed.stop()
-    feed._thread.join(5)
-    assert asked[:2] == [True, False] and feed.udp is False
+    assert receivers[0].closed and len(receivers) == 1
 
 
 def test_a_refusal_is_said_and_asked_again_later(monkeypatch):
     monkeypatch.setattr(devices, "REFUSED_RETRY", 0.05)
     tries, problems = [], []
 
-    def capture(*args, **kwargs):
+    def open_link(targets, expect):
         tries.append(1)
-        raise companion.Refused("permission")
-    monkeypatch.setattr(companion, "capture", capture)
+        wire = FakeWire({"type": "refused", "reason": "permission"})
+        return FakeSock(wire), wire
+    monkeypatch.setattr(companion, "open_link", open_link)
     feed = devices.Feed({"type": "camera"}, lambda: ([("10.0.0.2", 47236)], "a1b2"),
-                        None, None, problems.append)
+                        FakeReceiver, lambda: None, problems.append)
     feed.start()
     assert spin(lambda: len(tries) >= 2)
     feed.stop()
@@ -169,31 +180,12 @@ def test_a_refusal_is_said_and_asked_again_later(monkeypatch):
 def test_no_tablet_on_the_network(monkeypatch):
     monkeypatch.setattr(devices, "RETRY", 0.05)
     problems = []
-    feed = devices.Feed({"type": "camera"}, lambda: ([], "a1b2"), None, None, problems.append)
+    feed = devices.Feed({"type": "camera"}, lambda: ([], "a1b2"), FakeReceiver, None, problems.append)
     feed.start()
     assert spin(lambda: problems)
     feed.stop()
     feed._thread.join(5)
     assert problems[0] == "away"
-
-
-def test_pieces_from_the_app(tmp_path):
-    import socket
-    import struct
-    left, right = socket.socketpair()
-    with left, right:
-        def piece(header, payload=b""):
-            data = __import__("json").dumps(header).encode()
-            right.sendall(struct.pack(">I", len(data)) + data + payload)
-        piece({"type": "video", "size": 3, "key": True}, b"xyz")
-        piece({"type": "video", "size": companion.MAX_PIECE + 1})
-        wire = companion.Wire(left)
-        assert wire.receive_piece() == ({"type": "video", "size": 3, "key": True}, b"xyz")
-        try:
-            wire.receive_piece()
-            raise AssertionError("too big a piece was taken")
-        except ValueError:
-            pass
 
 
 def test_switched_on_only_with_a_tablet(monkeypatch):

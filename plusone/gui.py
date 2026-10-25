@@ -28,6 +28,8 @@ def device_status(kind, state):
     if state == "setup":
         return (_("Needs the v4l2loopback module: see the README") if kind == "camera"
                 else _("Needs PipeWire's pactl and pw-link"))
+    if state == "webrtc":
+        return _("Needs WebRTC for GStreamer: gstreamer1.0-nice and gir1.2-gst-plugins-bad-1.0")
     camera = kind == "camera"
     return {
         "off": _("As a webcam for this PC's programs") if camera else _("As a microphone for this PC's programs"),

@@ -149,6 +149,8 @@ _IT = {
     "Tablet microphone": "Microfono del tablet",
     "Needs the v4l2loopback module: see the README": "Serve il modulo v4l2loopback: vedi il README",
     "Needs PipeWire's pactl and pw-link": "Servono pactl e pw-link di PipeWire",
+    "Needs WebRTC for GStreamer: gstreamer1.0-nice and gir1.2-gst-plugins-bad-1.0":
+        "Serve WebRTC per GStreamer: gstreamer1.0-nice e gir1.2-gst-plugins-bad-1.0",
     "As a webcam for this PC's programs": "Come webcam per i programmi di questo PC",
     "As a microphone for this PC's programs": "Come microfono per i programmi di questo PC",
     "On: the tablet turns its camera on while a program uses it":

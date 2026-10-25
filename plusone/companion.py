@@ -45,7 +45,6 @@ MAX_HEADER = 16 * 1024 * 1024  # the marks of a long document (the app takes as 
 UNPAIRED_HEADER = 4096         # hello and pairing: small, from an app not yet known
 HANDSHAKE_FOR = 20             # seconds for TLS, hello and pairing messages (not the user's answer)
 MAX_NAME = 64
-MAX_PIECE = 4 * 1024 * 1024    # an encoded frame of the camera, at most
 CONFIG = os.path.join(GLib.get_user_config_dir(), "plus-one", "companion")
 _making_identity = threading.Lock()
 
@@ -166,17 +165,6 @@ class Wire:
             chunks.append(chunk)
             left -= len(chunk)
         return b"".join(chunks)
-
-    def receive_piece(self, limit=MAX_PIECE):
-        """(header, payload) of the camera's or the microphone's next piece."""
-        (length,) = struct.unpack(">I", self._exactly(4))
-        if not 0 < length <= UNPAIRED_HEADER:
-            raise ValueError(f"bad header length {length}")
-        header = json.loads(self._exactly(length))
-        size = header.get("size", 0) if isinstance(header, dict) else -1
-        if type(size) is not int or not 0 <= size <= limit:
-            raise ValueError("a piece that is not one")
-        return header, self._exactly(size)
 
     def receive(self, limit=MAX_HEADER):
         """The next message (the app sends headers only), at most limit bytes."""
@@ -515,57 +503,12 @@ def _wait(sock, wire, name, job, target, paired, on_opened, on_signatures, locat
     raise Lost(name)
 
 
-class _TcpLink:
-    """A capture's pieces on its TLS link itself (when UDP does not get through)."""
-
-    def __init__(self, sock, wire):
-        self.sock, self.wire = sock, wire
-
-    def receive_piece(self):
-        return self.wire.receive_piece()
-
-    def key_frame(self):
-        pass  # nothing is lost on the way
-
-    def close(self):
-        try:
-            self.sock.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-        self.sock.close()
-
-
-def capture(targets, request, expect, paired=None, udp=True):
-    """(link, what the app says it sends) once the app at targets (the tablet
-    in use's addresses) captures for the PC: request is {"type": "camera",
-    "facing", "width", "height", "fps", "bitrate"} or {"type": "microphone"}.
-    link.receive_piece() gives the pieces, over UDP (datagrams.py) unless udp
-    is False, until link.close(). Raises Refused, PairingRefused, OSError & co."""
-    from . import datagrams
+def open_link(targets, expect, paired=None):
+    """(socket, wire) of a link to the paired tablet's app at targets (its
+    addresses), for the camera's or the microphone's WebRTC session (rtc.py)."""
     sock, wire, _name = _connect_any(targets, paired or Paired(), None, expect)
-    dgram = None
-    try:
-        if udp:
-            dgram = socket.socket(socket.AF_INET6 if sock.family == socket.AF_INET6 else socket.AF_INET,
-                                  socket.SOCK_DGRAM)
-            request = dict(request, transport="udp")
-        wire.send(request)
-        info = wire.receive(UNPAIRED_HEADER)
-        if info.get("type") == "refused":
-            raise Refused(str(info.get("reason", "")))
-        if info.get("type") != request["type"]:
-            raise ValueError(f"the app answered {info.get('type')!r}")
-        sock.settimeout(IO_TIMEOUT)
-        if dgram is not None and "udp" in info:
-            return datagrams.Link(sock, wire, info, dgram), info
-    except BaseException:
-        sock.close()
-        if dgram is not None:
-            dgram.close()
-        raise
-    if dgram is not None:
-        dgram.close()
-    return _TcpLink(sock, wire), info
+    sock.settimeout(IO_TIMEOUT)
+    return sock, wire
 
 
 def _finite(value):

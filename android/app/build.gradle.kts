@@ -23,6 +23,9 @@ android {
         targetSdk = 36
         versionCode = major * 10000 + minor * 100 + patch
         versionName = appVersion
+        // WebRTC's native code: the tablets this is for are all 64-bit ARM
+        // (the other ABIs would add some 30 MB).
+        ndk { abiFilters += "arm64-v8a" }
     }
 
     signingConfigs {
@@ -41,7 +44,7 @@ android {
             // R8: Kotlin, androidx and Material down to what the app uses.
             isMinifyEnabled = true
             isShrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             if (keystore != null) signingConfig = signingConfigs.getByName("release")
         }
         // A release build signed with the debug key, to try R8's output on a
@@ -64,4 +67,8 @@ dependencies {
     implementation("androidx.graphics:graphics-core:1.0.4")
     // Material 3 Expressive: the look of Android 16, in the wallpaper's colours.
     implementation("com.google.android.material:material:1.14.0")
+    // WebRTC (Google's libwebrtc, as LiveKit builds and publishes it): the
+    // camera and the microphone for the PC, with its audio processing,
+    // congestion control and retransmissions.
+    implementation("io.github.webrtc-sdk:android:125.6422.07")
 }

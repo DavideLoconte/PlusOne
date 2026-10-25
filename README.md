@@ -265,10 +265,16 @@ tablet camera* and a microphone called *Tablet microphone (Plus One)*: pick
 them in your video-call program like any other. The tablet captures only
 while a program on the PC uses one of them (a call, the Camera app), and
 stops a few seconds after it lets go; the switch off removes the device from
-the PC altogether. The camera goes as H.264 (2.5 Mbit/s at 720p, about 5 at
-1080p), the microphone as Opus (about 20 kbit/s), encrypted, over your
-Wi-Fi or over Wi-Fi Direct during Second Screen. **Preferences → Camera**
-picks the front or the back camera and 720p or 1080p.
+the PC altogether. They go over **WebRTC**, as in a video call: Google's
+libwebrtc on the tablet (the sound's gain control and, if *Noise reduction*
+is on in the app, noise suppression; congestion control, retransmissions)
+and GStreamer's webrtcbin on the PC (the jitter buffer), encrypted
+(DTLS-SRTP, its keys vouched for by the pairing), over your Wi-Fi or Wi-Fi
+Direct; H.264 up to 2.5 Mbit/s at 720p (5 at 1080p), Opus for the sound,
+about 150 ms from the tablet's microphone to a program on the PC. The PC
+needs `gstreamer1.0-nice` and `gir1.2-gst-plugins-bad-1.0` (the `.deb`
+brings them). **Preferences → Camera** picks the front or the back camera
+and 720p or 1080p.
 
 The webcam is a v4l2loopback device. The `.deb` sets it up; from source or
 the Flatpak, once:
@@ -395,7 +401,7 @@ What comes next, and the convenience rules every feature follows, is in
 plusone/          the app: app.py (background app, D-Bus, notifications), gui.py (window),
                   engine.py (ties display, p2p, rtsp, media, uibc, pen together),
                   signing.py + sign.py + pdf.py + ink.py + modeler.py (Sign on Tablet),
-                  devices.py (the tablet's camera and microphone as the PC's),
+                  devices.py + rtc.py (the tablet's camera and microphone as the PC's, over WebRTC),
                   nearby.py (tablets on the network), tablets.py (the paired ones, the one in
                   use, and the check that Second Screen's tablet is it), companion.py (the app's protocol)
 data/gnome-shell/ the Quick Settings extension

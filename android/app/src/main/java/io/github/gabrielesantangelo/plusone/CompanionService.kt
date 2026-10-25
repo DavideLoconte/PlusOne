@@ -237,50 +237,41 @@ class CompanionService : Service() {
     }
 
     // The camera's and the microphone's captures, each with its connection.
-    private val captures = mutableMapOf<Capture, Pair<String, SSLSocket>>()
+    private val captures = mutableMapOf<RtcCapture, Pair<String, SSLSocket>>()
     @Volatile private var elevating: CompletableFuture<Boolean>? = null
     @Volatile private var capturingFor = ""
 
-    /** A program on the PC uses the camera or the microphone: captured and
-     * sent on this connection until the PC hangs up. Only if the user lets
-     * the PC have it, here. */
+    /** A program on the PC uses the camera or the microphone: sent over
+     * WebRTC (RtcCapture) to the PC that offered on this connection, until it
+     * hangs up. Only if the user lets the PC have it, here. */
     private fun capture(socket: SSLSocket, wire: Wire, request: JSONObject, kind: String, pc: String) {
         val camera = kind == "camera"
         fun refuse(reason: String) = wire.send(JSONObject().put("type", "refused").put("reason", reason))
         if (!(if (camera) Options.camera(this) else Options.microphone(this))) return refuse("off")
         val permission = if (camera) Manifest.permission.CAMERA else Manifest.permission.RECORD_AUDIO
         if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) return refuse("permission")
-        // Datagrams if the PC can take them (it falls back to its TLS link if they do not get through).
-        val out = if (request.optString("transport") == "udp") DatagramOut(socket.inetAddress, !camera) else WireOut(wire)
-        val capture = if (camera) CameraCapture(this, out, request)
-            else MicCapture(out, request, Options.noiseReduction(this))
+        val offer = request.optString("sdp")
+        if (offer.isEmpty()) return refuse("unavailable")  // a PC of before WebRTC
+        val capture = RtcCapture(this, request, Options.noiseReduction(this))
         synchronized(captures) {
             captures[capture] = kind to socket
             capturingFor = pc
         }
         try {
             if (!allowedTypes(kind) && !foreground()) return refuse("background")
-            val info = try {
-                capture.start()
+            val answer = try {
+                capture.answer(offer)
             } catch (e: Exception) {
                 Log.w(TAG, "$kind not available: $e")
                 return refuse("unavailable")
             }
-            wire.send(if (out is DatagramOut) out.describe(info) else info)
+            wire.send(JSONObject().put("type", "answer").put("sdp", answer))
             showCaptures()
             lowLatency(true)
             socket.soTimeout = 0  // the PC holds it as long as its program uses the device
-            while (true) {
-                val message = wire.receive()
-                when (message.optString("type")) {
-                    "stop" -> break
-                    "key" -> capture.keyFrame()  // a frame lost on the way
-                    "stats" -> capture.stats(message.optInt("received"), message.optInt("lost"))
-                }
-            }
+            while (wire.receive().optString("type") != "stop") continue
         } finally {
             capture.stop()
-            (out as? DatagramOut)?.close()
             synchronized(captures) { captures.remove(capture) }
             showCaptures()
             lowLatency(false)

@@ -2,8 +2,8 @@
 tablet camera", v4l2loopback's devices) and a microphone ("Tablet
 microphone", a virtual PipeWire source Plus One feeds), each switched on in
 the window. Nothing goes over the network until a program on the PC uses one:
-then the tablet in use is asked for it (companion.capture), captures and
-encodes it there (H.264, Opus), and stops when the program lets go.
+then the tablet in use is asked for it over WebRTC (rtc.py), and lets go of
+it when the program does.
 """
 import array
 import ctypes
@@ -16,9 +16,12 @@ import subprocess
 import threading
 import time
 
-from gi.repository import Gio, GLib, Gst
+import gi
 
-from . import companion, log, once
+gi.require_version("Gst", "1.0")
+from gi.repository import Gio, GLib, Gst  # noqa: E402
+
+from . import companion, log, once  # noqa: E402
 
 CAMERA_LABEL = "Plus One tablet camera"  # data/plus-one-camera-options.conf
 MIC_NAME = "plusone_mic"
@@ -29,13 +32,10 @@ REFUSED_RETRY = 10  # seconds, after the app said no (the user may change their 
 IN_USE_AFTER = 0.2  # seconds a program holds the device before the tablet is asked
 IDLE_AFTER = 3      # seconds without one before the tablet stops
 MIC_FEED = "plusone-mic-feed"  # the stream Plus One feeds the microphone with
-JITTER = 40                     # ms the microphone's packets wait to be put in order (WebRTC's NetEq targets ~60)
 LEVEL_EVERY = 20_000_000        # ns: how often the microphone's level is measured
-RTP_SSRC = 0x504C5331           # "PLS1": one stream, ours
 # ns of sound that may wait before the oldest goes: what waits stays, as delay,
 # once the sound comes as fast as it is played (160 ms measured 235 end to end).
 MIC_BEHIND = 60_000_000
-FLIP = {0: "none", 90: "clockwise", 180: "rotate-180", 270: "counterclockwise"}
 # Software first: little work at these sizes, and decodebin's pick (NVIDIA's,
 # here) held the whole pipeline still until the tablet's first frame.
 H264_DECODERS = ("avdec_h264", "openh264dec", "vah264dec")
@@ -45,21 +45,31 @@ def h264_decoder():
     return next((name for name in H264_DECODERS if Gst.ElementFactory.find(name)), None)
 
 
-class Feed:
-    """The tablet's pieces for one device, on a thread of their own while
-    wanted, connecting again when the link drops. Callbacks run on that
-    thread: on_info(what the app sends), on_piece(header, payload),
-    on_problem(reason: "off", "permission", "background", "unavailable",
-    "away")."""
+def webrtc():
+    """rtc.py, or None if this PC lacks WebRTC's pieces (webrtcbin, libnice,
+    the GstWebRTC bindings): the devices then say what is missing."""
+    try:
+        from . import rtc
+    except (ImportError, ValueError):
+        return None
+    Gst.init(None)  # once is enough, again is harmless
+    return rtc if Gst.ElementFactory.find("webrtcbin") and Gst.ElementFactory.find("nicesrc") else None
 
-    def __init__(self, request, where, on_info, on_piece, on_problem):
+
+class Feed:
+    """One device's WebRTC session with the tablet in use, on a thread of its
+    own while wanted, made again when it drops: receiver() makes the
+    device's rtc.Receiver, whose offer goes over the paired link with the
+    request; on_ready() once the app answered; on_problem(reason: "off",
+    "permission", "background", "unavailable", "away")."""
+
+    def __init__(self, request, where, receiver, on_ready, on_problem):
         self.request = request
         self.where = where  # () -> (addresses, app id) of the tablet in use, or None
-        self.on_info, self.on_piece, self.on_problem = on_info, on_piece, on_problem
+        self.receiver, self.on_ready, self.on_problem = receiver, on_ready, on_problem
         self._wanted = threading.Event()
-        self._link = None
+        self._sock = None
         self._thread = None
-        self.udp = True  # until it does not get through
 
     def start(self):
         if self._wanted.is_set():
@@ -70,9 +80,12 @@ class Feed:
 
     def stop(self):
         self._wanted.clear()
-        link, self._link = self._link, None
-        if link is not None:
-            link.close()
+        sock, self._sock = self._sock, None
+        if sock is not None:
+            try:
+                sock.shutdown(2)  # the session's thread wakes, and ends it
+            except OSError:
+                pass
 
     def _wait(self, seconds):
         end = time.monotonic() + seconds
@@ -87,36 +100,41 @@ class Feed:
                 self.on_problem("away")
                 self._wait(RETRY)
                 continue
+            sock = receiver = None
             try:
-                link, info = companion.capture(where[0], self.request, where[1], udp=self.udp)
+                sock, wire = companion.open_link(where[0], where[1])
+                self._sock = sock
+                receiver = self.receiver()
+                wire.send(dict(self.request, sdp=receiver.offer()))
+                reply = wire.receive()
+                if reply.get("type") == "refused":
+                    raise companion.Refused(str(reply.get("reason", "")))
+                if reply.get("type") != "answer":
+                    raise ValueError(f"the app answered {reply.get('type')!r}")
+                receiver.answer(str(reply.get("sdp", "")))
+                log(f"{kind}: from the tablet, over WebRTC")
+                self.on_ready()
+                # Held while wanted, the link up and the media flowing: the
+                # app hangs up by closing it, Plus One by closing it too.
+                while self._wanted.is_set() and not receiver.failed():
+                    if wire.readable(1.0):
+                        wire.receive()
             except companion.Refused as e:
                 log(f"{kind}: the tablet said no ({e})")
                 self.on_problem(str(e))
                 # Turned off or not allowed there: the user has to act; else soon.
                 self._wait(REFUSED_RETRY if str(e) in ("off", "permission") else RETRY)
-                continue
-            except Exception as e:  # noqa: BLE001 - not there, or not answering: again in a while
-                log(f"{kind}: the tablet's app did not answer:", repr(e))
-                self.on_problem("away")
-                self._wait(RETRY)
-                continue
-            self._link = link
-            log(f"{kind}: from the tablet", {k: v for k, v in info.items() if k not in ("type", "key", "token", "salt")})
-            self.on_info(info)
-            pieces = 0
-            try:
-                while self._wanted.is_set():
-                    self.on_piece(*link.receive_piece())
-                    pieces += 1
-            except Exception as e:  # noqa: BLE001 - the link went, or it was stopped
+            except Exception as e:  # noqa: BLE001 - not there, not answering, or gone: again in a while
                 if self._wanted.is_set():
-                    log(f"{kind}: lost the tablet:", repr(e))
-                    if "udp" in info and not pieces:
-                        log(f"{kind}: UDP does not get through: over TCP from now on")
-                        self.udp = False
+                    log(f"{kind}: no tablet:", repr(e))
+                    self.on_problem("away")
+                    self._wait(RETRY)
             finally:
-                link.close()
-                self._link = None
+                if receiver is not None:
+                    receiver.close()
+                if sock is not None:
+                    sock.close()
+                self._sock = None
         log(f"{kind}: the tablet stopped")
 
 
@@ -179,7 +197,8 @@ def camera_devices():
 class Device:
     """What camera and microphone share: on and off with the switch, the
     tablet asked only while a program uses the device, and a state for the
-    window: "off", "setup" (missing on this PC), "ready", "in use", or why
+    window: "off", "setup" (missing on this PC), "webrtc" (WebRTC missing on
+    this PC), "ready", "in use", or why
     the tablet did not give it ("away", "tablet-off", "tablet-permission"...)."""
 
     def __init__(self, app, kind):
@@ -214,7 +233,7 @@ class Device:
 
     def _settle(self, in_use):
         self._timer = None
-        if in_use == self._in_use or self.state in ("off", "setup"):
+        if in_use == self._in_use or self.state in ("off", "setup", "webrtc"):
             return
         self._in_use = in_use
         if in_use:
@@ -252,13 +271,16 @@ class Camera(Device):
         super().__init__(app, "camera")
         self.writers, self.opened = [], []
         self.producer = None
-        self.rotation = 0
 
     def enable(self):
         if self.writers:
             return
         paths = camera_devices()
         self.decoder = h264_decoder()
+        self.rtc = webrtc()
+        if self.rtc is None:
+            self._set_state("webrtc")
+            return
         if not paths or self.decoder is None:
             self._set_state("setup")
             return
@@ -289,17 +311,14 @@ class Camera(Device):
         """Black, or the tablet's picture once it decodes: into the writer."""
         width, height, _bitrate = QUALITIES.get(self.app.settings.camera_quality, QUALITIES["720p"])
         raw = f"video/x-raw,format=I420,width={width},height={height},framerate={FPS}/1,pixel-aspect-ratio=1/1"
+        self.raw = raw
         producer = Gst.parse_launch(
             f"input-selector name=selector ! videoconvert ! {self.out} "
             f"! appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true "
             f"videotestsrc is-live=true pattern=black ! {raw} ! selector.sink_0 "
-            f"appsrc name=src is-live=true do-timestamp=true format=time "
-            f"caps=video/x-h264,stream-format=byte-stream,alignment=au "
-            f"! h264parse ! {self.decoder} ! queue leaky=downstream max-size-buffers=2 "
-            f"! videoflip method={FLIP.get(self.rotation, 'none')} name=flip "
-            f"! videoconvert ! videoscale add-borders=true ! videorate ! {raw} ! selector.sink_1")
+            f"appsrc name=src is-live=true do-timestamp=true format=time caps={raw} "
+            f"! queue leaky=downstream max-size-buffers=2 ! selector.sink_1")
         self.src = producer.get_by_name("src")
-        self.flip = producer.get_by_name("flip")
         self.selector = producer.get_by_name("selector")
         self.black, self.live = self.selector.get_static_pad("sink_0"), self.selector.get_static_pad("sink_1")
         self.selector.set_property("active-pad", self.black)
@@ -338,7 +357,7 @@ class Camera(Device):
         width, height, bitrate = QUALITIES.get(settings.camera_quality, QUALITIES["720p"])
         request = {"type": "camera", "facing": settings.camera_facing, "width": width, "height": height,
                    "fps": FPS, "bitrate": bitrate}
-        self.feed = Feed(request, self.where, self._info, self._piece, self._problem)
+        self.feed = Feed(request, self.where, self._receiver, self._ready, self._problem)
         self.feed.start()
 
     def end(self):
@@ -346,13 +365,22 @@ class Camera(Device):
         if self.producer:
             self.selector.set_property("active-pad", self.black)
 
-    def _info(self, info):
-        self.rotation = info.get("rotation", 0)
-        self.flip.set_property("method", FLIP.get(self.rotation, "none"))
-        GLib.idle_add(once(lambda: self.feed and self._set_state("in use")))
+    def _receiver(self):
+        """The tablet's video, decoded and made the device's size, into the producer."""
+        return self.rtc.Receiver("video", self._on_pad)
 
-    def _piece(self, _header, payload):
-        self.src.emit("push-buffer", Gst.Buffer.new_wrapped(payload))
+    def _on_pad(self, pipeline, pad):
+        chain = self.rtc.link(pipeline, pad, f"rtph264depay ! h264parse ! {self.decoder} ! videoconvert "
+                                        f"! videoscale add-borders=true ! videorate ! {self.raw} "
+                                        f"! appsink name=decoded emit-signals=true sync=false max-buffers=2 drop=true")
+        chain.get_by_name("decoded").connect("new-sample", self._decoded_frame)
+
+    def _decoded_frame(self, sink):
+        self.src.emit("push-buffer", sink.emit("pull-sample").get_buffer())
+        return Gst.FlowReturn.OK
+
+    def _ready(self):
+        GLib.idle_add(once(lambda: self.feed and self._set_state("in use")))
 
     def _decoded(self, _pad, _info):
         if self.feed and self.selector.get_property("active-pad") != self.live:
@@ -380,10 +408,13 @@ class Microphone(Device):
         self.module = None
         self.links = set()
         self.watch = None
-        self.pipeline = None
 
     def enable(self, description="Tablet microphone (Plus One)"):
         if self.module:
+            return
+        self.rtc = webrtc()
+        if self.rtc is None:
+            self._set_state("webrtc")
             return
         if not (shutil.which("pactl") and shutil.which("pw-link")):
             self._set_state("setup")
@@ -442,82 +473,48 @@ class Microphone(Device):
 
     # -- the tablet's sound into the source ---------------------------------------
     def begin(self):
-        self.feed = Feed({"type": "microphone", "bitrate": 32000}, self.where, self._info, self._piece,
-                         self._problem)
+        self.feed = Feed({"type": "microphone"}, self.where, self._receiver, self._ready, self._problem)
         self.feed.start()
 
     def end(self):
         self.stop_feed()
-        if self.pipeline:
-            self.pipeline.get_bus().remove_signal_watch()
-            self.pipeline.set_state(Gst.State.NULL)
-            self.pipeline = None
 
-    def _info(self, info):
-        """The app's sound (Opus, or plain samples): decoded into a stream of
-        Plus One's, linked into the source by hand (nothing else plays it).
-        Opus goes through a jitter buffer first, as RTP: JITTER ms to put the
-        packets back in order and even out the Wi-Fi's timing; a packet still
-        missing then is concealed by the decoder (it was silence)."""
-        self.opus = info.get("codec") == "opus"
-        self.rtp_sequence = 0
-        if self.pipeline:
-            self.pipeline.get_bus().remove_signal_watch()
-        if self.opus:
-            caps = "application/x-rtp,media=audio,clock-rate=48000,encoding-name=OPUS,payload=96"
-            decode = (f"rtpjitterbuffer latency={JITTER} do-lost=true drop-on-latency=true ! rtpopusdepay "
-                      f"! opusdec plc=true ! ")
-        else:
-            caps = "audio/x-raw,format=S16LE,rate=48000,channels=1,layout=interleaved"
-            decode = ""
-        if self.pipeline:
-            self.pipeline.set_state(Gst.State.NULL)
-            self.pipeline = None
-        pipeline = Gst.parse_launch(
-            f"appsrc name=src is-live=true do-timestamp=true format=time max-buffers=3 leaky-type=downstream "
-            f"caps={caps} ! {decode}audioconvert ! audioresample "
-            f"! audio/x-raw,format=S16LE,rate=48000,channels=1 "
-            f"! level name=meter interval={LEVEL_EVERY} post-messages=true ! volume name=gain "
-            f"! queue max-size-time={MIC_BEHIND} max-size-buffers=0 max-size-bytes=0 leaky=downstream "
-            f"! pipewiresink stream-properties=\"props,node.name={MIC_FEED},node.autoconnect=false,"
-            f"media.type=Audio\"")
-        # The tablet's microphone is far too quiet as it comes: brought to a
-        # voice's level, from the meter's messages on the main loop. Nothing of
-        # Python's in the sound's own path: waiting there for the interpreter
-        # (busy with the camera, say) left the source without sound, in gaps.
-        leveller = Leveller()
-        gain = pipeline.get_by_name("gain")
+    def _receiver(self):
+        """The tablet's sound, decoded into a stream of Plus One's, linked into
+        the source by hand (nothing else plays it). webrtcbin's jitter buffer
+        puts the packets back in order and evens out the Wi-Fi's timing; one
+        still missing the decoder conceals."""
+        receiver = self.rtc.Receiver("audio", self._on_pad)
+        receiver.watch_bus().connect("message::element", self._measured)
+        self.leveller = Leveller()
+        return receiver
 
-        def measured(_bus, message):
-            structure = message.get_structure()
-            if structure is None or structure.get_name() != "level":
-                return
-            rms, peak = structure.get_value("rms"), structure.get_value("peak")
-            if rms and peak:
-                gain.set_property("volume", leveller.adjust(32768 * 10 ** (rms[0] / 20),
-                                                            32768 * 10 ** (peak[0] / 20)))
-        bus = pipeline.get_bus()
-        bus.add_signal_watch()
-        bus.connect("message::element", measured)
-        self.pipeline = pipeline
-        self.src = pipeline.get_by_name("src")
-        pipeline.set_state(Gst.State.PLAYING)
-        # Its ports show once sound flows, which comes on this thread: waited for on another.
+    def _on_pad(self, pipeline, pad):
+        chain = self.rtc.link(pipeline, pad,
+                              f"rtpopusdepay ! opusdec plc=true ! audioconvert ! audioresample "
+                         f"! audio/x-raw,format=S16LE,rate=48000,channels=1 "
+                         f"! level name=meter interval={LEVEL_EVERY} post-messages=true ! volume name=gain "
+                         f"! queue max-size-time={MIC_BEHIND} max-size-buffers=0 max-size-bytes=0 leaky=downstream "
+                         f"! pipewiresink stream-properties=\"props,node.name={MIC_FEED},node.autoconnect=false,"
+                         f"media.type=Audio\"")
+        self.gain = chain.get_by_name("gain")
+        # Its ports show once sound flows: waited for on another thread.
         threading.Thread(target=lambda: link_feed() or log("microphone: could not link Plus One's stream "
                                                              "into the source"), daemon=True).start()
-        GLib.idle_add(once(lambda: self.feed and self._set_state("in use")))
 
-    def _piece(self, header, payload):
-        if not self.pipeline:
+    def _measured(self, _bus, message):
+        """The level, on the main loop: the gain follows (nothing of Python's
+        in the sound's own path, where waiting for the interpreter left gaps)."""
+        structure = message.get_structure()
+        if structure is None or structure.get_name() != "level" or getattr(self, "gain", None) is None:
             return
-        if self.opus:
-            # Into RTP: the packet's number and its time in samples, for the jitter buffer.
-            sequence = header.get("frame", self.rtp_sequence)
-            self.rtp_sequence = sequence + 1
-            payload = struct.pack(">BBHII", 0x80, 96, sequence & 0xFFFF, (header.get("pts", 0) * 48 // 1000)
-                                  & 0xFFFFFFFF, RTP_SSRC) + payload
-        self.src.emit("push-buffer", Gst.Buffer.new_wrapped(payload))
+        rms, peak = structure.get_value("rms"), structure.get_value("peak")
+        if rms and peak:
+            self.gain.set_property("volume", self.leveller.adjust(32768 * 10 ** (rms[0] / 20),
+                                                                  32768 * 10 ** (peak[0] / 20)))
 
+    def _ready(self):
+        GLib.idle_add(once(lambda: self.feed and self._set_state("in use")))
 
 
 def link_feed(wait=5):
