@@ -386,6 +386,16 @@ class PlusOneApp(Adw.Application):
             self.settings.sign_tablet = app_id
             save_settings(self.settings)
 
+    def forget_tablet(self, fingerprint):
+        """This PC forgets a paired tablet: signing on it asks for a code again."""
+        from .companion import Paired
+        Paired().forget(fingerprint)
+        for choice in ("sign_tablet", "last_tablet"):
+            app_id = getattr(self.settings, choice)
+            if app_id and fingerprint.startswith(app_id):
+                setattr(self.settings, choice, None)
+        save_settings(self.settings)
+
     def set_sign_on_tablet(self, enabled):
         if enabled == self.settings.sign_on_tablet:
             return

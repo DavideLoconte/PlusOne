@@ -14,7 +14,9 @@ The reports are also published, all of them, to readers in this process
 (`feed`): the signing window draws with those.
 """
 import collections
+import grp
 import os
+import pwd
 import select
 import struct
 import threading
@@ -25,6 +27,7 @@ from gi.repository import Gio
 from . import log
 
 UHID_PATH = "/dev/uhid"
+UHID_GROUP = "plus-one"  # data/70-plus-one-uhid.rules
 UHID_DESTROY, UHID_CREATE2, UHID_INPUT2 = 1, 11, 12
 BUS_VIRTUAL = 0x06
 VENDOR, PRODUCT = 0x04E8, 0x5350  # Samsung vendor id, "SP"
@@ -89,6 +92,22 @@ feed = Feed()
 
 def uhid_available():
     return os.access(UHID_PATH, os.R_OK | os.W_OK)
+
+
+def uhid_missing():
+    """Why the pen has no pressure, or None if it has it: "join" (the user is
+    not in the plus-one group), "log in" (joined, but not in this session
+    yet) or "set up" (no such group here: no rule, or a Flatpak)."""
+    if uhid_available():
+        return None
+    try:
+        group = grp.getgrnam(UHID_GROUP)
+        user = pwd.getpwuid(os.getuid()).pw_name
+    except KeyError:
+        return "set up"
+    if group.gr_gid in os.getgroups():
+        return "set up"
+    return "log in" if user in group.gr_mem else "join"
 
 
 class UhidPen:

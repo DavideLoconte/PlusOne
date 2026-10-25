@@ -57,12 +57,20 @@ sudo apt install ./plus-one_0.4.0_all.deb
 ```
 
 The package pulls in GTK 4, libadwaita, GStreamer and NetworkManager bindings
-from your distribution. It also installs a udev rule that lets the logged-in
-user create virtual HID devices (`/dev/uhid`), which is how the S Pen becomes a
-tablet with pressure. Plus One only ever creates the S Pen's own device, but
-the access is the user's: any program you run can create a virtual keyboard
-or mouse too, and type or click in your session (Wayland's isolation does not
-stop that). Without the rule the pen works as a mouse.
+from your distribution. It also installs a udev rule that lets the members of
+the `plus-one` group create virtual HID devices (`/dev/uhid`), which is how the
+S Pen becomes a tablet with pressure and tilt. Join the group once, then log
+out and back in:
+
+```bash
+sudo usermod -aG plus-one $USER
+```
+
+Plus One only ever creates the S Pen's own device, but the access is the
+user's: any program you run can then create a virtual keyboard or mouse too,
+and type or click in your session (Wayland's isolation does not stop that).
+That is why it is a group you choose to join. Outside it the pen works as a
+mouse; to leave it, `sudo gpasswd -d $USER plus-one`.
 
 The *Tablet* Quick Settings toggle (a GNOME Shell extension) is included but
 off: after logging out and back in, turn it on in Plus One's window
@@ -84,10 +92,11 @@ flatpak install --user ./plus-one_v0.4.0_x86_64.flatpak
 The GNOME runtime it needs comes from Flathub. Differences from the `.deb`:
 
 - A sandbox cannot install udev rules, so for S Pen pressure and tilt run once
-  on the host (without it the pen works as a mouse):
+  on the host, then log out and back in (without it the pen works as a mouse):
 
   ```bash
-  sudo sh -c 'echo "KERNEL==\"uhid\", SUBSYSTEM==\"misc\", TAG+=\"uaccess\"" > /etc/udev/rules.d/70-plus-one-uhid.rules
+  sudo sh -c 'groupadd --system -f plus-one && usermod -aG plus-one "$SUDO_USER"
+              echo "KERNEL==\"uhid\", SUBSYSTEM==\"misc\", GROUP=\"plus-one\", MODE=\"0660\"" > /etc/udev/rules.d/70-plus-one-uhid.rules
               echo uhid > /etc/modules-load.d/plus-one-uhid.conf
               modprobe uhid && udevadm control --reload
               udevadm trigger --action=change --subsystem-match=misc --sysname-match=uhid'
@@ -110,7 +119,7 @@ The GNOME runtime it needs comes from Flathub. Differences from the `.deb`:
 ```bash
 git clone https://github.com/GabrieleSantangelo/PlusOne.git plus-one && cd plus-one
 ./install.sh               # menu entry, icon, Quick Settings toggle for your user, no root
-sudo ./enable-pen.sh       # optional: S Pen pressure and tilt (uhid access)
+sudo ./enable-pen.sh       # optional: S Pen pressure and tilt (then log in again)
 ```
 
 Dependencies on Ubuntu:

@@ -128,6 +128,17 @@ _IT = {
         "Aveva una firma digitale: nella copia firmata non vale più",
     "Only this tablet gets the desktop": "Solo questo tablet riceve lo schermo",
     "Forget": "Dimentica",
+    "Paired tablets": "Tablet abbinati",
+    "They sign without a code. Forget one you no longer use.":
+        "Firmano senza codice. Dimentica quelli che non usi più.",
+    "Forget {tablet}?": "Dimenticare {tablet}?",
+    "Signing on it again asks for a code, on this PC and on the tablet.":
+        "Per firmarci di nuovo servirà un codice, su questo PC e sul tablet.",
+    "The S Pen has no pressure: sudo usermod -aG plus-one $USER, then log in again":
+        "La S Pen non ha la pressione: sudo usermod -aG plus-one $USER, poi rientra nella sessione",
+    "Log out and back in for the S Pen's pressure": "Esci e rientra nella sessione per la pressione della S Pen",
+    "Without access to /dev/uhid the S Pen works as a mouse, without pressure":
+        "Senza accesso a /dev/uhid la S Pen funziona come un mouse, senza pressione",
     "With more than one on the network, Files asks too": "Con più di uno in rete, lo chiede anche File",
     "Automatic: the last one used": "Automatico: l'ultimo usato",
     "A tablet no longer paired": "Un tablet non più abbinato",

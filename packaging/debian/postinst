@@ -1,9 +1,17 @@
 #!/bin/sh
 set -e
 if [ "$1" = "configure" ]; then
+    # Who may create the S Pen's device (/dev/uhid): this group's members.
+    groupadd --system -f plus-one
     # Apply the S Pen rule now: /dev/uhid only exists once the module is loaded.
     udevadm control --reload 2>/dev/null || true
     modprobe uhid 2>/dev/null || true
     udevadm trigger --action=change --subsystem-match=misc --sysname-match=uhid 2>/dev/null || true
+    # Up to 0.4 whoever was logged in had it (an ACL): no longer.
+    setfacl -b /dev/uhid 2>/dev/null || true
+    if [ -z "$2" ] || dpkg --compare-versions "$2" lt 0.5; then
+        echo "Plus One: for the S Pen's pressure and tilt, join the plus-one group once:"
+        echo "    sudo usermod -aG plus-one \$USER    (then log out and back in)"
+    fi
 fi
 exit 0

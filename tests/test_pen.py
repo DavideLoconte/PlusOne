@@ -67,3 +67,28 @@ def test_feed_gives_every_report_to_each_reader():
     feed.unlisten(a)
     feed.publish(pen_report(0x10, 0, 0, 0))
     assert len(a) == 300 and len(b) == 301
+
+
+def test_why_the_pen_has_no_pressure(monkeypatch):
+    import grp
+    import os
+    import pwd
+    import types
+    from plusone import pen
+    group = types.SimpleNamespace(gr_gid=4242, gr_mem=["someone"])
+    monkeypatch.setattr(pwd, "getpwuid", lambda uid: types.SimpleNamespace(pw_name="me"))
+    monkeypatch.setattr(os, "getgroups", lambda: [1000])
+    monkeypatch.setattr(pen, "uhid_available", lambda: False)
+
+    def no_group(name):
+        raise KeyError(name)
+    monkeypatch.setattr(grp, "getgrnam", no_group)
+    assert pen.uhid_missing() == "set up"
+    monkeypatch.setattr(grp, "getgrnam", lambda name: group)
+    assert pen.uhid_missing() == "join"
+    group.gr_mem.append("me")
+    assert pen.uhid_missing() == "log in"
+    monkeypatch.setattr(os, "getgroups", lambda: [1000, 4242])
+    assert pen.uhid_missing() == "set up"  # in it, and still no access: no rule
+    monkeypatch.setattr(pen, "uhid_available", lambda: True)
+    assert pen.uhid_missing() is None

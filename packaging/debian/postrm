@@ -1,6 +1,8 @@
 #!/bin/sh
 set -e
 if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
+    # Without the rule /dev/uhid goes back to root's alone.
     udevadm control --reload 2>/dev/null || true
+    udevadm trigger --action=change --subsystem-match=misc --sysname-match=uhid 2>/dev/null || true
 fi
 exit 0

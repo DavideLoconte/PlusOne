@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0 (in progress)
+## 0.5.0
 
 The companion app: ink under the nib.
 
@@ -66,6 +66,31 @@ The companion app: ink under the nib.
   signature still arrives; turning the tablet, dark mode, a keyboard cover
   or split screen keep the ink; Back asks before throwing a signature away;
   several PDFs at once share one pairing question.
+- **Paired tablets** in the window, each with *Forget*: signing on it again
+  asks for the code.
+- **The S Pen's device for a group you join**: `/dev/uhid` is for the
+  members of the `plus-one` group, no longer for whoever is logged in (any
+  program they run could create a keyboard as well). Join it once with
+  `sudo usermod -aG plus-one $USER` and log in again; until then the
+  window says so and the pen works as a mouse.
+- **Second Screen only for the tablet**: the stream, the touches and the
+  pen are for the tablet in the Wi-Fi Direct group, no longer for anyone on
+  the network while Plus One waits; the pen's device is always the S Pen's,
+  whatever the other side describes (it could have been a keyboard). After
+  the first session only that tablet gets the desktop (*Forget* in the
+  window for another).
+- The app and the PC check each other harder: an app announced as a paired
+  tablet with another certificate is refused, an unpaired one gets small
+  limits and little time, a busy or stuck PC does not hold back the others,
+  and what comes back from the tablet (marks, signatures) is validated.
+- Settings, signatures and pairings are files only the user can read.
+- Signed PDFs: the ink is added on top of the page, which is left as it was
+  (with Ubuntu's pypdf some PDFs got it in the wrong place, or grew); crop
+  boxes, any script in text; a PDF with a digital signature is signed, and
+  the notification says that signature no longer holds in the copy.
+- Fixed: undo with the pick on another page lost it; closing the signing
+  window threw away the marks without asking; a resize handle jumped; narrow
+  signatures came out too tall; the pad drew with the palm.
 - Builds in a container (`tools/android-docker.sh`, `Dockerfile.android`),
   nothing Android on the host; CI builds it, releases attach the signed APK.
 - New dependency: `openssl` (the PC's certificate).

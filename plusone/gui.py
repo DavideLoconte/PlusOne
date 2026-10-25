@@ -7,7 +7,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
-from . import i18n, once  # noqa: E402
+from . import i18n, once, pen  # noqa: E402
 from .app import IN_FLATPAK, set_shell_extension, shell_extension_state  # noqa: E402
 from .engine import State  # noqa: E402
 from .i18n import _  # noqa: E402
@@ -68,7 +68,7 @@ class Window(Adw.ApplicationWindow):
         self.bitrate_row = Adw.SpinRow.new_with_range(5, 60, 1)
         self.bitrate_row.set_value(self.settings.bitrate / 1000)
         # Once a tablet streamed, only it gets the desktop: forget it to use another.
-        self.known_row = Adw.ActionRow(visible=False)
+        self.known_row = Adw.ActionRow(visible=False, use_markup=False)  # names the tablets give
         self.forget_button = Gtk.Button(valign=Gtk.Align.CENTER, css_classes=["flat"])
         self.forget_button.connect("clicked", lambda b: self._forget_displays())
         self.known_row.add_suffix(self.forget_button)
@@ -78,7 +78,8 @@ class Window(Adw.ApplicationWindow):
         page.add(self.display_group)
 
         self.options_group = Adw.PreferencesGroup()
-        self.touch_row = Adw.SwitchRow(active=self.settings.touch)
+        # Its subtitle says how to get the pen's pressure: a command to copy.
+        self.touch_row = Adw.SwitchRow(active=self.settings.touch, subtitle_selectable=True)
         # Files and Open With are outside a Flatpak's reach.
         self.sign_row = Adw.SwitchRow(active=self.settings.sign_on_tablet, visible=not IN_FLATPAK)
         self.background_row = Adw.SwitchRow(active=self.settings.background)
@@ -103,6 +104,12 @@ class Window(Adw.ApplicationWindow):
                     self.extension_row, self.adb_row, self.language_row):
             self.options_group.add(row)
         page.add(self.options_group)
+
+        # The tablets that sign without a code: one lost or given away goes here.
+        self.paired_group = Adw.PreferencesGroup(visible=False)
+        self._paired = None  # what the rows show: {fingerprint: name}
+        self._paired_rows = []
+        page.add(self.paired_group)
         # Settings are read when a connection starts: lock them while one is up.
         self.session_rows = [self.mode_row, self.bitrate_row, self.touch_row]
         if self.has_adb:
@@ -144,10 +151,18 @@ class Window(Adw.ApplicationWindow):
         self.forget_button.set_label(_("Forget"))
         self.options_group.set_title(_("Options"))
         self.touch_row.set_title(_("Touch and S Pen"))
+        self.touch_row.set_subtitle({
+            "join": _("The S Pen has no pressure: sudo usermod -aG plus-one $USER, then log in again"),
+            "log in": _("Log out and back in for the S Pen's pressure"),
+            "set up": _("Without access to /dev/uhid the S Pen works as a mouse, without pressure"),
+        }.get(pen.uhid_missing(), ""))
         self.sign_row.set_title(_("Sign on Tablet"))
         self.tablet_row.set_title(_("Tablet for signing"))
         self.tablet_row.set_subtitle(_("With more than one on the network, Files asks too"))
         self._tablets = None  # "Automatic" in the new language
+        self.paired_group.set_title(_("Paired tablets"))
+        self.paired_group.set_description(_("They sign without a code. Forget one you no longer use."))
+        self._paired = None  # their Forget buttons too
         self.signatures_row.set_title(_("My signatures"))
         self.signatures_row.set_subtitle(_("Placed with one tap when signing, here and on the tablet"))
         self.background_row.set_title(_("Ready in the background"))
@@ -227,7 +242,10 @@ class Window(Adw.ApplicationWindow):
         if self.background_row.get_active() != self.settings.background:
             self.background_row.set_active(self.settings.background)
         self.sign_row.set_subtitle(self._sign_subtitle())
-        self._refresh_tablets()
+        from .companion import Paired
+        paired = Paired().all()
+        self._refresh_tablets(paired)
+        self._refresh_paired(paired)
         known = self.settings.known_sinks
         self.known_row.set_visible(bool(known))
         self.known_row.set_subtitle(", ".join(k for k in known if ":" not in k) or ", ".join(known))
@@ -239,14 +257,9 @@ class Window(Adw.ApplicationWindow):
         self.app.save_settings()
         self._refresh()
 
-    def _refresh_tablets(self):
+    def _refresh_tablets(self, paired):
         """The tablets to choose from: the paired ones, by name, after
         "Automatic" (the last one used)."""
-        from .companion import Paired
-        try:
-            paired = Paired().all()
-        except OSError:
-            paired = {}
         choices = [(None, _("Automatic: the last one used"))] + sorted(
             ((fp[:16], str(name)) for fp, name in paired.items()), key=lambda c: c[1].lower())
         chosen = self.settings.sign_tablet
@@ -259,6 +272,39 @@ class Window(Adw.ApplicationWindow):
         with self.tablet_row.handler_block(self._tablet_handler):
             self.tablet_row.set_model(Gtk.StringList.new([label for _id, label in choices]))
             self.tablet_row.set_selected([c[0] for c in choices].index(chosen))
+
+    def _refresh_paired(self, paired):
+        """A row for each paired tablet, with Forget."""
+        paired = {fp: str(name) for fp, name in paired.items()}
+        if paired == self._paired:
+            return
+        self._paired = paired
+        for row in self._paired_rows:
+            self.paired_group.remove(row)
+        self._paired_rows = []
+        for fp, name in sorted(paired.items(), key=lambda item: item[1].lower()):
+            row = Adw.ActionRow(title=name, use_markup=False)  # the name the tablet gave
+            button = Gtk.Button(label=_("Forget"), valign=Gtk.Align.CENTER, css_classes=["flat"])
+            button.connect("clicked", lambda _b, fp=fp, name=name: self._ask_forget(fp, name))
+            row.add_suffix(button)
+            self.paired_group.add(row)
+            self._paired_rows.append(row)
+        self.paired_group.set_visible(bool(paired))
+
+    def _ask_forget(self, fingerprint, name):
+        dialog = Adw.MessageDialog(transient_for=self, heading=_("Forget {tablet}?").format(tablet=name),
+                                   body=_("Signing on it again asks for a code, on this PC and on the tablet."))
+        dialog.add_response("cancel", _("Cancel"))
+        dialog.add_response("forget", _("Forget"))
+        dialog.set_response_appearance("forget", Adw.ResponseAppearance.DESTRUCTIVE)
+
+        def answered(_d, response):
+            if response == "forget":
+                self.app.forget_tablet(fingerprint)
+                self._refresh()
+        dialog.connect("response", answered)
+        dialog.present()
+        return dialog
 
     def _on_tablet(self, row, _param):
         if self._tablets and row.get_selected() < len(self._tablets):

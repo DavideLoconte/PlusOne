@@ -51,3 +51,18 @@ def test_the_paired_tablets_to_choose_from(monkeypatch, tmp_path):
     assert chosen == ["bbbb000000000000"]
     win.tablet_row.set_selected(0)
     assert chosen[-1] is None
+
+
+def test_a_paired_tablet_is_forgotten(monkeypatch, tmp_path):
+    fp = "aaaa" + "0" * 60
+    paired = {fp: "Kitchen <b>&", "bbbb" + "0" * 60: "Office"}
+    win, _ = window(monkeypatch, tmp_path, paired)
+    forgotten = []
+    win.app.forget_tablet = lambda fingerprint: forgotten.append(paired.pop(fingerprint))
+    assert win.paired_group.get_visible()
+    assert [row.get_title() for row in win._paired_rows] == ["Kitchen <b>&", "Office"]
+    win._ask_forget(fp, "Kitchen <b>&").response("cancel")
+    assert not forgotten
+    win._ask_forget(fp, "Kitchen <b>&").response("forget")
+    assert forgotten == ["Kitchen <b>&"]
+    assert [row.get_title() for row in win._paired_rows] == ["Office"]

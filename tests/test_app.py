@@ -83,3 +83,20 @@ def test_settings_are_private(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "CONFIG", str(tmp_path / "plus-one" / "settings.json"))
     app.save_settings(Settings())
     assert os.stat(app.CONFIG).st_mode & 0o077 == 0
+
+
+def test_forgetting_a_tablet(tmp_path, monkeypatch):
+    import types
+    from plusone import app, companion
+    from plusone.engine import Settings
+    monkeypatch.setattr(app, "CONFIG", str(tmp_path / "settings.json"))
+    paired = companion.Paired(str(tmp_path))
+    kitchen, office = "abcd" * 16, "ef" * 32
+    paired.add(kitchen, "Kitchen")
+    paired.add(office, "Office")
+    monkeypatch.setattr(companion, "Paired", lambda: paired)
+    fake = types.SimpleNamespace(settings=Settings(sign_tablet=kitchen[:16], last_tablet=office[:16]))
+    app.PlusOneApp.forget_tablet(fake, kitchen)
+    assert paired.all() == {office: "Office"}
+    assert fake.settings.sign_tablet is None and fake.settings.last_tablet == office[:16]
+    assert app.load_settings(app.CONFIG).sign_tablet is None
