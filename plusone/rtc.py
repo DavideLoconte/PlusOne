@@ -42,6 +42,19 @@ GATHER = 3.0    # seconds for ICE's candidates, at most: host ones come at once
 BUNDLE_MAX = 3  # GstWebRTCBundlePolicy max-bundle
 
 
+def local_only(webrtc):
+    """The app is on the same network: UDP host addresses are all it takes.
+    libnice's UPnP asked the router to open the port to the internet (and
+    looked for one on every call); TCP candidates were only more sockets."""
+    ice = webrtc.get_property("ice-agent")
+    if ice.ref_count == 1:
+        # GStreamer 1.24's getter hands over webrtcbin's own reference: the
+        # agent went with this wrapper, under webrtcbin. One back for it.
+        ice._ref()
+    ice.set_property("ice-tcp", False)
+    ice.get_property("agent").set_property("upnp", False)
+
+
 class Receiver:
     """One device's webrtcbin, receiving: on_pad(receiver, pad) links what
     it decodes once the media come."""
@@ -55,6 +68,7 @@ class Receiver:
         self.webrtc = Gst.ElementFactory.make("webrtcbin", "webrtc")
         self.webrtc.set_property("bundle-policy", BUNDLE_MAX)
         self.webrtc.set_property("latency", JITTER[kind])
+        local_only(self.webrtc)
         self.pipeline.add(self.webrtc)
         # Disconnected in close(): a handler holding this Receiver kept it,
         # its webrtcbin, ICE agent and sockets (about 56 fds) alive for good.
