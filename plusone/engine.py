@@ -13,7 +13,7 @@ from gi.repository import Gio, GLib
 
 from . import log, media, once, pen, tablet
 from .display import VirtualMonitor, virtual_monitor_edid
-from .p2p import P2PLink
+from .p2p import P2PLink, local_addresses
 from .rtsp import MODES, WfdSession
 from .tablets import Tablets
 from .uibc import UibcServer
@@ -103,6 +103,7 @@ class Controller:
         # Each start() a new one: a connection accepted before stop() (and
         # verified for seconds after it) starts no session afterwards.
         self._generation = 0
+        self._lan = set()  # start(): local_addresses()
         self._lock = threading.Lock()  # _running, _generation, the session's start
         # No session (or its teardown done): the next connection may start one.
         self._idle = threading.Event()
@@ -148,6 +149,8 @@ class Controller:
         except (OSError, RuntimeError, KeyError) as e:  # KeyError: an encoder not known
             self._set_state(State.ERROR, "{error}", error=str(e))
             return
+        # This PC's addresses but Wi-Fi Direct's: a connection to them is the LAN's.
+        self._lan = local_addresses()
         with self._lock:
             self._running = True
             self._generation += 1
@@ -252,7 +255,15 @@ class Controller:
         if not self._current(generation):  # stopped while the tablet dialled in
             conn.close()
             return
-        if not self._from_tablet(addr[0]):
+        try:
+            name = conn.getsockname()
+        except OSError:
+            conn.close()
+            return
+        local = name[0] if isinstance(name, tuple) else ""  # "" for a test's Unix socket pair
+        # Come in over an interface the PC had before Wi-Fi Direct (the LAN):
+        # hung up on at once, not after waiting for the group's network.
+        if local in self._lan or not self._from_tablet(addr[0]):
             log("RTSP: hung up on", addr[0], "(not on the Wi-Fi Direct group)")
             conn.close()
             return
@@ -276,7 +287,7 @@ class Controller:
                 if s.touch and self.monitor:
                     try:
                         self.uibc = UibcServer(self.monitor, UIBC_PORT, pen_factory=self._make_pen,
-                                               peer=addr[0])
+                                               peer=addr[0], address=local or "0.0.0.0")
                     except OSError as e:
                         log("touch disabled:", e)
                 session = WfdSession(conn, self._on_play, self._on_idr,
@@ -300,14 +311,19 @@ class Controller:
     def _make_pen(self):
         # Called on the UIBC thread once the tablet says it has a pen.
         if pen.uhid_available():
-            device = pen.UhidPen()
+            # A uhid tablet is the whole desktop's until mapped onto the
+            # virtual monitor: not mapped, the tablet's pen would point and
+            # click on the PC's own screens. Then the pointer pen instead,
+            # which stays in the stream.
+            mapped = False
             try:
                 edid = virtual_monitor_edid()
-                if edid:
-                    pen.map_to_monitor(edid)
-            except Exception as e:  # noqa: BLE001 - the pen works, mapped or not
+                mapped = bool(edid) and pen.map_to_monitor(edid)
+            except Exception as e:  # noqa: BLE001 - the pointer pen then
                 log("pen: not mapped to the monitor:", repr(e))
-            return device
+            if mapped:
+                return pen.UhidPen()
+            log("pen: the tablet's monitor not known to map it onto: the pointer instead")
         if self.mode is None:
             raise RuntimeError("no mode yet")
         return pen.PointerPen(self.monitor, self.mode[:2])

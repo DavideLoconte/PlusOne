@@ -202,7 +202,7 @@ class WfdSession:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind(("0.0.0.0", self.rtcp_port))
+            sock.bind((self.our_ip, self.rtcp_port))  # where the sink reached this PC: not the LAN
             sock.settimeout(1)
         except OSError:
             sock.close()

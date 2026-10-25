@@ -78,14 +78,44 @@ def test_an_interface_s_network():
     assert interface_network("no-such-iface") is None
 
 
+class NamedPeer(Peer):
+    def __init__(self, path, name, mac, sink=True):
+        super().__init__(SINK_IES if sink else None)
+        self.path, self.name, self.mac = path, name, mac
+
+    def get_name(self):
+        return self.name
+
+    def get_hw_address(self):
+        return self.mac
+
+
 def test_a_known_display_by_name_or_mac():
     from plusone.p2p import P2PLink
     link = link_in(None)
-    link.match = ["tab s10 fe+", "aa:bb:cc:dd:ee:ff"]
+    link.exact, link.match = True, ["tab s10 fe+", "aa:bb:cc:dd:ee:ff"]
     peer = FakePeer("/p/1")
-    assert P2PLink._matches(link, peer)
+    assert P2PLink._choose(link, [peer]) is peer
     link.match = ["living room tv"]
-    assert not P2PLink._matches(link, peer)
+    assert P2PLink._choose(link, [peer]) is None
+
+
+def test_two_tablets_of_a_model_the_one_by_its_address():
+    # Both "Galaxy Tab S10 FE+": the learned address picks the right one,
+    # whichever is listed first; a name alone takes only a Miracast sink.
+    from plusone.p2p import P2PLink
+    link = link_in(None)
+    link.exact, link.match = True, ["11:22:33:44:55:66", "galaxy tab s10 fe+"]
+    stranger = NamedPeer("/p/1", "Galaxy Tab S10 FE+", "aa:aa:aa:aa:aa:aa")
+    ours = NamedPeer("/p/2", "Galaxy Tab S10 FE+", "11:22:33:44:55:66")
+    assert P2PLink._choose(link, [stranger, ours]) is ours
+    link.match = ["galaxy tab s10 fe+"]
+    printer = NamedPeer("/p/3", "Galaxy Tab S10 FE+", "bb:bb:bb:bb:bb:bb", sink=False)
+    assert P2PLink._choose(link, [printer, stranger]) is stranger
+    assert P2PLink._choose(link, [printer]) is None
+    # --peer: part of a name will do.
+    link.exact, link.match = False, ["s10"]
+    assert P2PLink._choose(link, [printer]) is printer
 
 
 def test_no_give_up_once_connected():

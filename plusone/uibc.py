@@ -29,7 +29,7 @@ def arrival_gaps(times):
 
 
 class UibcServer:
-    def __init__(self, injector, port=50000, pen_factory=None, peer=None):
+    def __init__(self, injector, port=50000, pen_factory=None, peer=None, address="0.0.0.0"):
         """injector: object with touch_down/touch_motion/touch_up(slot, x, y).
 
         pen_factory() returns an object with report(data)/close() for the S
@@ -48,7 +48,7 @@ class UibcServer:
         self.pen_states = set()  # pen state bytes logged so far
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind(("0.0.0.0", port))
+        self.sock.bind((address, port))  # the Wi-Fi Direct group's address only, given it
         self.sock.listen(1)
         self.down = set()
         self.conns = set()  # open sink connections, closed with the server

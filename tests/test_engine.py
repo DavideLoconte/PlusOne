@@ -140,3 +140,29 @@ def test_a_session_that_cannot_start_leaves_nothing_behind(monkeypatch):
         except OSError:
             pass
     assert controller._idle.is_set() and controller.link.connected is False and controller.session is None
+
+
+def test_a_lan_connection_is_hung_up_on_at_once(monkeypatch):
+    # Over an interface the PC had before Wi-Fi Direct: not even waited on.
+    import time
+    controller, served = group_member(monkeypatch, FakeTablets())
+    controller._lan = {"10.0.0.5"}
+    controller.link.network = lambda: None  # the group not up: _from_tablet would wait 3 s
+    closed = []
+    conn = types.SimpleNamespace(getsockname=lambda: ("10.0.0.5", 7236), close=lambda: closed.append(1))
+    start = time.monotonic()
+    controller._serve(conn, ("10.0.0.9", 5000), 1)
+    assert time.monotonic() - start < 0.5 and closed and served == [] and controller.tablets.checked == []
+
+
+def test_the_pen_is_never_the_whole_desktop_s(monkeypatch):
+    # Not mapped onto the virtual monitor, a uhid tablet would point and
+    # click on the PC's own screens: the pointer pen, kept in the stream.
+    monkeypatch.setattr(engine.pen, "uhid_available", lambda: True)
+    monkeypatch.setattr(engine, "virtual_monitor_edid", lambda: None)
+    made = []
+    monkeypatch.setattr(engine.pen, "UhidPen", lambda: made.append("uhid"))
+    controller = Controller(Settings(), tablets=FakeTablets())
+    controller.monitor, controller.mode = object(), (1920, 1080, 60)
+    device = controller._make_pen()
+    assert made == [] and isinstance(device, engine.pen.PointerPen)

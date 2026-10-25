@@ -200,13 +200,15 @@ class PointerPen:
 
 
 def map_to_monitor(edid):
-    """Tell Mutter to map our tablet onto the monitor with this (vendor, product, serial)."""
+    """Tell Mutter to map our tablet onto the monitor with this (vendor,
+    product, serial): whether it could."""
     if not Gio.SettingsSchemaSource.get_default().lookup(TABLET_SCHEMA, True):
         log("pen: no tablet settings schema, cannot map the pen to the monitor")
-        return
+        return False
     path = f"/org/gnome/desktop/peripherals/tablets/{VENDOR:04x}:{PRODUCT:04x}/"
     settings = Gio.Settings.new_with_path(TABLET_SCHEMA, path)
     settings.set_strv("output", list(edid))
     settings.set_boolean("keep-aspect", False)
     Gio.Settings.sync()
     log("pen: mapped to monitor", edid)
+    return True

@@ -54,6 +54,23 @@ def interface_network(name):
     return ipaddress.ip_network(f"{address}/{mask}", strict=False)
 
 
+def local_addresses():
+    """This PC's IPv4 addresses, but on Wi-Fi Direct groups' interfaces (p2p-*)."""
+    found = set()
+    for _index, name in socket.if_nameindex():
+        if name.startswith("p2p-"):
+            continue
+        network = interface_network(name)
+        if network is not None:
+            request = struct.pack("256s", name.encode()[:15])
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                    found.add(socket.inet_ntoa(fcntl.ioctl(s.fileno(), SIOCGIFADDR, request)[20:24]))
+            except OSError:
+                pass
+    return found
+
+
 def is_wfd_sink(peer):
     ies = peer.get_wfd_ies()
     data = ies.get_data() if ies else b""
@@ -88,6 +105,11 @@ class P2PLink:
         self.device = next(d for d in self.client.get_devices() if isinstance(d, NM.DeviceWifiP2P))
         if isinstance(match, str):
             match = [match]
+        # A list (the tablet in use's address and name): exact. A string
+        # (--peer): an address, or part of a name.
+        self.exact = not isinstance(match, str)
+        if isinstance(match, str):
+            match = [match]
         self.match = [m.lower() for m in match] if match else None
         self.peer = None
         # The group's network interface once it is up: the tablet's RTSP
@@ -97,11 +119,24 @@ class P2PLink:
         self.attempt = 0
         self.connected = False
 
-    def _matches(self, peer):
-        if self.match:
-            mac, name = (peer.get_hw_address() or "").lower(), (peer.get_name() or "").lower()
-            return any(m == mac or (m and m in name) for m in self.match)
-        return is_wfd_sink(peer)
+    def _choose(self, peers):
+        """The peer to connect to: by its address first (learned, the
+        tablet's own), then by its exact name and only a Miracast sink (two
+        tablets of a model are both "Galaxy Tab S10 FE+"); None if not there."""
+        if not self.match:
+            return next((p for p in peers if is_wfd_sink(p)), None)
+
+        def mac(p):
+            return (p.get_hw_address() or "").lower()
+
+        def name(p):
+            return (p.get_name() or "").lower()
+        chosen = next((p for p in peers if mac(p) in self.match), None)
+        if chosen is None and self.exact:
+            chosen = next((p for p in peers if name(p) in self.match and is_wfd_sink(p)), None)
+        elif chosen is None:
+            chosen = next((p for p in peers if any(m and m in name(p) for m in self.match)), None)
+        return chosen
 
     def network(self):
         """The group's IPv4 network, None until the group is up with an address."""
@@ -198,18 +233,18 @@ class P2PLink:
         if self.peer or self.stopped or self.device is None:
             self._polling = False
             return False
-        for peer in self.device.get_peers():
-            if self._matches(peer):
-                self.peer = peer
-                self._polling = False
-                log(f"found {peer.get_name()} ({peer.get_hw_address()})")
-                self.on_found(peer.get_name())
-                if self._reset:
-                    self._reset = False
-                    self.on_hint()
-                GLib.timeout_add_seconds(1, self._activate)
-                return False
-        return True
+        peer = self._choose(list(self.device.get_peers()))
+        if peer is None:
+            return True
+        self.peer = peer
+        self._polling = False
+        log(f"found {peer.get_name()} ({peer.get_hw_address()})")
+        self.on_found(peer.get_name())
+        if self._reset:
+            self._reset = False
+            self.on_hint()
+        GLib.timeout_add_seconds(1, self._activate)
+        return False
 
     def _activate(self):
         if self.stopped or self.connected or self.device is None or self.peer is None:
