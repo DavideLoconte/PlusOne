@@ -370,6 +370,7 @@ class Camera(Device):
         super().__init__(app, "camera")
         self.writers, self.opened = [], []
         self.producer = None
+        self.restart_when_idle = False  # Devices.restart_camera
 
     def enable(self):
         if self.writers:
@@ -446,6 +447,7 @@ class Camera(Device):
                 pipeline.set_state(Gst.State.NULL)
         self.producer, self.writers, self.opened = None, [], []
         self._in_use = False
+        self.restart_when_idle = False
         self._set_state("off")
 
     def _opened(self, _count):
@@ -463,6 +465,8 @@ class Camera(Device):
         self.stop_feed()
         if self.producer:
             self.selector.set_property("active-pad", self.black)
+        if self.restart_when_idle:
+            GLib.idle_add(once(self.app.devices.restart_camera))  # its new size, now
 
     def _receiver(self):
         """The tablet's video, decoded and made the device's size, into the producer."""
@@ -747,7 +751,14 @@ class Devices:
                 device.disable()
 
     def restart_camera(self):
-        """Its quality changed: the device's format with it."""
+        """Its quality changed: the device's format with it, which means a
+        new device: not while a program uses it (its picture would stop, and
+        it would have to find the camera again), but once it lets go."""
+        if self.camera._in_use:
+            log("camera: the new size once no program uses it")
+            self.camera.restart_when_idle = True
+            return
+        self.camera.restart_when_idle = False
         self.camera.disable()
         self.apply()
 

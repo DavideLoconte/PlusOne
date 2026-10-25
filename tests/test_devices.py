@@ -276,6 +276,26 @@ def test_no_tablet_on_the_network(monkeypatch):
     assert problems[0] == "away"
 
 
+def test_a_new_size_waits_until_no_program_uses_the_camera(monkeypatch):
+    later = []
+    monkeypatch.setattr(devices.GLib, "idle_add", lambda call: later.append(call))
+    calls = []
+    manager = devices.Devices.__new__(devices.Devices)
+    manager.app = types.SimpleNamespace(devices=manager)
+    camera = devices.Camera(FakeApp())
+    camera.app = manager.app
+    camera.disable = lambda: calls.append("disable")
+    manager.camera = camera
+    manager.apply = lambda: calls.append("apply")
+    camera._in_use = True
+    manager.restart_camera()
+    assert calls == [] and camera.restart_when_idle  # the call goes on as it is
+    camera._in_use = False
+    camera.end()  # the program let go
+    later.pop()()
+    assert calls == ["disable", "apply"] and not camera.restart_when_idle
+
+
 def test_the_voice_chain_by_what_is_there(monkeypatch):
     every = {devices.DEEP_FILTER: "ladspa-x-deep-filter-mono", devices.COMPRESSOR: "ladspa-x-sc4m",
              devices.LIMITER: "ladspa-x-fastlookaheadlimiter"}

@@ -186,7 +186,8 @@ _IT = {
     "Front": "Frontale",
     "Back": "Posteriore",
     "Picture": "Immagine",
-    "1080p takes about twice the bandwidth": "1080p usa circa il doppio della banda",
+    "1080p takes about twice the bandwidth. A change waits until no program uses the camera":
+        "1080p usa circa il doppio della banda. Un cambio attende che nessun programma usi la fotocamera",
     "On your network": "Sulla tua rete",
     "Not on your network now": "Ora non è sulla tua rete",
     "Pair another tablet…": "Abbina un altro tablet…",

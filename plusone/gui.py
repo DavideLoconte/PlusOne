@@ -528,7 +528,7 @@ class PreferencesDialog(Adw.PreferencesDialog):
         self.quality_row = Adw.ComboRow(title=_("Picture"), model=Gtk.StringList.new(
             ["720p (1280 × 720)", "1080p (1920 × 1080)"]),
             selected=QUALITY_LIST.index(s.camera_quality) if s.camera_quality in QUALITY_LIST else 0,
-            subtitle=_("1080p takes about twice the bandwidth"))
+            subtitle=_("1080p takes about twice the bandwidth. A change waits until no program uses the camera"))
         for row in (self.facing_row, self.quality_row):
             row.connect("notify::selected", self._camera_options)
             group.add(row)
