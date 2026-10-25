@@ -8,6 +8,7 @@ import android.graphics.Paint
 import android.graphics.PointF
 import android.graphics.RectF
 import android.util.AtomicFile
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -17,6 +18,7 @@ import com.google.android.material.button.MaterialButton
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.Executors
 import com.google.android.material.R as M
 
 /**
@@ -30,6 +32,14 @@ object Signatures {
     private const val FILE = "signatures.json"
     private const val MAX = 50
     private const val KEEP_REMOVED = 500
+
+    // The list as last read or saved: the signing screen asks for it on
+    // every refresh, which read and parsed the file on the main thread
+    // (fifty signatures of points), and waited for the service's merge.
+    private var state: Pair<List<Signature>, List<String>>? = null
+
+    // Written in order, off the caller's thread (AtomicFile syncs to disk).
+    private val writer = Executors.newSingleThreadExecutor()
 
     @Synchronized
     fun all(context: Context): List<Signature> = load(context).first
@@ -74,11 +84,11 @@ object Signatures {
 
     private fun file(context: Context) = AtomicFile(File(context.filesDir, FILE))
 
-    private fun load(context: Context): Pair<List<Signature>, List<String>> = try {
+    private fun load(context: Context): Pair<List<Signature>, List<String>> = state ?: try {
         parse(JSONObject(String(file(context).readFully())))
     } catch (e: Exception) {
         emptyList<Signature>() to emptyList()
-    }
+    }.also { state = it }
 
     private fun parse(json: JSONObject): Pair<List<Signature>, List<String>> {
         val list = json.optJSONArray("signatures") ?: JSONArray()
@@ -91,17 +101,23 @@ object Signatures {
     }
 
     private fun save(context: Context, list: List<Signature>, removed: List<String>) {
-        val json = JSONObject()
-            .put("signatures", JSONArray(list.take(MAX).map { it.toJson() }))
-            .put("removed", JSONArray(removed.takeLast(KEEP_REMOVED)))
-        val file = file(context)
-        val out = file.startWrite()
-        try {
-            out.write(json.toString().toByteArray())
-            file.finishWrite(out)
-        } catch (e: Exception) {
-            file.failWrite(out)
-            throw e
+        val kept = list.take(MAX) to removed.takeLast(KEEP_REMOVED)
+        state = kept
+        val app = context.applicationContext
+        writer.execute {
+            val json = JSONObject()
+                .put("signatures", JSONArray(kept.first.map { it.toJson() }))
+                .put("removed", JSONArray(kept.second))
+            val file = file(app)
+            var out: java.io.FileOutputStream? = null
+            try {
+                out = file.startWrite()
+                out.write(json.toString().toByteArray())
+                file.finishWrite(out)
+            } catch (e: Exception) {
+                out?.let(file::failWrite)
+                Log.w(CompanionService.TAG, "signatures not saved", e)
+            }
         }
     }
 }
