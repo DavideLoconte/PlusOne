@@ -239,6 +239,7 @@ class PlusOneApp(Adw.Application):
             action.connect("activate", callback)
             self.add_action(action)
         self.signing = Signing(self)
+        self._device_states = {}  # the camera's and the microphone's, as last notified
         self.devices = Devices(self)
 
     # -- GApplication ------------------------------------------------------
@@ -431,6 +432,22 @@ class PlusOneApp(Adw.Application):
     def devices_changed(self):
         for listener in list(self.listeners):
             listener()
+        # The tablet did not let a program have its camera or microphone: the
+        # app there asks its user now; this says to look at the tablet.
+        for kind in ("camera", "microphone"):
+            state = getattr(self.devices, kind).state
+            if state == self._device_states.get(kind):
+                continue
+            self._device_states[kind] = state
+            if state in ("tablet-off", "tablet-permission"):
+                camera = kind == "camera"
+                note = Gio.Notification.new(_("Allow the camera on the tablet") if camera
+                                            else _("Allow the microphone on the tablet"))
+                note.set_body(_("A program wants it: tap Plus One's notification on the tablet"))
+                note.set_default_action("app.show")
+                self.send_notification(f"device-{kind}", note)
+            else:
+                self.withdraw_notification(f"device-{kind}")
 
     def forget_tablet(self, fingerprint):
         """This PC forgets a paired tablet: using it again takes pairing again."""

@@ -119,4 +119,9 @@
     <string name="scroll_off">Una alla volta: le frecce in alto le girano.</string>
     <string name="not_paired_title">Non ancora abbinato</string>
     <string name="status_unpaired">Sul PC apri Plus One, fai clic su «Abbina un tablet» e scegli “%1$s”.</string>
+    <string name="ask_camera">%1$s vuole usare la fotocamera</string>
+    <string name="ask_microphone">%1$s vuole usare il microfono</string>
+    <string name="ask_device_text">Un programma su quel PC lo chiede, per una chiamata per esempio: tocca Consenti.</string>
+    <string name="onboarding_title">Fai sì che Plus One ti raggiunga</string>
+    <string name="onboarding_text">Perché il codice di abbinamento, i PDF da firmare e un PC che chiede la fotocamera compaiano da soli, consenti le notifiche di Plus One e «Mostra sopra le altre app».</string>
 </resources>

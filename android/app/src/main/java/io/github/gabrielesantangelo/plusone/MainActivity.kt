@@ -30,9 +30,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (savedInstanceState == null) tryOut(intent)  // not again when recreated
-        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
-        }
+        Wfd.ensure(this)  // Second Screen's low-latency mode, without a file made by hand
         content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
@@ -100,6 +98,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(8), dp(32), dp(8), dp(20))
         })
         content.addView(hero())
+        onboarding()?.let { content.addView(it) }
 
         val waiting = Jobs.waiting()
         if (waiting.isNotEmpty()) {
@@ -208,6 +207,34 @@ class MainActivity : AppCompatActivity() {
         })
     }
 
+    /** What lets the app reach the user by itself (the pairing code, a PDF to
+     * sign, a PC asking for the camera), asked together and said why, while
+     * anything of it is missing; null once it is all there. */
+    private fun onboarding(): View? {
+        val notifications = checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        val overlay = Settings.canDrawOverlays(this)
+        if (notifications && overlay) return null
+        return MaterialCardView(this, null, M.attr.materialCardViewFilledStyle).apply {
+            radius = dp(28f)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) }
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(20), dp(20), dp(20), dp(16))
+                addView(label(getString(R.string.onboarding_title), M.attr.textAppearanceTitleMedium))
+                addView(label(getString(R.string.onboarding_text), M.attr.textAppearanceBodyMedium,
+                    M.attr.colorOnSurfaceVariant).apply { setPadding(0, dp(8), 0, dp(12)) })
+                addView(button(getString(R.string.overlay_allow), Look.FILLED) {
+                    // Notifications first (a question here), then "display over other apps" (a settings page).
+                    if (!notifications) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+                    else allowOverlay()
+                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                    .apply { gravity = Gravity.END })
+            })
+        }
+    }
+
     /** A switch that lets the PC have the camera or the microphone: Android's
      * permission is asked for when it is turned on. */
     private fun pcDevice(kind: String, iconRes: Int, title: Int, on: Int, off: Int): Row {
@@ -250,13 +277,16 @@ class MainActivity : AppCompatActivity() {
         if (on) CompanionService.instance?.elevate()
     }
 
-    /** Whether Android's question was asked already (after a "no", it is not asked again). */
-    private fun asked(kind: String) = getSharedPreferences("asked", MODE_PRIVATE).getBoolean(kind, false)
+    private fun asked(kind: String) = Options.asked(this, kind)
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, results: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, results)
+        if (requestCode == 1) {  // notifications (the onboarding card): then the overlay, if missing
+            if (!Settings.canDrawOverlays(this)) allowOverlay() else refresh()
+            return
+        }
         val kind = REQUESTS.entries.firstOrNull { it.value == requestCode }?.key ?: return
-        getSharedPreferences("asked", MODE_PRIVATE).edit().putBoolean(kind, true).apply()
+        Options.setAsked(this, kind)
         setPcDevice(kind, results.firstOrNull() == PackageManager.PERMISSION_GRANTED)
         refresh()
     }

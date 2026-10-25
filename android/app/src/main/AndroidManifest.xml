@@ -54,6 +54,12 @@
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|density|fontScale|locale|layoutDirection" />
 
         <activity
+            android:name=".AllowActivity"
+            android:exported="false"
+            android:theme="@style/Theme.PlusOne.Capture"
+            android:excludeFromRecents="true" />
+
+        <activity
             android:name=".PairActivity"
             android:exported="false"
             android:theme="@style/Theme.PlusOne.Pair"

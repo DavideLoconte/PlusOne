@@ -72,6 +72,36 @@ object Notifications {
         context.getSystemService(NotificationManager::class.java).notify(pairingId(code), notification)
     }
 
+    /** A PC wants the camera or the microphone, which the user did not let
+     * PCs have (or Android did not): Allow, from where the user is. */
+    fun askDevice(context: Context, kind: String, pc: String) {
+        val allow = PendingIntent.getActivity(context, deviceId(kind),
+            Intent(context, AllowActivity::class.java).putExtra(AllowActivity.EXTRA_KIND, kind)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val camera = kind == MainActivity.CAMERA
+        val notification = Notification.Builder(context, ASK)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(context.getString(if (camera) R.string.ask_camera else R.string.ask_microphone, pc))
+            .setContentText(context.getString(R.string.ask_device_text))
+            .setContentIntent(allow)
+            // Not from the lock screen: whoever holds the tablet, locked, does not turn it on.
+            .addAction(Notification.Action.Builder(null, context.getString(R.string.overlay_allow), allow)
+                .setAuthenticationRequired(true).build())
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+            // A group of its own: grouped with the service's, a tap opened the
+            // group instead of allowing.
+            .setGroup("ask-$kind")
+            .setAutoCancel(true)
+            .build()
+        context.getSystemService(NotificationManager::class.java).notify(deviceId(kind), notification)
+    }
+
+    fun cancelDevice(context: Context, kind: String) =
+        context.getSystemService(NotificationManager::class.java).cancel(deviceId(kind))
+
+    private fun deviceId(kind: String) = if (kind == MainActivity.CAMERA) 2001 else 2002
+
     fun cancelPairing(context: Context, code: String) =
         context.getSystemService(NotificationManager::class.java).cancel(pairingId(code))
 

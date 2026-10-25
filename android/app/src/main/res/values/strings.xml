@@ -118,4 +118,9 @@
     <string name="scroll_off">One at a time: the arrows at the top turn them.</string>
     <string name="not_paired_title">Not paired yet</string>
     <string name="status_unpaired">On your PC, open Plus One, click Pair a tablet and choose “%1$s”.</string>
+    <string name="ask_camera">%1$s wants to use the camera</string>
+    <string name="ask_microphone">%1$s wants to use the microphone</string>
+    <string name="ask_device_text">A program on that PC wants it, for a call say: tap Allow.</string>
+    <string name="onboarding_title">Let Plus One reach you</string>
+    <string name="onboarding_text">So the pairing code, PDFs to sign and a PC asking for the camera appear by themselves, allow Plus One\'s notifications and “Display over other apps”.</string>
 </resources>

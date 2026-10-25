@@ -304,9 +304,20 @@ class CompanionService : Service() {
     private fun capture(socket: SSLSocket, wire: Wire, request: JSONObject, kind: String, pc: String) {
         val camera = kind == "camera"
         fun refuse(reason: String) = wire.send(JSONObject().put("type", "refused").put("reason", reason))
-        if (!(if (camera) Options.camera(this) else Options.microphone(this))) return refuse("off")
+        // Not let, or Android not asked yet: the user is asked here and now
+        // (a notification, once a minute at most: the PC asks again every 10 s).
+        fun ask(reason: String) {
+            val now = System.currentTimeMillis()
+            if (now - (asked[kind] ?: 0L) > ASK_AGAIN) {
+                asked[kind] = now
+                Notifications.askDevice(this, kind, pc)
+            }
+            refuse(reason)
+        }
+        if (!(if (camera) Options.camera(this) else Options.microphone(this))) return ask("off")
         val permission = if (camera) Manifest.permission.CAMERA else Manifest.permission.RECORD_AUDIO
-        if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) return refuse("permission")
+        if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) return ask("permission")
+        Notifications.cancelDevice(this, kind)  // allowed now
         val offer = request.optString("sdp")
         if (offer.isEmpty()) return refuse("unavailable")  // a PC of before WebRTC
         // The PC says whether libwebrtc takes the noise out: not when it does
@@ -537,6 +548,8 @@ class CompanionService : Service() {
         false
     }
 
+    private val asked = java.util.concurrent.ConcurrentHashMap<String, Long>()  // kind -> when the user was
+
     // An upload's bytes and slot, from before it starts until it is a job.
     private val incoming = AtomicLong()
     private val arriving = AtomicInteger()
@@ -550,6 +563,7 @@ class CompanionService : Service() {
         const val MAX_CONNECTIONS = 32
         const val MAX_UNPAIRED = 4             // connections of peers not yet known, at a time
         const val MAX_HANDSHAKING = 8          // connections still in their TLS handshake, at a time
+        const val ASK_AGAIN = 60_000L          // ms between notifications asking for the camera or microphone
         const val LISTEN_RETRY = 30_000L       // ms before trying to listen again
         const val MAX_ANSWER = 15 * 1024 * 1024  // characters of an answer, under the PC's 16 MB
         const val HANDSHAKE_DEADLINE = 20_000L // ms for an unknown peer's whole handshake

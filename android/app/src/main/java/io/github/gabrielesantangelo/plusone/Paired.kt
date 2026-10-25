@@ -29,6 +29,13 @@ object Options {
     fun setCamera(context: Context, on: Boolean) =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("camera", on).apply()
 
+    /** Whether Android's question for kind was asked already (after a "no", it is not asked again). */
+    fun asked(context: Context, kind: String) =
+        context.getSharedPreferences("asked", Context.MODE_PRIVATE).getBoolean(kind, false)
+
+    fun setAsked(context: Context, kind: String) =
+        context.getSharedPreferences("asked", Context.MODE_PRIVATE).edit().putBoolean(kind, true).apply()
+
     fun microphone(context: Context) =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("microphone", false)
 
