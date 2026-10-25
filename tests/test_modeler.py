@@ -77,7 +77,7 @@ def test_pressure_only_reports_do_not_slow_the_pen():
     model.down(100, 50, 0.4, 0.0)
     for i in range(1, 40):
         model.move(100 + 2 * (i // 2), 50, 0.4 + 0.001 * i, i * DT)
-    _pos, velocity, _acc, _jerk = model.kalman.estimate()
+    _pos, velocity = model.kalman.estimate()
     assert velocity[0] == pytest.approx(1 / DT, rel=0.1) and abs(velocity[1]) < 1
 
 

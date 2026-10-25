@@ -12,7 +12,7 @@ b x + d y + f, as ink.transform takes them.
 """
 import math
 
-from .ink import bounds, transform
+from .ink import bounds, side, transform
 from .pdf import Stroke, Text
 
 BLUE = (11 / 255, 153 / 255, 1.0)
@@ -109,15 +109,11 @@ def inside(polygon, x, y):
     return result
 
 
-def _side(a, b, c):
-    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
-
-
 def _crosses(polygon, a, b):
     n = len(polygon)
     for i in range(n):
         c, d = polygon[i], polygon[(i + 1) % n]
-        if _side(a, b, c) * _side(a, b, d) < 0 and _side(c, d, a) * _side(c, d, b) < 0:
+        if side(a, b, c) * side(a, b, d) < 0 and side(c, d, a) * side(c, d, b) < 0:
             return True
     return False
 

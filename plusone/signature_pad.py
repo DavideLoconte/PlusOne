@@ -11,12 +11,10 @@ from gi.repository import Adw, Gdk, Gtk  # noqa: E402
 
 from . import signatures  # noqa: E402
 from .i18n import _  # noqa: E402
-from .ink import normalize, touches  # noqa: E402
+from .ink import ERASER_RADIUS, NO_PRESSURE, normalize, touches  # noqa: E402
 from .pdf import Stroke, draw_marks  # noqa: E402
 
 PAD_POINTS = 280.0  # the pad's width in page points: twice a placed signature
-NO_PRESSURE = 0.35  # a mouse draws a medium line (as in sign.py)
-ERASER_RADIUS = 12  # pixels around the pointer, as in the signing window
 # The S Pen's side button arrives as the second or third button, a mouse's right one as the third.
 ERASE_BUTTONS = Gdk.ModifierType.BUTTON2_MASK | Gdk.ModifierType.BUTTON3_MASK
 

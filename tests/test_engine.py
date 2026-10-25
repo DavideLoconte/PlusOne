@@ -28,7 +28,8 @@ def test_only_the_wi_fi_direct_group_gets_the_desktop(monkeypatch):
     assert controller._from_tablet("192.168.49.7")
     assert not controller._from_tablet("192.168.1.20")
     served = []
-    monkeypatch.setattr(engine, "WfdSession", lambda *a, **k: served.append(a) or types.SimpleNamespace(run=lambda: None))
+    monkeypatch.setattr(engine, "WfdSession",
+                        lambda *a, **k: served.append(a) or types.SimpleNamespace(run=lambda: None))
     left, right = socket.socketpair()
     with left, right:
         controller._serve(left, ("192.168.1.20", 5000))

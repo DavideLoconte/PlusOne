@@ -8,7 +8,6 @@ import os
 import struct
 import time
 
-import cairo
 import pytest
 
 if not os.environ.get("PLUSONE_GUI_TESTS"):

@@ -52,22 +52,18 @@ class Params:
     measurement_noise: float = 1.0
     stable_after: int = 4           # samples before predicting
     time_samples: int = 20
-    acceleration_weight: float = 0.0
-    jerk_weight: float = 0.0
     confident_samples: int = 20
     max_estimation_distance: float = 2.5
     min_travel_speed: float = 25.0
     max_travel_speed: float = 150.0
-    max_linear_deviation: float = 18.0
-    baseline_linearity: float = 0.4
 
     @classmethod
-    def smoothing(cls, level, **overrides):
+    def smoothing(cls, level):
         """A note app's stabilization scale: 0 follows the pen within ~7 ms,
         10 lags ~115 ms behind it and rounds everything off."""
         level = max(0, min(LEVELS, level))
         return cls(mass=(30 + 10 * level * level) / 32400 / 100,
-                   drag=(72 - 0.36 * level * level) * 10, **overrides)
+                   drag=(72 - 0.36 * level * level) * 10)
 
 
 class StrokeModeler:
@@ -269,33 +265,26 @@ class _Predictor:
             self.last, self.moved = (x, y), t
 
     def estimate(self):
-        """(position, velocity, acceleration, jerk) per second, or None
-        until the filter has settled."""
-        p = self.params
-        if self.samples < p.stable_after:
+        """(position, velocity per second), or None until the filter has
+        settled. The prediction is a straight line along the velocity: the
+        filter's acceleration and jerk curved it worse (see Params.prediction)."""
+        if self.samples < self.params.stable_after:
             return None
         step = (self.times[-1] - self.times[0]) / (len(self.times) - 1)
         sx, sy = self.x.s, self.y.s
-        return ((sx[0], sy[0]), (sx[1] / step, sy[1] / step),
-                (p.acceleration_weight * sx[2] / step ** 2, p.acceleration_weight * sy[2] / step ** 2),
-                (p.jerk_weight * sx[3] / step ** 3, p.jerk_weight * sy[3] / step ** 3))
+        return (sx[0], sy[0]), (sx[1] / step, sy[1] / step)
 
     def confidence(self, estimate):
         """0..1: enough samples, the filter agreeing with them, a pen moving
-        fast enough to be worth it, along a path that is not too curved."""
+        fast enough to be worth it."""
         p = self.params
-        pos, vel, acc, jerk = estimate
-        t = p.prediction
-        end = _cubic(pos, vel, acc, jerk, t)
-        linear = (pos[0] + vel[0] * t, pos[1] + vel[1] * t)
+        pos, vel = estimate
         samples = min(1.0, self.samples / p.confident_samples)
         distance = 1 - min(1.0, math.dist(self.last, pos) / p.max_estimation_distance)
-        speed = math.dist(end, pos) / t
+        speed = math.hypot(*vel)
         span = p.max_travel_speed - p.min_travel_speed
         travel = min(1.0, max(0.0, (speed - p.min_travel_speed) / span))
-        deviation = min(1.0, math.dist(end, linear) / p.max_linear_deviation)
-        linearity = 1 - (1 - p.baseline_linearity) * deviation
-        return samples * distance * travel * linearity
+        return samples * distance * travel
 
     def ahead(self, pen, now):
         """Points past the pen's last sample, along its estimated motion;
@@ -303,11 +292,7 @@ class _Predictor:
         estimate = self.estimate()
         if estimate is None or now - self.moved > STILL:
             return []
-        _pos, vel, acc, jerk = estimate
+        _pos, vel = estimate
         dt = 1.0 / self.params.min_rate
         steps = math.ceil(self.confidence(estimate) * self.params.prediction / dt)
-        return [_cubic(pen, vel, acc, jerk, i * dt) for i in range(1, steps + 1)]
-
-
-def _cubic(pos, vel, acc, jerk, t):
-    return tuple(pos[k] + vel[k] * t + acc[k] * t * t / 2 + jerk[k] * t ** 3 / 6 for k in (0, 1))
+        return [(pen[0] + vel[0] * i * dt, pen[1] + vel[1] * i * dt) for i in range(1, steps + 1)]

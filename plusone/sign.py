@@ -26,19 +26,16 @@ from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gsk, Gtk, Poppler  # no
 
 from . import log, once, selection as picking, signatures  # noqa: E402
 from .i18n import _  # noqa: E402
-from .ink import (RawPen, View, bounds, load_pen, normalize, pen_width, place,  # noqa: E402
+from .ink import (ERASER_RADIUS, NO_PRESSURE, RawPen, View, bounds, load_pen, normalize, pen_width, place,  # noqa: E402
                   save_pen, thickness, touches)
 from .modeler import LEVELS, Params, StrokeModeler  # noqa: E402
 from .pdf import INK, Stroke, Text, curve, draw_marks, draw_segments, output_path, save_signed  # noqa: E402
 from .pen import feed as pen_feed  # noqa: E402
-from .signature_pad import SignatureList, SignaturePad, draw_eraser_icon, draw_thumb  # noqa: E402
+from .signature_pad import (ERASE_BUTTONS, SignatureList, SignaturePad, draw_eraser_icon,  # noqa: E402
+                            draw_thumb)
 
 from .signing import PEN  # noqa: E402 - shared with the tablet's app
 PEN_SOURCES = (Gdk.InputSource.PEN, Gdk.InputSource.TOUCHSCREEN)
-NO_PRESSURE = 0.35  # mouse, or a pen that reports none: a medium line
-ERASER_RADIUS = 12  # widget pixels around the pen tip
-# The S Pen's side button arrives as the stylus' second or third button.
-ERASE_BUTTONS = Gdk.ModifierType.BUTTON2_MASK | Gdk.ModifierType.BUTTON3_MASK
 RAW_TOLERANCE = 24  # widget pixels between where the tablet and GTK put the tip
 TOOLBAR_SPACE = 84  # pixels kept clear under the page for the floating toolbar
 # The S Pen reports at a steady rate, but they reach us in bursts over

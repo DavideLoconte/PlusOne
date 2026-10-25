@@ -13,6 +13,8 @@ SIGNATURE_WIDTH = 140.0  # points (about 5 cm) when a saved signature is placed
 MIN_WIDTH, MAX_WIDTH = 0.3, 6.0  # pen widths offered, points
 SMOOTHING = 2  # of modeler.LEVELS: the ink trails the pen by ~15 ms
 TIP = 0x01  # tip switch bit of a pen report
+NO_PRESSURE = 0.35  # a mouse, or a pen that reports none: a medium line
+ERASER_RADIUS = 12  # widget pixels around the pen's tip (or the pointer)
 
 
 class View:
@@ -239,11 +241,12 @@ def _to_segment(pt, a, b):
     return math.dist(pt, (a[0] + t * dx, a[1] + t * dy))
 
 
-def _side(a, b, c):
+def side(a, b, c):
+    """Which side of the line a-b point c is on (the sign), and how far (times |ab|)."""
     return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
 
 
 def _between_segments(p, q, a, b):
-    if _side(a, b, p) * _side(a, b, q) < 0 and _side(p, q, a) * _side(p, q, b) < 0:
+    if side(a, b, p) * side(a, b, q) < 0 and side(p, q, a) * side(p, q, b) < 0:
         return 0.0  # they cross
     return min(_to_segment(p, a, b), _to_segment(q, a, b), _to_segment(a, p, q), _to_segment(b, p, q))
