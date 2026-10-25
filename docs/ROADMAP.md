@@ -93,7 +93,7 @@ Acceptance: from a fresh login, tablet as a monitor = 1 click + 1 tap.
 Acceptance: right-click → *Sign on tablet* → 1 tap → sign → *Done*: no other
 step, less than 10 s of overhead.
 
-### 0.5 — Companion app: instant ink, and a display of its own
+### 0.5 — Companion app: instant ink (done; the display moved to 0.7)
 
 Measured in 0.4: from the pen to its ink on the tablet takes about 70-100 ms
 through Second Screen. Plus One's own drawing is 3-4 ms of that; the rest is
@@ -141,7 +141,58 @@ Acceptance: right-click a PDF → *Sign on tablet* → the app opens on the
 tablet (one tap on its notification at most) → the ink is under the nib →
 *Done* → `name-signed.pdf` on the PC.
 
-### 0.6 — Tablet modes and picture quality
+### 0.6 — Your tablet, and only it (done)
+
+- Pairing from the window (six-digit code on both screens); one tablet in
+  use; Second Screen checked against the paired app before any picture
+  leaves the PC.
+- The tablet's camera and microphone as the PC's webcam and microphone,
+  over WebRTC, captured only while a program uses them, asked for on the
+  tablet when needed; neural noise reduction on the PC.
+- The S Pen through a small root helper (no group gets `/dev/uhid`);
+  Intel's low-power encoder first; preferences on one page.
+
+### 0.7 — The desktop in Plus One's app
+
+The display part of 0.5, now first: the desktop goes to Plus One's app
+instead of Second Screen, which stays as the way without the app.
+
+- **Why**: any Android tablet (not only Samsung's), the home Wi-Fi instead
+  of Wi-Fi Direct (no group to form, no Intel firmware crashes, the PC keeps
+  its network), the tablet's own resolution (2880×1800 on a Tab S10 FE+,
+  WFD stops at 1920×1200), and the pen's every sample instead of UIBC's
+  bursts.
+- **Picture**: the virtual monitor and encoder of today (Intel low-power
+  first), H.264 without MPEG-TS, each frame cut into UDP packets and sent
+  at once, encrypted (AES-GCM) with a key the paired TLS link hands over
+  for the session. On the tablet `MediaCodec` in low-latency mode decodes
+  into a full-screen `SurfaceView`, each frame shown as soon as it is
+  decoded, no jitter buffer. A lost packet drops the frame and asks for a
+  keyframe, at most one a second.
+- **Input**: touches and the pen as Android gives them (every historical
+  sample, pressure, tilt, hover, side button, eraser), over the same
+  encrypted UDP; the PC replays touches through Mutter (as UIBC's today)
+  and the pen through the pen helper, on the tablet's monitor only.
+- **Control** over the paired TLS link: start and stop, size and rate,
+  keyframe requests, statistics; found by mDNS as for signing.
+- **Starting**: *Use as second screen*, the Quick Settings button or the
+  notification pick the app when it is there; the app opens the display by
+  itself (it may already, for signing). Nothing runs while it is not shown:
+  the tablet's screen off or the app left stops capture and encoding.
+- **Measured, not guessed**: frames carry the PC's capture time and the app
+  reports when each was shown (clocks matched over the TLS link), so the
+  window and log give the real delay.
+
+Acceptance: 1 click on the PC, no tap on the tablet; from a change on the
+PC to the tablet's screen under Second Screen's ~45-50 ms (target 35 ms) at
+1920×1200@60, sharp text at 2880×1800; the pen's ink in GIMP with every
+sample.
+
+Steps: (1) a test pattern to the app, its delay measured; (2) the real
+desktop, touch and pen; (3) starting, stopping, losses, power, the window
+and Quick Settings; (4) release.
+
+### Later — Tablet modes and picture quality
 
 - **Mirror** an existing monitor (presentations, teaching).
 - **Graphics tablet**: the pen drives a chosen PC monitor like a Wacom while
@@ -157,7 +208,7 @@ tablet (one tap on its notification at most) → the ink is under the nib →
   audio), so this suits films more than desktop work. The companion app (0.5)
   removes that cost.
 
-### 0.7 — Quick Share
+### Later — Quick Share
 
 - Our own Python implementation of the Quick Share (Nearby Share) protocol:
   mDNS, UKEY2 handshake, protobuf frames, AES-CBC and HMAC. Written from the
@@ -175,7 +226,7 @@ tablet (one tap on its notification at most) → the ink is under the nib →
 Acceptance: send = right-click → *Send to tablet*; receive = share on the
 tablet → notification on the PC.
 
-### 0.8 — Polish
+### Later — Polish
 
 - Optional USB mode through adb and the MS-MICE path (steadier link for
   people with a free port).
