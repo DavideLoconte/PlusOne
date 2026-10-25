@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.7.0 (in progress)
+
+The desktop in Plus One's app.
+
+- **The second screen through Plus One's app**: with the app on the
+  tablet and on the same Wi-Fi, *Use as second screen* (or the Tablet
+  button) sends the desktop to it, no Second Screen and no Wi-Fi Direct.
+  H.264 frames go out the moment the encoder has them, cut into UDP
+  packets sealed with AES-GCM under a key the paired link hands over; the
+  app decodes each as soon as it is whole (hardware, low-latency mode) and
+  shows it at once. Measured at 1920×1200@60: 23 ms median from capture on
+  the PC to decoded on the tablet while idle, about 30 while windows move
+  (Second Screen: 45-50 ms to the glass). Fingers and the S Pen go back the
+  same way, every pen sample, pressure, tilt, hover and the side button;
+  two fingers tapped together are the right button. Paused while the app is
+  not on the tablet's screen; Back or *Stop* on the tablet ends it. Without
+  the app, or by choice in the preferences, Second Screen as before. New
+  dependency: `python3-cryptography`.
+- Fixed: after a loss, Second Screen could stay broken up to 10 s with
+  Intel's encoder, which answered keyframe requests with a frame the
+  tablet cannot start from, and only once; each request now gets a real
+  keyframe at the next frame.
+
 ## 0.6.0
 
 Your tablet, and only it.

@@ -152,7 +152,7 @@ tablet (one tap on its notification at most) → the ink is under the nib →
 - The S Pen through a small root helper (no group gets `/dev/uhid`);
   Intel's low-power encoder first; preferences on one page.
 
-### 0.7 — The desktop in Plus One's app
+### 0.7 — The desktop in Plus One's app (steps 1-3 done)
 
 The display part of 0.5, now first: the desktop goes to Plus One's app
 instead of Second Screen, which stays as the way without the app.
@@ -191,6 +191,12 @@ sample.
 Steps: (1) a test pattern to the app, its delay measured; (2) the real
 desktop, touch and pen; (3) starting, stopping, losses, power, the window
 and Quick Settings; (4) release.
+
+Measured after step 3, 1920×1200@60, Intel's low-power encoder, Exynos'
+decoder, home Wi-Fi: capture to decoded 23 ms median idle, about 30 while
+windows move. Still open: the tablet's own resolution (2880×1800 wants a
+fractional scale for the virtual monitor), and a photo of both screens
+for the delay to the glass.
 
 ### Later — Tablet modes and picture quality
 

@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">Your Samsung Galaxy Tab as a wireless second monitor for GNOME on Linux.<br>
-It talks to the <b>Second Screen</b> feature Samsung ships for Windows PCs, and its small app on the tablet proves the tablet is yours.</p>
+Through Plus One's small app on the tablet, or the <b>Second Screen</b> feature Samsung ships for Windows PCs.</p>
 
 ---
 
@@ -24,8 +24,14 @@ It talks to the <b>Second Screen</b> feature Samsung ships for Windows PCs, and 
   app on the tablet, over that same Wi-Fi Direct link, to prove it is that
   tablet: another device calling itself your tablet gets nothing. The video
   itself comes from the built-in *Second screen* tile (One UI).
-- **Low latency.** About 50 ms end to end in our measurements, 60 fps, hardware
-  H.264 (NVENC, VA-API) or x264.
+- **Through Plus One's app, over your Wi-Fi.** With the app open on the
+  tablet, the desktop goes to it: about 25 ms from the PC's screen to the
+  tablet's decoder at 1920×1200@60 (Second Screen: about 50 ms to the glass),
+  encrypted, no Wi-Fi Direct, every sample of the pen; two fingers tapped
+  together are the right button. Without the app, Samsung's Second Screen as
+  before.
+- **Low latency.** 60 fps, hardware H.264 (Intel's low-power encoder first,
+  then NVENC, VA-API) or x264.
 - **Touch and S Pen.** Fingers drive the desktop; the S Pen becomes a real Linux
   drawing tablet with pressure (4096 levels), tilt and hover.
 - **Sign PDFs on the tablet.** Right-click a PDF → *Sign on Tablet*: the page
@@ -138,13 +144,23 @@ menu forgets one.
 
 1. Click **Tablet** in GNOME's Quick Settings (top-right corner), or press
    **Use as second screen** in the Plus One window.
-2. On the tablet, swipe down for quick settings and tap **Second screen**.
-3. A few seconds later the tablet shows a new monitor, to the right of your
-   other screens. Arrange it in *Settings → Displays*.
+2. With Plus One's app on the tablet and on the same Wi-Fi, that is all: the
+   app opens the desktop by itself, a new monitor to the right of your other
+   screens (arrange it in *Settings → Displays*). Fingers and the S Pen work
+   on it; tap two fingers together for the right button.
+3. Without the app (or with *Second screen through: Samsung's Second Screen*
+   in the preferences), swipe down on the tablet for quick settings and tap
+   **Second screen**; a few seconds later the monitor appears.
 
-The order does not matter: you can tap the tablet first. To stop, click the
-toggle again, use *Disconnect* in the notification, or close Second Screen on
-the tablet; reopening it within a minute and a half reconnects by itself.
+Through the app: leaving it for another app, or the tablet's screen going
+off, pauses the desktop (the PC captures and encodes nothing meanwhile); its
+notification, *Showing the desktop of …*, brings it back. To stop, Back on
+the tablet, *Stop* in that notification, or *Disconnect* on the PC.
+
+Through Second Screen the order does not matter: you can tap the tablet
+first. To stop, click the toggle again, use *Disconnect* in the
+notification, or close Second Screen on the tablet; reopening it within a
+minute and a half reconnects by itself.
 
 Plus One runs in the background from login (*Ready in the background*), so the
 toggle answers at once; idle, it uses no radio and no CPU. It only searches for
