@@ -48,37 +48,7 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
     fun answer(offer: String): String {
         val factory = Rtc.factory(context)
         val gathered = CompletableFuture<Unit>()
-        val connection = factory.createPeerConnection(
-            PeerConnection.RTCConfiguration(emptyList()).apply {
-                sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-                bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
-                rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
-                continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
-                // Packets marked by priority (DSCP): Wi-Fi's voice queue for the
-                // sound, which a video key frame's burst then does not hold back.
-                enableDscp = true
-            },
-            object : PeerConnection.Observer {
-                override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {
-                    Log.i(TAG, "ICE gathering: $state")
-                    if (state == PeerConnection.IceGatheringState.COMPLETE) gathered.complete(Unit)
-                }
-                override fun onConnectionChange(state: PeerConnection.PeerConnectionState) {
-                    Log.i(TAG, "${request.optString("type")} for the PC: $state")
-                }
-                override fun onSignalingChange(state: PeerConnection.SignalingState) {}
-                override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {}
-                override fun onIceConnectionReceivingChange(receiving: Boolean) {}
-                override fun onIceCandidate(candidate: IceCandidate) {
-                    Log.i(TAG, "ICE candidate: ${candidate.sdp}")
-                }
-                override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {}
-                override fun onAddStream(stream: MediaStream) {}
-                override fun onRemoveStream(stream: MediaStream) {}
-                override fun onDataChannel(channel: DataChannel) {}
-                override fun onRenegotiationNeeded() {}
-                override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) {}
-            }) ?: throw IllegalStateException("no peer connection")
+        val connection = Rtc.connection(factory, request.optString("type"), gathered)
         pc = connection
         val track = if (camera) cameraTrack(factory) else microphoneTrack(factory)
         tracks = listOf(track)
@@ -99,15 +69,10 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
                 }
             }
         }
-        await { connection.setRemoteDescription(it, SessionDescription(SessionDescription.Type.OFFER, offer)) }
+        Rtc.await { connection.setRemoteDescription(it, SessionDescription(SessionDescription.Type.OFFER, offer)) }
         Log.i(TAG, "${request.optString("type")}: the PC's offer taken")
-        val answer = CompletableFuture<SessionDescription>()
-        connection.createAnswer(object : Done() {
-            override fun onCreateSuccess(description: SessionDescription) { answer.complete(description) }
-            override fun onCreateFailure(error: String) { answer.completeExceptionally(IllegalStateException(error)) }
-        }, MediaConstraints())
-        val local = answer.get(WAIT, TimeUnit.MILLISECONDS)
-        await { connection.setLocalDescription(it, local) }
+        val local = Rtc.createAnswer(connection)
+        Rtc.await { connection.setLocalDescription(it, local) }
         if (camera) {
             // From libwebrtc's first guess (300 kbit/s) the first seconds were a
             // poor picture; from half the most, congestion control finds the
@@ -115,16 +80,7 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
             val most = request.optInt("bitrate", 2_500_000)
             if (!connection.setBitrate(null, most / 2, most)) Log.w(TAG, "camera: no starting bitrate")
         }
-        // The candidates in the answer: all of them, or those found by then
-        // (the host ones come at once; some interface may never say it is done).
-        try {
-            gathered.get(GATHER, TimeUnit.MILLISECONDS)
-        } catch (e: java.util.concurrent.TimeoutException) {
-            Log.i(TAG, "ICE still gathering: answering with what it has")
-        }
-        val description = connection.localDescription.description
-        Log.i(TAG, "${request.optString("type")}: answer with ${description.lines().count { it.startsWith("a=candidate") }} candidates")
-        return description
+        return Rtc.gatheredAnswer(connection, gathered, request.optString("type"))
     }
 
     private fun cameraTrack(factory: PeerConnectionFactory): MediaStreamTrack {
@@ -187,23 +143,6 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
         capturer = null
     }
 
-    /** Runs a set*Description and waits for it. */
-    private fun await(call: (SdpObserver) -> Unit) {
-        val done = CompletableFuture<Unit>()
-        call(object : Done() {
-            override fun onSetSuccess() { done.complete(Unit) }
-            override fun onSetFailure(error: String) { done.completeExceptionally(IllegalStateException(error)) }
-        })
-        done.get(WAIT, TimeUnit.MILLISECONDS)
-    }
-
-    private open class Done : SdpObserver {
-        override fun onCreateSuccess(description: SessionDescription) {}
-        override fun onSetSuccess() {}
-        override fun onCreateFailure(error: String) {}
-        override fun onSetFailure(error: String) {}
-    }
-
     companion object {
         const val TAG = "PlusOne"
         const val WAIT = 5_000L    // ms for each step of the answer
@@ -213,6 +152,39 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
         // KEEPALIVE) before the capture ends: a PC gone without closing the
         // connection (asleep, off the network) does not keep the microphone on.
         const val SILENT_PC = 15_000
+    }
+}
+
+/**
+ * The PC's sound on this tablet's speakers (plusone/rtc.py: Sender): the PC
+ * offers to send, this answers to receive, and libwebrtc plays what comes,
+ * in stereo, as media (the tablet's media volume): its jitter buffer, its
+ * concealment of what is lost, and the drift between the two devices'
+ * clocks, which a plain stream would let grow into gaps or delay.
+ */
+class RtcPlayback(private val context: Context, private val onFailure: () -> Unit) {
+    private var pc: PeerConnection? = null
+
+    fun answer(offer: String): String {
+        val factory = Rtc.factory(context)
+        val gathered = CompletableFuture<Unit>()
+        val connection = Rtc.connection(factory, "speakers", gathered) {
+            if (it == PeerConnection.PeerConnectionState.FAILED) onFailure()
+        }
+        pc = connection
+        Rtc.await { connection.setRemoteDescription(it, SessionDescription(SessionDescription.Type.OFFER, offer)) }
+        val made = Rtc.createAnswer(connection)
+        // libwebrtc decodes Opus in stereo only when the answer asks for it.
+        val stereo = made.description.lines().joinToString("\r\n") { line ->
+            if (line.startsWith("a=fmtp:111 ") && "stereo=1" !in line) "$line;stereo=1;sprop-stereo=1" else line
+        }
+        Rtc.await { connection.setLocalDescription(it, SessionDescription(SessionDescription.Type.ANSWER, stereo)) }
+        return Rtc.gatheredAnswer(connection, gathered, "speakers")
+    }
+
+    fun stop() {
+        pc?.dispose()
+        pc = null
     }
 }
 
@@ -263,6 +235,83 @@ object Rtc {
     const val SOURCE_FILE = "audio-source-"
     const val SOURCE = android.media.MediaRecorder.AudioSource.MIC
 
+    /** A peer connection to the PC: the media straight between the two (ICE,
+     * host addresses), bundled, marked by priority. */
+    fun connection(factory: PeerConnectionFactory, label: String, gathered: CompletableFuture<Unit>,
+                   onState: (PeerConnection.PeerConnectionState) -> Unit = {}): PeerConnection =
+        factory.createPeerConnection(
+            PeerConnection.RTCConfiguration(emptyList()).apply {
+                sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+                bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
+                rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
+                continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
+                // Packets marked by priority (DSCP): Wi-Fi's voice queue for the
+                // sound, which a video key frame's burst then does not hold back.
+                enableDscp = true
+            },
+            object : PeerConnection.Observer {
+                override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {
+                    Log.i(RtcCapture.TAG, "ICE gathering: $state")
+                    if (state == PeerConnection.IceGatheringState.COMPLETE) gathered.complete(Unit)
+                }
+                override fun onConnectionChange(state: PeerConnection.PeerConnectionState) {
+                    Log.i(RtcCapture.TAG, "$label for the PC: $state")
+                    onState(state)
+                }
+                override fun onSignalingChange(state: PeerConnection.SignalingState) {}
+                override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {}
+                override fun onIceConnectionReceivingChange(receiving: Boolean) {}
+                override fun onIceCandidate(candidate: IceCandidate) {
+                    Log.i(RtcCapture.TAG, "ICE candidate: ${candidate.sdp}")
+                }
+                override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {}
+                override fun onAddStream(stream: MediaStream) {}
+                override fun onRemoveStream(stream: MediaStream) {}
+                override fun onDataChannel(channel: DataChannel) {}
+                override fun onRenegotiationNeeded() {}
+                override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) {}
+            }) ?: throw IllegalStateException("no peer connection")
+
+    /** Runs a set*Description and waits for it. */
+    fun await(call: (SdpObserver) -> Unit) {
+        val done = CompletableFuture<Unit>()
+        call(object : Done() {
+            override fun onSetSuccess() { done.complete(Unit) }
+            override fun onSetFailure(error: String) { done.completeExceptionally(IllegalStateException(error)) }
+        })
+        done.get(RtcCapture.WAIT, TimeUnit.MILLISECONDS)
+    }
+
+    fun createAnswer(connection: PeerConnection): SessionDescription {
+        val answer = CompletableFuture<SessionDescription>()
+        connection.createAnswer(object : Done() {
+            override fun onCreateSuccess(description: SessionDescription) { answer.complete(description) }
+            override fun onCreateFailure(error: String) { answer.completeExceptionally(IllegalStateException(error)) }
+        }, MediaConstraints())
+        return answer.get(RtcCapture.WAIT, TimeUnit.MILLISECONDS)
+    }
+
+    /** The answer as set, with the candidates in it: all of them, or those
+     * found by then (the host ones come at once; some interface may never
+     * say it is done). */
+    fun gatheredAnswer(connection: PeerConnection, gathered: CompletableFuture<Unit>, label: String): String {
+        try {
+            gathered.get(RtcCapture.GATHER, TimeUnit.MILLISECONDS)
+        } catch (e: java.util.concurrent.TimeoutException) {
+            Log.i(RtcCapture.TAG, "ICE still gathering: answering with what it has")
+        }
+        val description = connection.localDescription.description
+        Log.i(RtcCapture.TAG, "$label: answer with ${description.lines().count { it.startsWith("a=candidate") }} candidates")
+        return description
+    }
+
+    private open class Done : SdpObserver {
+        override fun onCreateSuccess(description: SessionDescription) {}
+        override fun onSetSuccess() {}
+        override fun onCreateFailure(error: String) {}
+        override fun onSetFailure(error: String) {}
+    }
+
     /** The factory, one for the process (noise reduction is each audio source's). */
     @Synchronized
     fun factory(context: Context): PeerConnectionFactory {
@@ -281,6 +330,12 @@ object Rtc {
             .setAudioRecordErrorCallback(recordErrors)
             .setUseHardwareNoiseSuppressor(false)
             .setUseHardwareAcousticEchoCanceler(false)
+            // The PC's sound (RtcPlayback): stereo, as media, not as a call's voice.
+            .setUseStereoOutput(true)
+            .setAudioAttributes(android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build())
             .createAudioDeviceModule()
         val made = PeerConnectionFactory.builder()
             .setAudioDeviceModule(audio)

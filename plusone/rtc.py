@@ -4,6 +4,7 @@ for the DTLS fingerprints in the offer and the answer; the app answers and
 sends. webrtcbin does the rest: ICE (host addresses: the same network),
 DTLS-SRTP, the jitter buffer, retransmissions and key frame requests, and
 the transport-wide feedback the app's congestion control works from.
+The tablet's speakers the other way: the PC offers to send (Sender).
 """
 import base64
 import hashlib
@@ -35,6 +36,12 @@ CAPS = {
               f"rtcp-fb-transport-cc=(boolean)true,extmap-3=(string){TWCC}"),
 }
 SSRC = {"audio": 0x504C5341, "video": 0x504C5356}  # "PLSA", "PLSV"
+# The PC's sound to the tablet: Opus stereo for music (the app asks for
+# stereo in its answer), 10 ms a packet, in-band FEC.
+SPEAKERS_CAPS = ("application/x-rtp,media=audio,encoding-name=OPUS,payload=111,clock-rate=48000,"
+                 "encoding-params=(string)2,useinbandfec=(string)1,stereo=(string)1,sprop-stereo=(string)1,"
+                 "ssrc=(uint)1347179339")  # "PLSK"
+SPEAKERS_BITRATE = 128000
 # ms webrtcbin's jitter buffer holds: sound as WebRTC's NetEq aims for; a
 # video key frame takes longer over Wi-Fi, and what comes after this is dropped.
 JITTER = {"audio": 60, "video": 150}
@@ -96,15 +103,8 @@ class Receiver:
         self.on_pad(self, pad)
 
     def _peer_problem(self):
-        transport = self.transceiver.get_property("receiver").get_property("transport")
-        pem = transport.get_property("remote-certificate") if transport else None
-        if not pem or not self.fingerprint:
-            return "no certificate to check the media's sender by"
-        body = "".join(line for line in pem.strip().splitlines() if not line.startswith("-----"))
-        digest = hashlib.sha256(base64.b64decode(body)).hexdigest().upper()
-        if ":".join(digest[i:i + 2] for i in range(0, len(digest), 2)) != self.fingerprint:
-            return "the media came with another certificate than the app's: not taken"
-        return None
+        return certificate_problem(self.transceiver.get_property("receiver").get_property("transport"),
+                                   self.fingerprint)
 
     def offer(self):
         """The offer, as SDP text, with this side's ICE candidates in it."""
@@ -127,15 +127,7 @@ class Receiver:
 
     def answer(self, text):
         """The app's answer (SDP text)."""
-        result, sdp = GstSdp.SDPMessage.new_from_text(text)
-        # GStreamer's parser takes about anything: an answer has this one medium.
-        if result != GstSdp.SDPResult.OK or sdp.medias_len() != 1 or sdp.get_media(0).get_media() != self.kind:
-            raise ValueError("the app's answer is not one")
-        fingerprints = {line.split(None, 1)[1].strip().upper() for line in text.splitlines()
-                        if line.lower().startswith("a=fingerprint:sha-256 ") and len(line.split(None, 1)) == 2}
-        if len(fingerprints) != 1:
-            raise ValueError("the app's answer has no one SHA-256 fingerprint")
-        self.fingerprint = fingerprints.pop()
+        sdp, self.fingerprint = answer_fingerprint(text, self.kind)
         applied = Gst.Promise.new()
         self.webrtc.emit("set-remote-description",
                          GstWebRTC.WebRTCSessionDescription.new(GstWebRTC.WebRTCSDPType.ANSWER, sdp), applied)
@@ -191,6 +183,113 @@ class Receiver:
             self.webrtc.disconnect(handler)
         self._handlers = []
         self.on_pad = None
+        self.transceiver = self.webrtc = self.pipeline = None
+
+
+def certificate_problem(transport, fingerprint):
+    """Why the DTLS peer on transport is not the app whose answer named
+    fingerprint, or None."""
+    pem = transport.get_property("remote-certificate") if transport else None
+    if not pem or not fingerprint:
+        return "no certificate to check the media's other end by"
+    body = "".join(line for line in pem.strip().splitlines() if not line.startswith("-----"))
+    digest = hashlib.sha256(base64.b64decode(body)).hexdigest().upper()
+    if ":".join(digest[i:i + 2] for i in range(0, len(digest), 2)) != fingerprint:
+        return "the media's other end has another certificate than the app's"
+    return None
+
+
+def answer_fingerprint(text, kind):
+    """(SDP message, the one SHA-256 fingerprint) of the app's answer, which
+    has this one medium; ValueError if it is not one."""
+    result, sdp = GstSdp.SDPMessage.new_from_text(text)
+    # GStreamer's parser takes about anything: an answer has this one medium.
+    if result != GstSdp.SDPResult.OK or sdp.medias_len() != 1 or sdp.get_media(0).get_media() != kind:
+        raise ValueError("the app's answer is not one")
+    fingerprints = {line.split(None, 1)[1].strip().upper() for line in text.splitlines()
+                    if line.lower().startswith("a=fingerprint:sha-256 ") and len(line.split(None, 1)) == 2}
+    if len(fingerprints) != 1:
+        raise ValueError("the app's answer has no one SHA-256 fingerprint")
+    return sdp, fingerprints.pop()
+
+
+class Sender:
+    """The PC's sound to the tablet's speakers: what source captures, as
+    Opus, sent by webrtcbin; the app's libwebrtc plays it (its jitter buffer,
+    concealment, and the two clocks' drift, which a plain stream would let
+    grow into gaps or delay). Shaped as a Receiver for devices.Feed: offer,
+    answer, failed, losses (here: packets sent), close."""
+
+    kind = "speakers"
+
+    def __init__(self, source):
+        self.broken = None
+        self.fingerprint = None
+        self.checked = False
+        self.pipeline = Gst.parse_launch(
+            f"{source} ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=2 "
+            f"! opusenc bitrate={SPEAKERS_BITRATE} frame-size=10 inband-fec=true audio-type=generic "
+            f"! rtpopuspay pt=111 ! queue ! {SPEAKERS_CAPS} ! webrtcbin name=webrtc")
+        self.webrtc = self.pipeline.get_by_name("webrtc")
+        self.webrtc.set_property("bundle-policy", BUNDLE_MAX)
+        local_only(self.webrtc)
+        self._handlers = [self.webrtc.connect("notify::connection-state", lambda w, spec: log(
+            "speakers: WebRTC connection-state", w.get_property(spec.name).value_nick))]
+        self.pipeline.set_state(Gst.State.PLAYING)
+        self.transceiver = self.webrtc.emit("get-transceiver", 0)
+        self.transceiver.set_property("direction", GstWebRTC.WebRTCRTPTransceiverDirection.SENDONLY)
+
+    offer = Receiver.offer
+
+    def answer(self, text):
+        """The app's answer (SDP text)."""
+        sdp, self.fingerprint = answer_fingerprint(text, "audio")
+        applied = Gst.Promise.new()
+        self.webrtc.emit("set-remote-description",
+                         GstWebRTC.WebRTCSessionDescription.new(GstWebRTC.WebRTCSDPType.ANSWER, sdp), applied)
+        applied.wait()
+        if self.webrtc.get_property("remote-description") is None:
+            raise ValueError("webrtcbin did not take the app's answer")
+
+    def losses(self):
+        """(packets sent, 0, 0, 0): the sound goes as long as this grows."""
+        promise = Gst.Promise.new()
+        self.webrtc.emit("get-stats", None, promise)
+        promise.wait()
+        reply = promise.get_reply()
+        sent = 0
+        if reply is not None:
+            def each(_field, value):
+                nonlocal sent
+                if isinstance(value, Gst.Structure) and value.get_value("type") == GstWebRTC.WebRTCStatsType.OUTBOUND_RTP:
+                    sent += value.get_value("packets-sent") or 0
+                return True
+            reply.foreach(each)
+        return sent, 0, 0, 0
+
+    fail = Receiver.fail
+
+    def failed(self):
+        """As Receiver's; and once connected, the other end must be the app
+        whose answer the paired link brought (ICE already needs the answer's
+        credentials; this is the certificate as well)."""
+        state = self.webrtc.get_property("connection-state")
+        if not self.checked and state == GstWebRTC.WebRTCPeerConnectionState.CONNECTED:
+            self.checked = True
+            problem = certificate_problem(self.transceiver.get_property("sender").get_property("transport"),
+                                          self.fingerprint)
+            if problem:
+                log(f"speakers: {problem}")
+                self.fail(problem)
+        return Receiver.failed(self)
+
+    def close(self):
+        if self.pipeline is None:
+            return
+        self.pipeline.set_state(Gst.State.NULL)
+        for handler in self._handlers:
+            self.webrtc.disconnect(handler)
+        self._handlers = []
         self.transceiver = self.webrtc = self.pipeline = None
 
 

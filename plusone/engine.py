@@ -55,6 +55,8 @@ class Settings:
     camera_facing: str = "front"   # or "back"
     camera_quality: str = "720p"   # or "1080p"
     microphone: bool = False
+    # Its speakers as one of the PC's sound outputs.
+    speakers: bool = False
     # Its noise taken out: "off", "light" (the tablet's libwebrtc) or "neural"
     # (DeepFilterNet's plugin, on this PC: devices.py).
     microphone_noise: str = "neural"

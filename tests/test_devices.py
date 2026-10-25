@@ -355,8 +355,8 @@ def test_the_voice_chain_parses():
 
 def test_switched_on_only_with_a_tablet(monkeypatch):
     calls = []
-    app = types.SimpleNamespace(settings=types.SimpleNamespace(camera=True, microphone=False),
-                                tablets=types.SimpleNamespace(active=lambda: None))
+    app = types.SimpleNamespace(settings=types.SimpleNamespace(camera=True, microphone=False, speakers=False),
+                                tablets=types.SimpleNamespace(active=lambda: None, addresses=lambda t: []))
     manager = devices.Devices.__new__(devices.Devices)
     manager.app, manager.tablet = app, None
     manager.camera = types.SimpleNamespace(enable=lambda: calls.append("camera on"),
@@ -364,6 +364,7 @@ def test_switched_on_only_with_a_tablet(monkeypatch):
                                            renew=lambda: calls.append("camera renewed"))
     manager.microphone = types.SimpleNamespace(enable=lambda: calls.append("mic on"),
                                                disable=lambda: calls.append("mic off"))
+    manager.speakers = types.SimpleNamespace(disable=lambda: None)
     manager.apply()
     assert calls == ["camera off", "mic off"]  # no tablet paired: neither
     one, other = types.SimpleNamespace(fingerprint="aa" * 32), types.SimpleNamespace(fingerprint="bb" * 32)
@@ -426,3 +427,33 @@ def test_who_has_the_webcam_open_by_name(tmp_path):
             assert devices.holder_names([str(path)])[0].startswith("python")
         finally:
             other.kill()
+
+
+def test_the_programs_playing_on_the_speakers():
+    objects = [
+        {"id": 40, "type": "PipeWire:Interface:Node", "info": {"props": {"node.name": devices.SPEAKERS_NAME}}},
+        {"id": 41, "type": "PipeWire:Interface:Node", "info": {"props": {"application.name": "Firefox"}}},
+        {"id": 42, "type": "PipeWire:Interface:Node", "info": {"props": {"node.name": "plusone-speakers-feed"}}},
+        {"id": 43, "type": "PipeWire:Interface:Node", "info": {"props": {"node.name": "alsa_output.pci"}}},
+        {"type": "PipeWire:Interface:Link", "info": {"output-node-id": 41, "input-node-id": 40}},
+        {"type": "PipeWire:Interface:Link", "info": {"output-node-id": 41, "input-node-id": 40}},
+        {"type": "PipeWire:Interface:Link", "info": {"output-node-id": 40, "input-node-id": 42}},  # its monitor, ours
+        {"type": "PipeWire:Interface:Link", "info": {"output-node-id": 41, "input-node-id": 43}},  # another output
+    ]
+    assert devices.players(objects) == ["Firefox", "Firefox"]
+
+
+def test_a_program_playing_is_a_link_into_the_speakers():
+    speakers = devices.Speakers.__new__(devices.Speakers)
+    assert speakers.ours(("Firefox:output_FL", devices.SPEAKERS_NAME + ":playback_FL"))
+    assert not speakers.ours((devices.SPEAKERS_NAME + ":monitor_FL", "plusone-speakers-feed:input_FL"))
+    microphone = devices.Microphone.__new__(devices.Microphone)
+    assert microphone.ours((devices.MIC_NAME + ":capture_MONO", "Meet:input_MONO"))
+
+
+def test_pw_dump_s_arrays_after_the_first_are_what_changed():
+    first = '[{"id": 1, "type": "PipeWire:Interface:Node", "info": {"props": {}}}, {"id": 2, "info": {}}]'
+    then = '[{"id": 2, "info": null}, {"id": 3, "type": "PipeWire:Interface:Link", "info": {}}]'
+    objects = devices.pw_objects(first + "\n" + then + "\n")
+    assert sorted(o["id"] for o in objects) == [1, 3]
+    assert devices.pw_objects("") == []

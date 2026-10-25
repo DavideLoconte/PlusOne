@@ -57,7 +57,8 @@ def make(monkeypatch, tmp_path, tablets=()):
         for listener in list(app.listeners):
             listener()
     app.devices = types.SimpleNamespace(camera=types.SimpleNamespace(state="off", users=[]),
-                                        microphone=types.SimpleNamespace(state="off", users=[]))
+                                        microphone=types.SimpleNamespace(state="off", users=[]),
+                                        speakers=types.SimpleNamespace(state="off", users=[]))
     app.set_device = lambda kind, on: (setattr(app.settings, kind, on), changed())
     app.set_camera_options = lambda facing, quality: (setattr(app.settings, "camera_facing", facing),
                                                       setattr(app.settings, "camera_quality", quality))

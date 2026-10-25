@@ -163,6 +163,7 @@ class MainActivity : AppCompatActivity() {
             pcDevice(CAMERA, R.drawable.ic_camera, R.string.camera_for_pc, R.string.camera_on, R.string.camera_off),
             pcDevice(MICROPHONE, R.drawable.ic_microphone, R.string.microphone_for_pc, R.string.microphone_on,
                 R.string.microphone_off),
+            speakers(),
         ))
 
         val paired = Paired.all(this)
@@ -269,6 +270,20 @@ class MainActivity : AppCompatActivity() {
             else -> off
         }
         return Row(row(iconRes, getString(title), getString(subtitle), switch)) { switch.toggle() }
+    }
+
+    /** The PC's sound on the speakers: nothing for Android to allow. */
+    private fun speakers(): Row {
+        val switch = MaterialSwitch(this).apply {
+            isChecked = Options.speakers(this@MainActivity)
+            setOnCheckedChangeListener { _, checked ->
+                Options.setSpeakers(this@MainActivity, checked)
+                if (!checked) CompanionService.instance?.stopCaptures("speakers")
+                refresh()
+            }
+        }
+        return Row(row(R.drawable.ic_speakers, getString(R.string.speakers_for_pc),
+            getString(if (switch.isChecked) R.string.speakers_on else R.string.speakers_off), switch)) { switch.toggle() }
     }
 
     private fun setPcDevice(kind: String, on: Boolean) {

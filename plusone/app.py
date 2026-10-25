@@ -29,7 +29,7 @@ from .engine import NOT_ANSWERING, Controller, Settings, State  # noqa: E402
 from .i18n import _  # noqa: E402
 from .nearby import Nearby  # noqa: E402
 from .signing import Signing  # noqa: E402
-from .devices import Devices  # noqa: E402
+from .devices import SPEAKERS_NAME, Devices, make_default_sink  # noqa: E402
 from .tablets import Tablets  # noqa: E402
 
 APP_ID = "io.github.gabrielesantangelo.PlusOne"
@@ -409,12 +409,16 @@ class PlusOneApp(Adw.Application):
         self._on_nearby()
 
     def set_device(self, name, on):
-        """The tablet's camera or microphone (name: the setting) as the PC's, or not."""
+        """The tablet's camera, microphone or speakers (name: the setting) as the PC's, or not."""
         if getattr(self.settings, name) == on:
             return
         setattr(self.settings, name, on)
         save_settings(self.settings)
         self.devices.apply()
+        if name == "speakers" and on and self.devices.speakers.module:
+            # Turned on by hand: the PC's sound there now, one click. (Not
+            # at login: which output plays stays the user's to choose.)
+            make_default_sink(SPEAKERS_NAME)
         self._update_hold()
 
     def set_camera_options(self, facing, quality):
@@ -434,15 +438,15 @@ class PlusOneApp(Adw.Application):
             listener()
         # The tablet did not let a program have its camera or microphone: the
         # app there asks its user now; this says to look at the tablet.
-        for kind in ("camera", "microphone"):
+        for kind in ("camera", "microphone", "speakers"):
             state = getattr(self.devices, kind).state
             if state == self._device_states.get(kind):
                 continue
             self._device_states[kind] = state
             if state in ("tablet-off", "tablet-permission"):
-                camera = kind == "camera"
-                note = Gio.Notification.new(_("Allow the camera on the tablet") if camera
-                                            else _("Allow the microphone on the tablet"))
+                note = Gio.Notification.new({"camera": _("Allow the camera on the tablet"),
+                                             "microphone": _("Allow the microphone on the tablet"),
+                                             "speakers": _("Allow the speakers on the tablet")}[kind])
                 note.set_body(_("A program wants it: tap Plus One's notification on the tablet"))
                 note.set_default_action("app.show")
                 self.send_notification(f"device-{kind}", note)
@@ -473,6 +477,7 @@ class PlusOneApp(Adw.Application):
             self.controller.state in (State.CONNECTING, State.STREAMING) or self.nearby.present())
 
     def _on_nearby(self):
+        self.devices.apply()  # the speakers come and go with the tablet
         self._emit_properties()
         for listener in list(self.listeners):
             listener()

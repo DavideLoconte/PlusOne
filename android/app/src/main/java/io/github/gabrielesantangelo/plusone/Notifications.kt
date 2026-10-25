@@ -33,14 +33,17 @@ object Notifications {
             .setOngoing(true)
             .build()
 
-    /** The service's notification while the PC uses the camera or the microphone. */
+    /** The service's notification while the PC uses the camera, the microphone or the speakers. */
     fun capturing(context: Context, kinds: Set<String>, pc: String): Notification =
         Notification.Builder(context, SERVICE)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(context.getString(when {
-                kinds.size > 1 -> R.string.capturing_both
-                "camera" in kinds -> R.string.capturing_camera
-                else -> R.string.capturing_microphone
+            .setContentTitle(context.getString((kinds - "speakers").let { devices ->
+                when {
+                    devices.size > 1 -> R.string.capturing_both
+                    "camera" in devices -> R.string.capturing_camera
+                    "microphone" in devices -> R.string.capturing_microphone
+                    else -> R.string.capturing_speakers
+                }
             }))
             .setContentText(context.getString(R.string.capturing_for, pc))
             .setContentIntent(PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java),

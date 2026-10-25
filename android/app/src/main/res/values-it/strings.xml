@@ -32,6 +32,10 @@
     <string name="capturing_camera">Il PC sta usando la fotocamera</string>
     <string name="capturing_microphone">Il PC sta usando il microfono</string>
     <string name="capturing_both">Il PC sta usando fotocamera e microfono</string>
+    <string name="capturing_speakers">Il PC sta suonando sulle casse</string>
+    <string name="speakers_for_pc">Casse</string>
+    <string name="speakers_on">Il PC può suonarci mentre un suo programma suona.</string>
+    <string name="speakers_off">Spente: il PC non può usarle.</string>
     <string name="capturing_for">Per %1$s</string>
     <string name="display_title">Mostro il desktop di %1$s</string>
     <string name="display_text">Tocca per tornarci</string>

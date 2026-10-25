@@ -26,6 +26,7 @@ from . import companion, log, once  # noqa: E402
 
 CAMERA_LABEL = "Plus One tablet camera"  # data/plus-one-camera-options.conf
 MIC_NAME = "plusone_mic"
+SPEAKERS_NAME = "plusone_speakers"
 QUALITIES = {"720p": (1280, 720, 2_500_000), "1080p": (1920, 1080, 5_000_000)}
 FPS = 30
 RETRY = 3          # seconds between attempts to reach the tablet while wanted
@@ -183,7 +184,7 @@ class Feed:
             if reply.get("type") != "answer":
                 raise ValueError(f"the app answered {reply.get('type')!r}")
             receiver.answer(str(reply.get("sdp", "")))
-            log(f"{kind}: from the tablet, over WebRTC")
+            log(f"{kind}: {'to' if kind == 'speakers' else 'from'} the tablet, over WebRTC")
             self.on_ready()
             self._hold(kind, wire, receiver)
             return None
@@ -575,21 +576,24 @@ class Camera(Device):
         log("camera:", error.message)
 
 
-class Microphone(Device):
-    """The microphone: a virtual PipeWire source (a null node that programs
-    see as a microphone only), which a stream of Plus One's is linked into
-    while a program records. About 30 ms on the PC (a pipe source was 170
-    and grew with each burst of Wi-Fi); never more than MIC_BEHIND waits."""
+class AudioDevice(Device):
+    """What microphone and speakers share: a virtual PipeWire node (a null
+    sink, NAME) made while the switch is on, and the programs that use it,
+    known from its links (pw-link) and named by pw-dump. Subclasses say
+    what the node is (CLASS, CHANNELS, DESCRIPTION), which links are a
+    program using it (ours()) and who they are (users_of())."""
 
-    def __init__(self, app):
-        super().__init__(app, "microphone")
+    NAME = CLASS = DESCRIPTION = None
+    CHANNELS = ("1", "mono")
+
+    def __init__(self, app, kind):
+        super().__init__(app, kind)
         self.module = None
         self.links = set()
         self.watch = None
-        self._streams = itertools.count(1)
-        self._asked = 0  # the last look at who records (pw-dump), its number
+        self._asked = 0  # the last look at who uses it (pw-dump), its number
 
-    def enable(self, description="Tablet microphone (Plus One)"):
+    def enable(self):
         if self.module:
             return
         self.rtc = webrtc()
@@ -599,22 +603,23 @@ class Microphone(Device):
         if not all(shutil.which(tool) for tool in ("pactl", "pw-link", "pw-dump")):
             self._set_state("setup")
             return
-        unload_stale()
+        unload_stale(self.NAME)
         try:
             # No rate of its own: it follows the graph's (Bluetooth headphones
             # run theirs at 44.1 kHz, and a 48 kHz source went silent in it).
-            out = subprocess.run(["pactl", "load-module", "module-null-sink", f"sink_name={MIC_NAME}",
-                                  "media.class=Audio/Source/Virtual", "channels=1", "channel_map=mono",
-                                  f"sink_properties=\"device.description='{description}'\""],
+            out = subprocess.run(["pactl", "load-module", "module-null-sink", f"sink_name={self.NAME}",
+                                  f"media.class={self.CLASS}", f"channels={self.CHANNELS[0]}",
+                                  f"channel_map={self.CHANNELS[1]}",
+                                  f"sink_properties=\"device.description='{self.DESCRIPTION}'\""],
                                  capture_output=True, text=True, timeout=5, check=True).stdout
             self.module = out.strip()
         except (OSError, subprocess.SubprocessError) as e:
-            log("microphone: no PipeWire source:", repr(e))
+            log(f"{self.kind}: no PipeWire node:", repr(e))
             self._set_state("setup")
             return
         self._watch_links()
         self._set_state("ready")
-        log("microphone: on, as", MIC_NAME)
+        log(f"{self.kind}: on, as", self.NAME)
 
     def disable(self):
         self.end()
@@ -625,16 +630,23 @@ class Microphone(Device):
             try:
                 subprocess.run(["pactl", "unload-module", self.module], capture_output=True, timeout=5)
             except (OSError, subprocess.SubprocessError) as e:
-                log("microphone: its source not removed:", repr(e))
+                log(f"{self.kind}: its node not removed:", repr(e))
             self.module = None
         self.links.clear()
         self._in_use = False
         self._set_state("off")
 
-    # -- who records from it -----------------------------------------------------
+    def ours(self, link):
+        """Whether link (output port, input port) is a program using it."""
+        raise NotImplementedError
+
+    def users_of(self, objects):
+        """The programs using it, by name, from pw-dump's objects."""
+        raise NotImplementedError
+
+    # -- who uses it -------------------------------------------------------------
     def _watch_links(self):
-        """pw-link tells each link made or removed: a program recording from
-        the source is a link from its ports."""
+        """pw-link tells each link made or removed."""
         self._parser = LinkParser()
         self.watch = Gio.Subprocess.new(["pw-link", "--monitor", "--links", "--output"],
                                         Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
@@ -647,11 +659,11 @@ class Microphone(Device):
         except GLib.Error:
             line = None
         if watch is not self.watch:
-            return  # the microphone was switched off
+            return  # switched off
         if line is None:
-            # pw-link ended by itself: PipeWire was restarted, and the source
+            # pw-link ended by itself: PipeWire was restarted, and the node
             # went with it. Made again once PipeWire is back.
-            log("microphone: PipeWire went away")
+            log(f"{self.kind}: PipeWire went away")
             self.module = None  # gone; its number may be another module's by now
             self.disable()
             GLib.timeout_add_seconds(RETRY, once(self._come_back))
@@ -659,16 +671,14 @@ class Microphone(Device):
         changed = self._parser(line)
         if changed:
             sign, link = changed
-            if link[0].startswith(MIC_NAME + ":"):
+            if self.ours(link):
                 (self.links.add if sign in "=+" else self.links.discard)(link)
                 self._who_records()
         stream.read_line_async(GLib.PRIORITY_DEFAULT, None, self._line, watch)
 
     def _who_records(self):
-        """Whether a program records from the source, from what pw-dump says
-        of the streams linked to it: a level meter's ("Peak detect": GNOME
-        Settings' Sound panel, pavucontrol) does not count, or an open Sound
-        panel would keep the tablet's microphone on, only to show a level."""
+        """Whether a program uses it, from what pw-dump says of the streams
+        linked to it (users_of())."""
         if not self.links:
             self._asked += 1  # an answer still coming is out of date
             self._used(False)
@@ -680,9 +690,9 @@ class Microphone(Device):
     def _dumped(self, dump, result, asked):
         try:
             _ok, out, _err = dump.communicate_utf8_finish(result)
-            names = recorders(json.loads(out))
+            names = self.users_of(pw_objects(out))
         except (GLib.Error, ValueError, TypeError, AttributeError) as e:
-            log("microphone: who records, not known:", repr(e))
+            log(f"{self.kind}: who uses it, not known:", repr(e))
             names = ["?"] * len(self.links)  # as if each were a program's
         if asked == (self.watch, self._asked):
             self._users(sorted(set(n for n in names if n != "?")))
@@ -692,6 +702,28 @@ class Microphone(Device):
         self.app.devices.apply()
         if self.state == "setup":
             GLib.timeout_add_seconds(RETRY, once(self._come_back))  # PipeWire not back yet
+
+
+class Microphone(AudioDevice):
+    """The microphone: a virtual PipeWire source (a null node that programs
+    see as a microphone only), which a stream of Plus One's is linked into
+    while a program records. About 30 ms on the PC (a pipe source was 170
+    and grew with each burst of Wi-Fi); never more than MIC_BEHIND waits."""
+
+    NAME, CLASS, DESCRIPTION = MIC_NAME, "Audio/Source/Virtual", "Tablet microphone (Plus One)"
+
+    def __init__(self, app):
+        super().__init__(app, "microphone")
+        self._streams = itertools.count(1)
+
+    def ours(self, link):
+        return link[0].startswith(MIC_NAME + ":")  # a program recording: a link from its ports
+
+    def users_of(self, objects):
+        # A level meter's ("Peak detect": GNOME Settings' Sound panel,
+        # pavucontrol) does not count, or an open Sound panel would keep the
+        # tablet's microphone on, only to show a level.
+        return recorders(objects)
 
     # -- the tablet's sound into the source ---------------------------------------
     def begin(self):
@@ -767,6 +799,77 @@ def recorders(objects):
     return found
 
 
+def make_default_sink(name):
+    """name the output programs play to (what GNOME's Sound settings set)."""
+    try:
+        subprocess.run(["pactl", "set-default-sink", name], capture_output=True, timeout=5)
+    except (OSError, subprocess.SubprocessError) as e:
+        log("speakers: not made the output:", repr(e))
+
+
+class Speakers(AudioDevice):
+    """The tablet's speakers: a virtual PipeWire sink ("Tablet speakers"),
+    which Plus One captures and sends to the tablet (rtc.Sender) while a
+    program plays into it, and nothing otherwise."""
+
+    NAME, CLASS, DESCRIPTION = SPEAKERS_NAME, "Audio/Sink", "Tablet speakers (Plus One)"
+    CHANNELS = ("2", "front-left,front-right")
+
+    def __init__(self, app):
+        super().__init__(app, "speakers")
+
+    def ours(self, link):
+        return link[1].startswith(SPEAKERS_NAME + ":playback_")  # a program playing: a link into it
+
+    def users_of(self, objects):
+        return players(objects)
+
+    def begin(self):
+        self.feed = Feed({"type": "speakers"}, self.where, self._sender, self._ready, self._problem)
+        self.feed.start()
+
+    def end(self):
+        self.stop_feed()
+
+    def _sender(self):
+        # What plays into the sink, from its monitor, 10 ms at a time.
+        return self.rtc.Sender(f"pipewiresrc target-object={SPEAKERS_NAME} do-timestamp=true "
+                               f"stream-properties=\"props,stream.capture.sink=true,node.latency=480/48000,"
+                               f"node.name=plusone-speakers-feed\"")
+
+
+def pw_objects(text):
+    """pw-dump's objects. It prints one JSON array, and while the graph
+    changes (a stream starting) more arrays after it, of what changed: each
+    object as last told, those removed (info null) left out."""
+    decoder, at, objects = json.JSONDecoder(), 0, {}
+    while True:
+        while at < len(text) and text[at].isspace():
+            at += 1
+        if at >= len(text):
+            break
+        document, at = decoder.raw_decode(text, at)
+        for o in document if isinstance(document, list) else ():
+            if isinstance(o, dict):
+                objects[o.get("id")] = o
+    return [o for o in objects.values() if o.get("info") is not None]
+
+
+def players(objects):
+    """The programs whose streams play into the speakers' sink, in pw-dump's
+    objects (links to it), by name; one entry per stream."""
+    nodes = {o.get("id"): (o.get("info") or {}).get("props") or {}
+             for o in objects if o.get("type") == "PipeWire:Interface:Node"}
+    sink = {id for id, props in nodes.items() if props.get("node.name") == SPEAKERS_NAME}
+    found = []
+    for o in objects:
+        info = o.get("info") or {}
+        if o.get("type") == "PipeWire:Interface:Link" and info.get("input-node-id") in sink:
+            props = nodes.get(info.get("output-node-id"), {})
+            found.append(str(props.get("application.name") or props.get("node.name") or "?"))
+    return found
+
+
 class LinkParser:
     """Links from pw-link --monitor --links --output, line by line: ("+",
     (output port, input port)) for one made, "-" removed, "=" there already.
@@ -789,15 +892,15 @@ class LinkParser:
         return None
 
 
-def unload_stale():
-    """A source left by a Plus One that did not end cleanly."""
+def unload_stale(name=MIC_NAME):
+    """A node left by a Plus One that did not end cleanly."""
     try:
         modules = subprocess.run(["pactl", "list", "modules", "short"], capture_output=True, text=True,
                                  timeout=5).stdout
     except (OSError, subprocess.SubprocessError):
         return
     for line in modules.splitlines():
-        if f"sink_name={MIC_NAME}" in line or f"source_name={MIC_NAME}" in line:
+        if f"sink_name={name}" in line or f"source_name={name}" in line:
             try:
                 subprocess.run(["pactl", "unload-module", line.split()[0]], capture_output=True, timeout=5)
             except (OSError, subprocess.SubprocessError):
@@ -805,12 +908,13 @@ def unload_stale():
 
 
 class Devices:
-    """Camera and microphone, as the settings and the tablet in use say."""
+    """Camera, microphone and speakers, as the settings and the tablet in use say."""
 
     def __init__(self, app):
         self.app = app
         self.camera = Camera(app)
         self.microphone = Microphone(app)
+        self.speakers = Speakers(app)
         self.tablet = None  # the fingerprint of the tablet in use, as last applied
 
     def apply(self):
@@ -818,7 +922,12 @@ class Devices:
         active = self.app.tablets.active()
         fingerprint = active.fingerprint if active is not None else None
         changed, self.tablet = fingerprint != self.tablet, fingerprint
-        for device, on in ((self.camera, settings.camera), (self.microphone, settings.microphone)):
+        # The speakers only while the tablet's app is on the network: away, the
+        # output goes, and the PC's sound back to its own (a camera or
+        # microphone a program picked stays, and says the tablet is away).
+        here = active is not None and bool(self.app.tablets.addresses(active))
+        for device, on in ((self.camera, settings.camera), (self.microphone, settings.microphone),
+                           (self.speakers, settings.speakers and here)):
             if on and active is not None:
                 device.enable()
                 if changed:
@@ -843,3 +952,4 @@ class Devices:
     def shutdown(self):
         self.camera.disable()
         self.microphone.disable()
+        self.speakers.disable()

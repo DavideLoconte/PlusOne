@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The speakers, for the PC -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M4,9 L8,9 L13,5 L13,19 L8,15 L4,15 Z M16.5,8.5 C17.5,9.5 18,10.7 18,12 C18,13.3 17.5,14.5 16.5,15.5 M19,6 C20.6,7.6 21.5,9.7 21.5,12 C21.5,14.3 20.6,16.4 19,18" android:fillColor="#00000000" android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2" android:strokeLineCap="round" android:strokeLineJoin="round" />
+</vector>

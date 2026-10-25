@@ -135,6 +135,15 @@ _IT = {
     "Tap “Second screen” on the tablet": "Tocca «Second screen» sul tablet",
     "Opening the desktop on {name}…": "Apro il desktop su {name}…",
     "Second screen through": "Secondo schermo tramite",
+    "Tablet speakers": "Casse del tablet",
+    "As a sound output for this PC's programs": "Come uscita audio per i programmi di questo PC",
+    "On: choose “Tablet speakers” as the output in the Sound settings":
+        "Attive: scegli «Tablet speakers» come uscita nelle impostazioni Audio",
+    "Playing {programs}": "Suona {programs}",
+    "Playing": "Suona",
+    "A program plays on the speakers, but the tablet is not reachable":
+        "Un programma suona sulle casse, ma il tablet non è raggiungibile",
+    "Allow the speakers on the tablet": "Consenti le casse sul tablet",
     "{width} × {height}, sharp: as {half}": "{width} × {height}, nitido: come {half}",
     "Above 1920 × 1200 the picture comes a little later": "Sopra 1920 × 1200 l'immagine arriva un po' più tardi",
     "The tablet's sizes appear after it showed the desktop once":

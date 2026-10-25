@@ -266,6 +266,7 @@ class CompanionService : Service() {
                         "ping" -> wire.send(JSONObject().put("type", "pong"))
                         "camera", "microphone" -> return capture(socket, wire, message, type, pcName)
                         "display" -> return display(socket, wire, message, pcName)
+                        "speakers" -> return playback(socket, wire, message, pcName)
                         "bye" -> return
                     }
                 }
@@ -412,7 +413,7 @@ class CompanionService : Service() {
     }
 
     private fun notification(): android.app.Notification {
-        val now = synchronized(captures) { captures.values.toList() }
+        val now = synchronized(captures) { captures.values.toList() + speakerSessions.keys }
         val kinds = now.map { it.kind }.toSet()
         val pcs = now.map { it.pc }.distinct().joinToString(", ")
         displaying?.let { return Notifications.displaying(this, it) }
@@ -428,7 +429,7 @@ class CompanionService : Service() {
     }
 
     private fun lowLatency(capturing: Boolean) {
-        val any = synchronized(captures) { captures.isNotEmpty() }
+        val any = synchronized(captures) { captures.isNotEmpty() || speakerSessions.isNotEmpty() }
         try {
             val showing = displaying != null && DisplaySession.current?.visible == true
             if (capturing || any || showing) wifiLock.acquire() else wifiLock.release()
@@ -480,6 +481,40 @@ class CompanionService : Service() {
 
     @Volatile private var displaying: String? = null  // the PC whose desktop is shown
 
+    /** The PC's sound on the speakers (RtcPlayback), while one of its
+     * programs plays and the user lets it (Plus One → For the PC). */
+    private fun playback(socket: SSLSocket, wire: Wire, request: JSONObject, pc: String) {
+        if (!Options.speakers(this)) {
+            wire.send(JSONObject().put("type", "refused").put("reason", "off"))
+            return
+        }
+        val playback = RtcPlayback(this) { runCatching { socket.close() } }
+        val entry = Capture("speakers", socket, pc)
+        val answer = try {
+            playback.answer(request.optString("sdp"))
+        } catch (e: Exception) {
+            Log.w(TAG, "speakers not available: $e")
+            playback.stop()
+            wire.send(JSONObject().put("type", "refused").put("reason", "unavailable"))
+            return
+        }
+        synchronized(captures) { speakerSessions[entry] = playback }
+        try {
+            wire.send(JSONObject().put("type", "answer").put("sdp", answer))
+            showCaptures()
+            lowLatency(true)
+            socket.soTimeout = RtcCapture.SILENT_PC
+            while (wire.receive().optString("type") != "stop") continue
+        } finally {
+            playback.stop()
+            synchronized(captures) { speakerSessions.remove(entry) }
+            showCaptures()
+            lowLatency(false)
+        }
+    }
+
+    private val speakerSessions = mutableMapOf<Capture, RtcPlayback>()  // under captures
+
     /** What the notification says, when only that changed. */
     private fun showCaptures() =
         getSystemService(android.app.NotificationManager::class.java).notify(Notifications.SERVICE_ID, notification())
@@ -487,9 +522,11 @@ class CompanionService : Service() {
     /** The user took the device back from the PC (MainActivity): its captures
      * end, and the service lets go of it. */
     fun stopCaptures(kind: String) {
-        val sockets = synchronized(captures) { captures.values.filter { it.kind == kind }.map { it.socket } }
+        val sockets = synchronized(captures) {
+            (captures.values + speakerSessions.keys).filter { it.kind == kind }.map { it.socket }
+        }
         sockets.forEach { try { it.close() } catch (e: Exception) {} }
-        if (allowedTypes(kind)) {
+        if (kind != "speakers" && allowedTypes(kind)) {
             types = types and typeOf(kind).inv()
             showForeground()
         }

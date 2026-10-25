@@ -36,6 +36,13 @@ object Options {
     fun setAsked(context: Context, kind: String) =
         context.getSharedPreferences("asked", Context.MODE_PRIVATE).edit().putBoolean(kind, true).apply()
 
+    /** The PC may play on the speakers (while a program there does). On at first: only sound. */
+    fun speakers(context: Context) =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("speakers", true)
+
+    fun setSpeakers(context: Context, on: Boolean) =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("speakers", on).apply()
+
     fun microphone(context: Context) =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("microphone", false)
 

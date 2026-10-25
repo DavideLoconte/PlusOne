@@ -40,6 +40,16 @@ def device_status(kind, state, users=()):
     if state == "decoder":
         return _("Needs an H.264 decoder: gstreamer1.0-libav")
     camera = kind == "camera"
+    if kind == "speakers":
+        return {
+            "off": _("As a sound output for this PC's programs"),
+            "ready": _("On: choose “Tablet speakers” as the output in the Sound settings"),
+            "in use": _("Playing {programs}").format(programs=", ".join(users)) if users else _("Playing"),
+            "away": _("A program plays on the speakers, but the tablet is not reachable"),
+            "tablet-off": _("Not allowed on the tablet: Plus One → For the PC"),
+            "tablet-unpaired": _("The tablet no longer knows this PC: pair it again"),
+            "tablet-version": _("Plus One on the tablet and on this PC are different versions: update them"),
+        }.get(state, "")
     return {
         "off": _("As a webcam for this PC's programs") if camera else _("As a microphone for this PC's programs"),
         "ready": _("On: the tablet turns its camera on while a program uses it") if camera
@@ -174,10 +184,11 @@ class Window(Adw.ApplicationWindow):
         for button in (self.screen_button, sign):
             buttons.append(button)
         box.append(buttons)
-        # The tablet's camera and microphone, for this PC's programs.
+        # The tablet's camera, microphone and speakers, for this PC's programs.
         devices = Adw.PreferencesGroup(margin_top=24)
         self.device_rows = {}
-        for kind, title in (("camera", _("Tablet camera")), ("microphone", _("Tablet microphone"))):
+        for kind, title in (("camera", _("Tablet camera")), ("microphone", _("Tablet microphone")),
+                            ("speakers", _("Tablet speakers"))):
             row = Adw.SwitchRow(title=title)
             row.handler = row.connect("notify::active", lambda r, _p, kind=kind: self.app.set_device(kind, r.get_active()))
             devices.add(row)
