@@ -43,13 +43,46 @@ Your tablet, and only it.
   keys; about 160 ms from the tablet's microphone to a program on the PC.
   Front or back camera, 720p or 1080p. The app lets the PC have them only
   once the user turns them on there (*For the PC*), and says so in its
-  notification while the PC uses them. The microphone's noise reduction,
+  notification while the PC uses them. When a program on the PC wants one
+  that is off, the tablet asks ("santal-XPS wants to use the camera",
+  *Allow*, with the tablet unlocked) and the PC says to look at it. The microphone's noise reduction,
   in the preferences: neural on the PC (DeepFilterNet, its plugin in
   `~/.ladspa`), light on the tablet (libwebrtc's) or off; then a compressor
   and a limiter bring the voice to about -18 dBFS. New dependencies:
   `gstreamer1.0-nice`, `gir1.2-gst-plugins-bad-1.0`, `swh-plugins`.
 - The app listens on a fixed port (47236), so the PC finds it over Wi-Fi
   Direct at once. Protocol version 3: update the app and Plus One together.
+- **The S Pen without a group**: a small helper, started by D-Bus when the
+  pen is first used and allowed by polkit to the user at the screen, makes
+  the virtual tablet and takes only pen reports for it; nobody gets
+  `/dev/uhid` (with it a program could make a keyboard). 0.5's `plus-one`
+  group is no longer needed (the package says how to remove it). New
+  dependencies: `dbus`, `polkitd`.
+- **Second Screen on Intel's low-power encoder** where there is one (VA-API
+  `vah264lpenc`), before NVIDIA's: the discrete GPU stays asleep, about 8 W
+  less, at 60 fps.
+- **The app sets itself up**: its first screen asks for notifications and
+  "display over other apps" in one card that says what for; Second
+  Screen's low-latency file (`Documents/wfd/wfdconfig.txt`) is made by the
+  app, not by hand. After an update the app is ready again by itself.
+- **Second Screen kept to the tablet**: connections from the home network
+  are refused at once, touches and RTCP are taken only from the Wi-Fi
+  Direct group, the pen moves only over the tablet's monitor (else it is a
+  mouse), a tablet is picked by its address, Disconnect means no session
+  after it.
+- **Signing never loses what was signed**: the copy sent is kept until the
+  signed one is saved (next to the original, else in Documents); a PDF
+  that cannot be signed (not a PDF, too big, locked) is said at once.
+  Pairing questions are limited per address; forgetting a PC on the tablet
+  ends its links.
+- **Lighter**: the webcam costs nothing while no program shows it (it was
+  10% of a core), a frame sooner; the microphone's neural noise reduction
+  works only on speech; the signing window renders a page's tiles in one
+  pass (a scanned page: 150 ms instead of 0.8 s), the app's signing view
+  draws once a frame. No UPnP for the camera's and microphone's WebRTC
+  (libnice asked the router to open the port to the internet).
+- Releases: the app is built without the key and signed in a job of its
+  own.
 
 ## 0.5.0
 
