@@ -136,6 +136,25 @@ _IT = {
     "Opening the desktop on {name}…": "Apro il desktop su {name}…",
     "Second screen through": "Secondo schermo tramite",
     "Tablet speakers": "Casse del tablet",
+    # The window's sidebar and its pages
+    "Microphone": "Microfono",
+    "Speakers": "Casse",
+    "Tablets": "Tablet",
+    "Not found": "Non trovato",
+    "Touch and pen": "Tocco e penna",
+    "Fingers and the pen drive the desktop; the pen with pressure and tilt":
+        "Dita e penna comandano il desktop; la penna con pressione e inclinazione",
+    "Or right-click a PDF in Files: Sign on Tablet": "Oppure tasto destro su un PDF in File: Firma sul tablet",
+    "Plus One's app, for Android 13 or later": "L'app Plus One, per Android 13 o successivi",
+    "The tablet's camera as a webcam that every program on this PC sees; the tablet turns it on only while one uses it.":
+        "La fotocamera del tablet come webcam che ogni programma del PC vede; il tablet la accende solo mentre "
+        "uno la usa.",
+    "The tablet's microphone for this PC's programs; the tablet turns it on only while one records.":
+        "Il microfono del tablet per i programmi del PC; il tablet lo accende solo mentre uno registra.",
+    "The tablet's speakers as a sound output of this PC, there while the tablet is: the sound as it is, uncompressed.":
+        "Le casse del tablet come uscita audio del PC, presenti finché c'è il tablet: il suono così com'è, "
+        "senza compressione.",
+    "What Plus One did, to send along with a problem": "Cosa ha fatto Plus One, da allegare a un problema",
     "Needs PipeWire's pactl and pw-link, and python3-cryptography":
         "Servono pactl e pw-link di PipeWire, e python3-cryptography",
     "As a sound output for this PC's programs": "Come uscita audio per i programmi di questo PC",

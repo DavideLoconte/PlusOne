@@ -79,7 +79,7 @@ virtual keyboard; there is no group to join and nothing to log out for.
 
 The *Tablet* Quick Settings toggle (a GNOME Shell extension) is included but
 off: after logging out and back in, turn it on in Plus One's window
-(*Preferences → General → Quick Settings toggle*) or in the *Extensions* app. Plus One never
+(*General → Quick Settings toggle* in the window) or in the *Extensions* app. Plus One never
 enables shell extensions by itself.
 
 Uninstall with `sudo apt remove plus-one`.
@@ -138,9 +138,9 @@ Once: install Plus One's app on the tablet (`plus-one-companion_*.apk` from
 the release, Android 13 or later) and open it. Then in Plus One's window on
 the PC, **Pair a tablet**: pick yours from the list of tablets with the app
 on your Wi-Fi, check that both screens show the same six-digit code and
-confirm on both. Pair more tablets with **Pair another tablet…** under the
-tablet's name, which also picks the one in use; **Paired tablets** in the
-menu forgets one.
+confirm on both. The window's **Tablets** page (or a click on the tablet's
+name at the top of the sidebar) pairs another, picks the one in use and
+forgets one.
 
 1. Click **Tablet** in GNOME's Quick Settings (top-right corner), or press
    **Use as second screen** in the Plus One window.
@@ -182,7 +182,7 @@ Right-click a PDF in Files → **Sign on Tablet** (or *Open With → Sign on
 Tablet*, or launch *Sign on Tablet* from the app grid and pick a file). Files
 offers it while a tablet is on your network or connected: Plus One sees it
 when the tablet announces itself, which Android's Quick Share and KDE Connect
-both do. **Preferences → Signing → Sign on Tablet** in the Plus One window
+both do. **Signing → Sign on Tablet** in the Plus One window
 turns it off everywhere. The PDF goes to the tablet in use only, and only to
 a paired one; **Sign a PDF…** in the window does the same.
 
@@ -201,8 +201,8 @@ stabilization (how much the ink smooths the pen's movement); Plus One
 remembers them. **My signature** places your saved signature with one tap;
 its arrow lists them all: pick another, remove one, or draw a new one on a
 pad (with the pen or the mouse). The first time, **Keep as my signature**
-also saves what you just drew. **My signatures** in the Plus One window's
-menu manages them too. **Date** and **Text** add a date or a few words
+also saves what you just drew. **Signing → My signatures** in the Plus One
+window manages them too. **Date** and **Text** add a date or a few words
 where you tap; **Undo**, **Clear page**, page arrows and **Fit**.
 
 What you place comes selected, in a blue box: drag it from inside, turn it
@@ -279,9 +279,9 @@ retransmissions) and GStreamer's webrtcbin on the PC (the jitter buffer), encryp
 Direct; H.264 up to 2.5 Mbit/s at 720p (5 at 1080p), Opus for the sound,
 about 160 ms from the tablet's microphone to a program on the PC (measured).
 The PC needs `gstreamer1.0-nice`, `gir1.2-gst-plugins-bad-1.0` and
-`swh-plugins` (the `.deb` brings them). **Preferences → Camera and
-microphone** picks the front or the back camera, 720p or 1080p, and the
-microphone's noise reduction:
+`swh-plugins` (the `.deb` brings them). The window's **Camera** page picks
+the front or the back camera, 720p or 1080p, and its **Microphone** page the
+noise reduction:
 
 - **Neural, on this PC** (the default): [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet),
   a neural network that takes the room's noise out of a voice (20 ms more,
@@ -322,18 +322,22 @@ writes it the first time it opens (`Documents/wfd/wfdconfig.txt`, containing
 
 ### Settings
 
-In the window's menu, **Preferences** (Ctrl+,), one page: *Second screen*,
-*Signing*, *Camera and microphone*, *General*, and *Advanced* folded away.
-Plus One speaks the system's language.
+The window has a sidebar of what Plus One does: **Second screen**,
+**Signing**, **Camera**, **Microphone**, **Speakers**, **Tablets**,
+**General**; each page has its button and all its settings in view (a dot
+in the sidebar marks what is on, green while in use). Narrow, the sidebar
+and the page take turns. Ctrl+, opens *General*. Plus One speaks the
+system's language.
 
 | Setting | |
 |---|---|
-| Picture | *Balanced* (20 Mbit/s, the default), *Sharper text* (40) or *For weak Wi-Fi* (10). |
-| Quick Settings toggle | Turns the *Tablet* GNOME Shell extension on or off (Plus One offers it once, after the first pairing). Shown when the extension is installed (the `.deb`, or the zip for Flatpak users) and GNOME Shell knows it, which is after the next login. |
-| Ready in the background | Start at login and keep running after the window closes, so the Quick Settings toggle connects at once. Costs nothing while idle. |
-| Advanced → Resolution | *Automatic* (default) reads the tablet's preferred mode from its EDID (1920×1200 on a Tab S10 FE+), or pick 1920×1200, 1680×1050, 1440×900, 1280×800 (16:10), 1920×1080, 1280×720 (16:9). |
-| Advanced → Touch and S Pen | Forward finger touches and the pen from the tablet. |
-| Advanced → Open Second Screen from here | Uses `adb` to open the tile for you. Needs *USB debugging* or *Wireless debugging* on the tablet; off by default. |
+| Second screen → Quality | *Balanced* (20 Mbit/s at 1920×1200, the default), *Sharper text* (40) or *For weak Wi-Fi* (10). |
+| Second screen → Resolution | Through the app: *Automatic* (1920×1200 on a Tab S10 FE+) or the tablet's sizes at its proportions, from 2560 wide at scale 2 (sharp text). Through Second Screen: *Automatic* reads the tablet's preferred mode from its EDID, or a WFD mode. |
+| Second screen → Through | Plus One's app when it is there, or always Samsung's Second Screen. |
+| Second screen → Touch and S Pen | Forward finger touches and the pen from the tablet. |
+| Second screen → Open Second Screen from here | Through Second Screen only: uses `adb` to open the tile for you. Needs *USB debugging* or *Wireless debugging* on the tablet; off by default. |
+| General → Quick Settings toggle | Turns the *Tablet* GNOME Shell extension on or off (Plus One offers it once, after the first pairing). Shown when the extension is installed (the `.deb`, or the zip for Flatpak users) and GNOME Shell knows it, which is after the next login. |
+| General → Ready in the background | Start at login and keep running after the window closes, so the Quick Settings toggle connects at once. Costs nothing while idle. |
 
 ### S Pen
 
@@ -366,7 +370,7 @@ latency.
 | Problem | What to do |
 |---|---|
 | *“Close GNOME Network Displays”* | It uses the same Wi-Fi Direct device. Quit it. |
-| Never connects | Reopen Second Screen on the tablet. A VPN with a firewall/kill switch can block the link; turn it off to check. Open *Log* in the window's menu. |
+| Never connects | Reopen Second Screen on the tablet. A VPN with a firewall/kill switch can block the link; turn it off to check. Open *General → Log* in the window. |
 | *“Plus One does not answer on …”* | Plus One's app must be running on the tablet: open it (and keep *Ready in the background* on in the app). The desktop is only sent once it proved the tablet is yours. |
 | *“This is not …: the desktop was not sent”* | Something else came over Wi-Fi Direct as your tablet, or the tablet in use is another one: check its name in the window. |
 | *Tablet camera* says it needs v4l2loopback | See *The tablet's camera and microphone*: the module is not loaded. |

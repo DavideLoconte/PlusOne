@@ -1,4 +1,4 @@
-"""The window: the tablet in use, pairing, the paired tablets.
+"""The window: its sidebar and pages, the tablet in use, pairing, the paired tablets.
 
 Needs a display: CI runs it on a headless Weston (tools/ci.sh sets
 PLUSONE_GUI_TESTS=1); on a desktop it is skipped so no window pops up.
@@ -52,6 +52,9 @@ def make(monkeypatch, tmp_path, tablets=()):
     app.status_text = lambda: ("Ready", "")
     app.save_settings = lambda: None
     app.window_closed = lambda: None
+    app.set_sign_on_tablet = lambda on: setattr(app.settings, "sign_on_tablet", on)
+    app.set_background = lambda on: setattr(app.settings, "background", on)
+    app.set_microphone_noise = lambda noise: setattr(app.settings, "microphone_noise", noise)
 
     def changed():
         for listener in list(app.listeners):
@@ -88,13 +91,31 @@ def test_the_tablet_in_use(monkeypatch, tmp_path):
     assert win.screen_button.get_label() == "Use as second screen"
     app.nearby.found = [(KITCHEN[:16], "10.0.0.2", 47236, "Kitchen")]
     win._refresh()
-    assert win.status_label.get_label() == "Ready"
-    # Its name opens the choice: the paired tablets, then pairing another.
-    choices = win.name_button.get_menu_model().get_item_link(0, "section")
-    assert [choices.get_item_attribute_value(i, "label").get_string()
-            for i in range(choices.get_n_items())] == ["Kitchen", "Office"]
+    assert win.status_label.get_label() == "Ready" and win.where_label.get_label() == "Ready"
+    # The Tablets page: the paired ones, the one in use checked.
+    assert [row.get_title() for row in win.tablet_rows] == ["Kitchen", "Office"]
     win.activate_action("win.use-tablet", GLib.Variant("s", OFFICE))
     assert app.settings.tablet == OFFICE and win.name_label.get_label() == "Office"
+
+
+def test_every_section_in_the_sidebar(monkeypatch, tmp_path):
+    win, app = make(monkeypatch, tmp_path, [(KITCHEN, "Kitchen")])
+    assert list(win.pages) == [key for key, _icon, _title in gui.SECTIONS]
+    win.show_section("speakers")
+    assert win.split.get_content() is win.pages["speakers"]
+    assert win.sidebar_list.get_selected_row() is win.sidebar_rows["speakers"]
+    win.name_button.emit("clicked")  # the tablet on top: its page
+    assert win.split.get_content() is win.pages["tablets"]
+    # A device switched on is marked in the sidebar; green while in use.
+    win.device_rows["camera"].set_active(True)
+    assert win.sidebar_marks["camera"].get_visible() and not win.sidebar_marks["microphone"].get_visible()
+    app.devices.camera.state = "in use"
+    win._refresh()
+    assert "success" in win.sidebar_marks["camera"].get_css_classes()
+    # adb opens Samsung's Second Screen: shown only when that is the way.
+    assert not win.adb_row.get_visible()
+    win.via_row.set_selected(1)
+    assert win.adb_row.get_visible() and app.settings.display_via == "second-screen"
 
 
 def test_no_other_tablet_while_connected(monkeypatch, tmp_path):
@@ -149,23 +170,21 @@ def test_paired_with_the_tablet_chosen(monkeypatch, tmp_path):
 
 def test_forgetting_a_paired_tablet(monkeypatch, tmp_path):
     win, app = make(monkeypatch, tmp_path, [(OFFICE, "Office"), (KITCHEN, "Kitchen <b>&")])
-    dialog = gui.TabletsDialog(app, win)
-    assert [row.get_title() for row in dialog.rows] == ["Kitchen <b>&", "Office"]
-    dialog._ask_forget(KITCHEN, "Kitchen <b>&").emit("response", "cancel")
+    assert [row.get_title() for row in win.tablet_rows] == ["Kitchen <b>&", "Office"]
+    win._ask_forget(KITCHEN, "Kitchen <b>&").emit("response", "cancel")
     assert len(app.tablets.all()) == 2
-    dialog._ask_forget(KITCHEN, "Kitchen <b>&").emit("response", "forget")
-    assert [row.get_title() for row in dialog.rows] == ["Office"]
+    win._ask_forget(KITCHEN, "Kitchen <b>&").emit("response", "forget")
+    assert [row.get_title() for row in win.tablet_rows] == ["Office"]
     assert app.settings.tablet == OFFICE and win.name_label.get_label() == "Office"
 
 
-def test_preferences_and_log(monkeypatch, tmp_path):
+def test_settings_and_log(monkeypatch, tmp_path):
     win, app = make(monkeypatch, tmp_path, [(KITCHEN, "Kitchen")])
-    prefs = gui.PreferencesDialog(app, win)
-    prefs.quality_row.set_selected(1)  # "Sharper text"
+    win.quality_row.set_selected(1)  # "Sharper text"
     assert app.settings.bitrate == 40000
     app.controller.state = State.STREAMING
-    prefs._refresh()
-    assert not prefs.mode_row.get_sensitive()
+    win._refresh()
+    assert not win.mode_row.get_sensitive()
     log = gui.LogDialog(app)
     log._append("another")
     assert log._text() == "a line of the log\nanother\n"
@@ -180,8 +199,7 @@ def test_the_tablets_camera_and_microphone(monkeypatch, tmp_path):
     app.devices.camera.state = "tablet-permission"
     win._refresh()
     assert camera.get_subtitle() == "On the tablet, allow Plus One to use the camera"
-    prefs = gui.PreferencesDialog(app, win)
-    prefs.quality_row_camera.set_selected(1)
+    win.quality_row_camera.set_selected(1)
     assert app.settings.camera_quality == "1080p"
 
 

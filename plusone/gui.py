@@ -1,5 +1,5 @@
-"""Plus One's window (see app.py): the tablet in use and what to do with it;
-pairing, the paired tablets, preferences and the log in dialogs of their own."""
+"""Plus One's window (see app.py): a sidebar of what it does, each page with
+its button and its settings; pairing and the log in dialogs of their own."""
 import os
 import shutil
 import threading
@@ -100,48 +100,71 @@ def _spinner(text):
     return box
 
 
+# The window's sections, all listed in its sidebar: (key, icon, title).
+SECTIONS = [
+    ("screen", "video-display-symbolic", "Second screen"),
+    ("signing", "document-edit-symbolic", "Signing"),
+    ("camera", "camera-web-symbolic", "Camera"),
+    ("microphone", "audio-input-microphone-symbolic", "Microphone"),
+    ("speakers", "audio-speakers-symbolic", "Speakers"),
+    ("tablets", TABLET_ICON, "Tablets"),
+    ("general", "preferences-system-symbolic", "General"),
+]
+DEVICES = ("camera", "microphone", "speakers")
+
+
 class Window(Adw.ApplicationWindow):
+    """A sidebar of what Plus One does, each page with its button and every
+    setting it has in view: no menu, no Advanced, no preferences elsewhere.
+    Narrow, the sidebar and the page take turns."""
+
     def __init__(self, app):
-        super().__init__(application=app, title="Plus One", default_width=440, default_height=660)
+        super().__init__(application=app, title="Plus One", default_width=900, default_height=640,
+                         width_request=360, height_request=400)
         self.app = app
         self.controller = app.controller
+        self.settings = app.settings
         _add_resources(self.get_display())
-        for name, callback in (("preferences", lambda *a: PreferencesDialog(self.app, self).present(self)),
+        for name, callback in (("preferences", lambda *a: self.show_section("general")),
                                ("signatures", lambda *a: self._show_signatures()),
-                               ("tablets", lambda *a: TabletsDialog(self.app, self).present(self)),
+                               ("tablets", lambda *a: self.show_section("tablets")),
                                ("pair", lambda *a: self.pair()),
                                ("log", lambda *a: LogDialog(self.app).present(self)),
                                ("about", lambda *a: self._about())):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", callback)
             self.add_action(action)
-        # The tablet in use, picked from the menu under its name.
+        # The tablet in use (Tablets, or the action from elsewhere).
         self.use_action = Gio.SimpleAction.new_stateful("use-tablet", GLib.VariantType("s"), GLib.Variant("s", ""))
         self.use_action.connect("change-state", self._on_use)
         self.add_action(self.use_action)
         self._build()
+        narrow = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("max-width: 640sp"))
+        narrow.add_setter(self.split, "collapsed", True)
+        self.add_breakpoint(narrow)
         app.listeners.append(self._refresh)
         self.connect("close-request", self._on_close)
 
     def _build(self):
-        """The content, in the current language (again after it changes)."""
-        menu = Gio.Menu()
-        section = Gio.Menu()
-        section.append(_("Preferences"), "win.preferences")
-        section.append(_("My signatures"), "win.signatures")
-        section.append(_("Paired tablets"), "win.tablets")
-        menu.append_section(None, section)
-        section = Gio.Menu()
-        section.append(_("Log"), "win.log")
-        section.append(_("About Plus One"), "win.about")
-        menu.append_section(None, section)
-        header = Adw.HeaderBar()
-        header.pack_end(Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=menu, primary=True,
-                                       tooltip_text=_("Main menu")))
-        toolbar = Adw.ToolbarView()
-        toolbar.add_top_bar(header)
-
+        self.device_rows = {}  # camera, microphone, speakers: their switches
         self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
+        self.stack.add_named(self._empty_page(), "empty")
+        self.split = Adw.NavigationSplitView(min_sidebar_width=220, max_sidebar_width=260)
+        self.split.set_sidebar(Adw.NavigationPage(title="Plus One", child=self._sidebar()))
+        self.pages = {}
+        for key, _icon, title in SECTIONS:
+            content = getattr(self, f"_{key}_page")()
+            toolbar = Adw.ToolbarView(content=content)
+            toolbar.add_top_bar(Adw.HeaderBar())
+            self.pages[key] = Adw.NavigationPage(title=_(title), tag=key, child=toolbar)
+        self.stack.add_named(self.split, "tablet")
+        self.toasts = Adw.ToastOverlay(child=self.stack)
+        self.set_content(self.toasts)
+        self._tablets_shown = None
+        self.show_section("screen", reveal=False)
+        self._refresh()
+
+    def _empty_page(self):
         empty = Adw.StatusPage(icon_name=TABLET_ICON, title=_("No tablet"),
                                description=_("Install Plus One on the tablet too, then pair it to use it as a second "
                                              "screen, to sign PDFs and as a webcam."))
@@ -152,50 +175,237 @@ class Window(Adw.ApplicationWindow):
         first.append(pair)
         first.append(get)
         empty.set_child(first)
-        self.stack.add_named(empty, "empty")
-        self.stack.add_named(self._tablet_page(), "tablet")
-        self.toasts = Adw.ToastOverlay(child=self.stack)
-        toolbar.set_content(self.toasts)
-        self.set_content(toolbar)
-        self._menu_tablets = None
-        self._refresh()
+        toolbar = Adw.ToolbarView(content=empty)
+        toolbar.add_top_bar(Adw.HeaderBar())
+        return toolbar
 
-    def _tablet_page(self):
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, valign=Gtk.Align.CENTER,
-                      margin_start=24, margin_end=24, margin_top=24, margin_bottom=24)
-        box.append(Gtk.Image(icon_name=TABLET_ICON, pixel_size=128, css_classes=["dim-label"], margin_bottom=12))
-        # Its name opens the choice of tablet (and pairing another).
-        self.name_label = Gtk.Label(css_classes=["title-1"], ellipsize=Pango.EllipsizeMode.END, max_width_chars=26)
-        self.name_button = Gtk.MenuButton(child=self.name_label, halign=Gtk.Align.CENTER, css_classes=["flat"],
-                                          always_show_arrow=True, tooltip_text=_("Choose the tablet"))
+    # -- the sidebar -----------------------------------------------------------------
+    def _sidebar(self):
+        # The tablet in use and where it is, on top: a click shows the tablets.
+        card = Gtk.Box(spacing=12, margin_start=6, margin_end=6)
+        card.append(Gtk.Image(icon_name=TABLET_ICON, pixel_size=32))
+        names = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.CENTER)
+        self.name_label = Gtk.Label(xalign=0, css_classes=["heading"], wrap=True, lines=2,
+                                    ellipsize=Pango.EllipsizeMode.END, wrap_mode=Pango.WrapMode.WORD_CHAR)
+        self.where_label = Gtk.Label(xalign=0, css_classes=["caption", "dim-label"], ellipsize=Pango.EllipsizeMode.END)
+        names.append(self.name_label)
+        names.append(self.where_label)
+        card.append(names)
+        self.name_button = Gtk.Button(child=card, css_classes=["flat"], margin_start=6, margin_end=6,
+                                      margin_top=6, margin_bottom=6, tooltip_text=_("Choose the tablet"))
+        self.name_button.connect("clicked", lambda b: self.show_section("tablets"))
+        self.sidebar_list = Gtk.ListBox(css_classes=["navigation-sidebar"])
+        self.sidebar_rows, self.sidebar_marks = {}, {}
+        for key, icon, title in SECTIONS:
+            box = Gtk.Box(spacing=12)
+            box.append(Gtk.Image(icon_name=icon))
+            box.append(Gtk.Label(label=_(title), xalign=0, hexpand=True))
+            # On (dim) or at work (green): the second screen, camera, microphone, speakers.
+            mark = Gtk.Image(icon_name="media-record-symbolic", pixel_size=8, visible=False)
+            box.append(mark)
+            row = Gtk.ListBoxRow(child=box)
+            row.key = key
+            self.sidebar_list.append(row)
+            self.sidebar_rows[key], self.sidebar_marks[key] = row, mark
+        self.sidebar_list.connect("row-activated", lambda _l, row: self.show_section(row.key))
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         box.append(self.name_button)
-        self.status_label = Gtk.Label(wrap=True, justify=Gtk.Justification.CENTER, css_classes=["dim-label"])
+        box.append(Gtk.ScrolledWindow(child=self.sidebar_list, vexpand=True,
+                                      hscrollbar_policy=Gtk.PolicyType.NEVER))
+        toolbar = Adw.ToolbarView(content=box)
+        toolbar.add_top_bar(Adw.HeaderBar())
+        return toolbar
+
+    def show_section(self, key, reveal=True):
+        if self.split.get_content() is not self.pages[key]:
+            self.split.set_content(self.pages[key])
+        self.sidebar_list.select_row(self.sidebar_rows[key])
+        if reveal:
+            self.split.set_show_content(True)
+
+    # -- the pages ---------------------------------------------------------------------
+    def _screen_page(self):
+        s = self.settings
+        page = Adw.PreferencesPage()
+        hero = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=12, margin_bottom=12)
+        self.screen_button = _pill("", width=260)
+        self.screen_button.connect("clicked", self._toggle)
         # Something happens while it turns: looking for the tablet, connecting.
         self.spinner = Gtk.Spinner(spinning=True, visible=False)
+        self.status_label = Gtk.Label(wrap=True, justify=Gtk.Justification.CENTER, css_classes=["dim-label"])
         status = Gtk.Box(spacing=8, halign=Gtk.Align.CENTER)
         status.append(self.spinner)
         status.append(self.status_label)
-        box.append(status)
-        buttons = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=24, halign=Gtk.Align.CENTER)
-        # The same width for both, whatever the labels say.
-        self.screen_button = _pill("", width=260)
-        self.screen_button.connect("clicked", self._toggle)
-        sign = _pill(_("Sign a PDF…"), width=260)
+        hero.append(self.screen_button)
+        hero.append(status)
+        group = Adw.PreferencesGroup()
+        group.add(hero)
+        page.add(group)
+
+        group = Adw.PreferencesGroup(title=_("Picture"))
+        # Said as what it is for, not in Mbit/s (QUALITY_BITRATES).
+        self.quality_row = Adw.ComboRow(title=_("Quality"), model=Gtk.StringList.new(
+            [_(label) for label, _kbit in QUALITY_BITRATES]),
+            selected=min(range(len(QUALITY_BITRATES)), key=lambda i: abs(QUALITY_BITRATES[i][1] - s.bitrate)),
+            subtitle=_("Sharper text takes more of the Wi-Fi"))
+        # Entry 0 is "Automatic"; the rest are the tablet's sizes through the
+        # app, or Second Screen's modes (MODE_LIST): _fill_modes().
+        self.mode_row = Adw.ComboRow(title=_("Resolution"), subtitle_lines=2)
+        # Plus One's app shows the desktop when it answers; Second Screen otherwise.
+        self.via_row = Adw.ComboRow(title=_("Second screen through"), model=Gtk.StringList.new(
+            [_("Plus One's app, when it is there"), _("Samsung's Second Screen")]),
+            selected=0 if s.display_via == "auto" else 1)
+        for row in (self.quality_row, self.mode_row, self.via_row):
+            group.add(row)
+        page.add(group)
+
+        group = Adw.PreferencesGroup(title=_("Touch and pen"))
+        # Its subtitle says how to get the pen's pressure.
+        self.touch_row = Adw.SwitchRow(title=_("Touch and S Pen"), active=s.touch, subtitle_selectable=True,
+                                       subtitle={
+            "set up": _("Without Plus One's pen helper (the .deb installs it) the S Pen works as a mouse, "
+                        "without pressure"),
+        }.get(pen.uhid_missing(), _("Fingers and the pen drive the desktop; the pen with pressure and tilt")))
+        has_adb = shutil.which("adb") is not None
+        self.adb_row = Adw.SwitchRow(title=_("Open Second Screen from here"), active=s.use_adb and has_adb,
+                                     sensitive=has_adb,
+                                     subtitle=_("Uses adb: needs wireless debugging on the tablet")
+                                     if has_adb else _("adb is not available"))
+        group.add(self.touch_row)
+        group.add(self.adb_row)
+        page.add(group)
+
+        self._fill_modes()
+        # Read when a connection starts: locked while one is up.
+        self.session_rows = [self.quality_row, self.via_row, self.mode_row, self.touch_row, self.adb_row]
+        self.via_row.connect("notify::selected", lambda *_a: self._fill_modes())
+        for row, signal in ((self.quality_row, "notify::selected"), (self.via_row, "notify::selected"),
+                            (self.mode_row, "notify::selected"),
+                            (self.touch_row, "notify::active"), (self.adb_row, "notify::active")):
+            row.connect(signal, self._apply)
+        return page
+
+    def _signing_page(self):
+        page = Adw.PreferencesPage()
+        hero = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=12, margin_bottom=12)
+        sign = _pill(_("Sign a PDF…"), "suggested-action", width=260)
         sign.connect("clicked", lambda b: self.app.choose_and_sign(self))
-        for button in (self.screen_button, sign):
-            buttons.append(button)
-        box.append(buttons)
-        # The tablet's camera, microphone and speakers, for this PC's programs.
-        devices = Adw.PreferencesGroup(margin_top=24)
-        self.device_rows = {}
-        for kind, title in (("camera", _("Tablet camera")), ("microphone", _("Tablet microphone")),
-                            ("speakers", _("Tablet speakers"))):
-            row = Adw.SwitchRow(title=title)
-            row.handler = row.connect("notify::active", lambda r, _p, kind=kind: self.app.set_device(kind, r.get_active()))
-            devices.add(row)
-            self.device_rows[kind] = row
-        box.append(Adw.Clamp(maximum_size=420, child=devices))
-        return box
+        hero.append(sign)
+        hero.append(Gtk.Label(label=_("Or right-click a PDF in Files: Sign on Tablet"), wrap=True,
+                              justify=Gtk.Justification.CENTER, css_classes=["dim-label"]))
+        group = Adw.PreferencesGroup()
+        group.add(hero)
+        page.add(group)
+        group = Adw.PreferencesGroup()
+        signatures = Adw.ActionRow(title=_("My signatures"), activatable=True,
+                                   subtitle=_("Placed with one tap when signing, here and on the tablet"))
+        signatures.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+        signatures.connect("activated", lambda r: self._show_signatures())
+        # Files and Open With are outside a Flatpak's reach.
+        sign_row = Adw.SwitchRow(title=_("Sign on Tablet"), active=self.settings.sign_on_tablet,
+                                 visible=not IN_FLATPAK, subtitle=_("In Files and Open With, for PDFs"))
+        sign_row.connect("notify::active", lambda row, _p: self.app.set_sign_on_tablet(row.get_active()))
+        group.add(signatures)
+        group.add(sign_row)
+        page.add(group)
+        return page
+
+    def _device_row(self, kind, title):
+        row = Adw.SwitchRow(title=title, subtitle_lines=3)
+        row.handler = row.connect("notify::active", lambda r, _p: self.app.set_device(kind, r.get_active()))
+        self.device_rows[kind] = row
+        return row
+
+    def _camera_page(self):
+        s = self.settings
+        page = Adw.PreferencesPage()
+        group = Adw.PreferencesGroup(description=_("The tablet's camera as a webcam that every program on this "
+                                                   "PC sees; the tablet turns it on only while one uses it."))
+        group.add(self._device_row("camera", _("Tablet camera")))
+        self.facing_row = Adw.ComboRow(title=_("Camera"), model=Gtk.StringList.new([_("Front"), _("Back")]),
+                                       selected=FACING_LIST.index(s.camera_facing)
+                                       if s.camera_facing in FACING_LIST else 0)
+        self.quality_row_camera = Adw.ComboRow(title=_("Picture"), model=Gtk.StringList.new(
+            ["720p (1280 × 720)", "1080p (1920 × 1080)"]),
+            selected=QUALITY_LIST.index(s.camera_quality) if s.camera_quality in QUALITY_LIST else 0,
+            subtitle=_("1080p takes about twice the bandwidth. A change waits until no program uses the camera"))
+        for row in (self.facing_row, self.quality_row_camera):
+            row.connect("notify::selected", self._camera_options)
+            group.add(row)
+        page.add(group)
+        return page
+
+    def _microphone_page(self):
+        s = self.settings
+        page = Adw.PreferencesPage()
+        group = Adw.PreferencesGroup(description=_("The tablet's microphone for this PC's programs; the tablet "
+                                                   "turns it on only while one records."))
+        group.add(self._device_row("microphone", _("Tablet microphone")))
+        neural = neural_available()
+        self.noise_row = Adw.ComboRow(
+            title=_("Noise reduction"),
+            model=Gtk.StringList.new([_("Off"), _("Light, on the tablet"), _("Neural, on this PC")]),
+            selected=NOISE_LIST.index(s.microphone_noise) if s.microphone_noise in NOISE_LIST else 2,
+            subtitle=_("Neural takes out more of the room's noise, with about half a processor core")
+            if neural else _("Neural needs DeepFilterNet's plugin in ~/.ladspa: light until then"))
+        self.noise_row.connect("notify::selected", lambda row, _p: self.app.set_microphone_noise(
+            NOISE_LIST[row.get_selected()]))
+        group.add(self.noise_row)
+        page.add(group)
+        return page
+
+    def _speakers_page(self):
+        page = Adw.PreferencesPage()
+        group = Adw.PreferencesGroup(description=_("The tablet's speakers as a sound output of this PC, there "
+                                                   "while the tablet is: the sound as it is, uncompressed."))
+        group.add(self._device_row("speakers", _("Tablet speakers")))
+        page.add(group)
+        return page
+
+    def _tablets_page(self):
+        page = Adw.PreferencesPage()
+        self.tablets_group = Adw.PreferencesGroup(description=_("The one in use gets the desktop and the PDFs. "
+                                                                "Forget one you no longer use."))
+        page.add(self.tablets_group)
+        group = Adw.PreferencesGroup()
+        pair = Adw.ActionRow(title=_("Pair another tablet…"), activatable=True)
+        pair.add_prefix(Gtk.Image(icon_name="list-add-symbolic"))
+        pair.connect("activated", lambda r: self.pair())
+        get = Adw.ActionRow(title=_("Get the tablet app"), activatable=True,
+                            subtitle=_("Plus One's app, for Android 13 or later"))
+        get.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+        get.connect("activated", lambda r: Gtk.UriLauncher.new(WEBSITE + "/releases/latest").launch(self, None, None))
+        group.add(pair)
+        group.add(get)
+        page.add(group)
+        self.tablet_rows = []
+        return page
+
+    def _general_page(self):
+        s = self.settings
+        page = Adw.PreferencesPage()
+        group = Adw.PreferencesGroup()
+        background = Adw.SwitchRow(title=_("Ready in the background"), active=s.background,
+                                   subtitle=_("Starts at login and stays ready after you close this window"))
+        background.connect("notify::active", lambda row, _p: self.app.set_background(row.get_active()))
+        # Shown once the shell says the extension is installed (never in a Flatpak).
+        self.extension_row = Adw.SwitchRow(title=_("Quick Settings toggle"), visible=False,
+                                           subtitle=_("Adds a “Tablet” button to GNOME's Quick Settings"))
+        self._extension_handler = self.extension_row.connect(
+            "notify::active", lambda row, _p: set_shell_extension(row.get_active()))
+        shell_extension_state(self._show_extension_state)
+        group.add(background)
+        group.add(self.extension_row)
+        page.add(group)
+        group = Adw.PreferencesGroup()
+        for title, subtitle, action in ((_("Log"), _("What Plus One did, to send along with a problem"), "win.log"),
+                                        (_("About Plus One"), None, "win.about")):
+            row = Adw.ActionRow(title=title, subtitle=subtitle or "", activatable=True)
+            row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+            row.connect("activated", lambda r, action=action: self.activate_action(action, None))
+            group.add(row)
+        page.add(group)
+        return page
 
     # -- state -----------------------------------------------------------------------
     def _refresh(self):
@@ -203,14 +413,20 @@ class Window(Adw.ApplicationWindow):
         self.stack.set_visible_child_name("tablet" if tablet else "empty")
         if tablet is None:
             return
+        state = self.controller.state
         self.name_label.set_label(tablet.name)
-        self._refresh_menu(tablet)
-        for kind, row in self.device_rows.items():
+        here = bool(self.app.tablets.addresses(tablet))
+        self.where_label.set_label(_("Second screen") if state == State.STREAMING
+                                   else _("Ready") if here else _("Not found"))
+        self._refresh_tablets(tablet)
+        for kind in DEVICES:
+            row = self.device_rows[kind]
             with row.handler_block(row.handler):
-                row.set_active(getattr(self.app.settings, kind))
+                row.set_active(getattr(self.settings, kind))
             device = getattr(self.app.devices, kind)
             row.set_subtitle(device_status(kind, device.state, device.users))
-        state = self.controller.state
+            self._mark(kind, getattr(self.settings, kind), device.state == "in use")
+        self._mark("screen", self.controller.running, state == State.STREAMING)
         text = self._status(tablet)
         self.status_label.set_label(text)
         self.status_label.set_css_classes(["error"] if state == State.ERROR else ["dim-label"])
@@ -222,6 +438,16 @@ class Window(Adw.ApplicationWindow):
             # Nothing is lost either way: no red.
             self.screen_button.set_label(_("Disconnect") if state == State.STREAMING else _("Cancel"))
             self.screen_button.set_css_classes(["pill"])
+        in_session = state in (State.CONNECTING, State.STREAMING)
+        for row in self.session_rows:
+            row.set_sensitive(not in_session and (row is not self.adb_row or shutil.which("adb") is not None))
+        # adb opens Samsung's Second Screen: of no use through the app.
+        self.adb_row.set_visible(self.via_row.get_selected() == 1)
+
+    def _mark(self, key, on, working):
+        mark = self.sidebar_marks[key]
+        mark.set_visible(on)
+        mark.set_css_classes(["success"] if working else ["dim-label"])
 
     def _status(self, tablet):
         title, detail = self.app.status_text()
@@ -231,29 +457,57 @@ class Window(Adw.ApplicationWindow):
             return _("Ready") if self.app.tablets.addresses(tablet) else _("Not found: open Plus One on the tablet")
         mode = getattr(self.controller, "mode", None)
         if state == State.STREAMING and mode:
-            # Its name is right above.
             return _("Second screen · {width} × {height} at {fps} Hz").format(width=mode[0], height=mode[1],
                                                                               fps=mode[2])
         return detail or title
 
-    def _refresh_menu(self, active):
-        tablets = [(t.fingerprint, t.name) for t in self.app.tablets.all()]
-        if tablets != self._menu_tablets:
-            self._menu_tablets = tablets
-            menu = Gio.Menu()
-            choices = Gio.Menu()
-            for fingerprint, name in tablets:
-                item = Gio.MenuItem.new(name, None)
-                item.set_action_and_target_value("win.use-tablet", GLib.Variant("s", fingerprint))
-                choices.append_item(item)
-            menu.append_section(None, choices)
-            more = Gio.Menu()
-            more.append(_("Pair another tablet…"), "win.pair")
-            menu.append_section(None, more)
-            self.name_button.set_menu_model(menu)
+    def _refresh_tablets(self, active):
+        running = self.controller.running
+        shown = ([(t.fingerprint, t.name) for t in self.app.tablets.all()], active.fingerprint, running)
         self.use_action.set_state(GLib.Variant("s", active.fingerprint))
         # Another tablet while one is connected: not until it is done.
-        self.use_action.set_enabled(not self.controller.running)
+        self.use_action.set_enabled(not running)
+        if shown == self._tablets_shown:
+            return
+        self._tablets_shown = shown
+        for row in self.tablet_rows:
+            self.tablets_group.remove(row)
+        self.tablet_rows = []
+        tablets, active_fp, running = shown
+        first = None
+        for fingerprint, name in tablets:
+            row = Adw.ActionRow(title=name, use_markup=False, activatable=not running)
+            check = Gtk.CheckButton(active=fingerprint == active_fp, sensitive=not running, valign=Gtk.Align.CENTER,
+                                    css_classes=["selection-mode"])
+            if first is None:
+                first = check
+            else:
+                check.set_group(first)
+            # Not from inside the signal: the rows are made again for it.
+            check.connect("toggled", lambda c, fp=fingerprint: c.get_active()
+                          and GLib.idle_add(once(self.app.use_tablet, fp)))
+            row.add_prefix(check)
+            row.set_activatable_widget(check)
+            forget = Gtk.Button(label=_("Forget"), valign=Gtk.Align.CENTER, css_classes=["flat"])
+            forget.connect("clicked", lambda b, fp=fingerprint, name=name: self._ask_forget(fp, name))
+            row.add_suffix(forget)
+            self.tablets_group.add(row)
+            self.tablet_rows.append(row)
+        self.tablets_group.set_title(_("Paired tablets"))
+
+    def _ask_forget(self, fingerprint, name):
+        dialog = Adw.AlertDialog(heading=_("Forget {tablet}?").format(tablet=name),
+                                 body=_("To use it again, pair it again: both screens show a code."))
+        dialog.add_response("cancel", _("Cancel"))
+        dialog.add_response("forget", _("Forget"))
+        dialog.set_response_appearance("forget", Adw.ResponseAppearance.DESTRUCTIVE)
+
+        def answered(_d, response):
+            if response == "forget":
+                self.app.forget_tablet(fingerprint)
+        dialog.connect("response", answered)
+        dialog.present(self)
+        return dialog
 
     def _on_use(self, action, value):
         action.set_state(value)
@@ -264,6 +518,71 @@ class Window(Adw.ApplicationWindow):
             self.controller.stop()
         else:
             self.controller.start()
+
+    # -- settings ------------------------------------------------------------------------
+    def _app_sizes(self):
+        """The tablet's sizes through the app, once it said its screen."""
+        from .appdisplay import sizes
+        screen = parse_size(self.settings.app_screen)
+        return sizes(screen) if screen else []
+
+    def _fill_modes(self):
+        """Resolution's choices for the way chosen: the tablet's sizes (at its
+        proportions) through the app, Second Screen's modes otherwise."""
+        from .appdisplay import scale_for
+        s = self.settings
+        if self.via_row.get_selected() == 0:
+            choices = self._app_sizes()
+            labels = [_("Automatic")]
+            for w, h in choices:
+                labels.append(f"{w} × {h}" if scale_for((w, h)) == 1 else
+                              _("{width} × {height}, sharp: as {half}").format(
+                                  width=w, height=h, half=f"{w // 2} × {h // 2}"))
+            current = parse_size(s.app_size)
+            selected = 1 + choices.index(current) if current in choices else 0
+            subtitle = (_("Above 1920 × 1200 the picture comes a little later")
+                        if choices else _("The tablet's sizes appear after it showed the desktop once"))
+        else:
+            labels = [_("Automatic")] + [mode_label(m) for m in MODE_LIST]
+            current = (s.width, s.height, s.fps)
+            selected = 0 if s.auto_mode or current not in MODE_LIST else 1 + MODE_LIST.index(current)
+            subtitle = ""
+        self._filling = True
+        self.mode_row.set_model(Gtk.StringList.new(labels))
+        self.mode_row.set_selected(selected)
+        self.mode_row.set_subtitle(subtitle)
+        self._filling = False
+        if hasattr(self, "adb_row"):
+            self.adb_row.set_visible(self.via_row.get_selected() == 1)
+
+    def _apply(self, *_args):
+        if getattr(self, "_filling", False):
+            return  # the choices being replaced, not chosen
+        s = self.settings
+        selected = self.mode_row.get_selected()
+        if self.via_row.get_selected() == 0:
+            choices = self._app_sizes()
+            s.app_size = "auto" if selected == 0 or selected > len(choices) else "%dx%d" % choices[selected - 1]
+        else:
+            s.auto_mode = selected == 0
+            if not s.auto_mode:
+                s.width, s.height, s.fps = MODE_LIST[selected - 1]
+        s.bitrate = QUALITY_BITRATES[self.quality_row.get_selected()][1]
+        s.touch = self.touch_row.get_active()
+        s.use_adb = self.adb_row.get_active()
+        s.display_via = "auto" if self.via_row.get_selected() == 0 else "second-screen"
+        self.app.save_settings()
+
+    def _camera_options(self, *_args):
+        self.app.set_camera_options(FACING_LIST[self.facing_row.get_selected()],
+                                    QUALITY_LIST[self.quality_row_camera.get_selected()])
+
+    def _show_extension_state(self, enabled):
+        if enabled is None:
+            return  # not installed, or not GNOME Shell
+        with self.extension_row.handler_block(self._extension_handler):
+            self.extension_row.set_active(enabled)
+        self.extension_row.set_visible(True)
 
     # -- dialogs ---------------------------------------------------------------------
     def pair(self):
@@ -293,16 +612,16 @@ class Window(Adw.ApplicationWindow):
         color, width, _smoothing = load_pen(PEN)
         SignaturesWindow(self, color, width).present()
 
+    def _on_close(self, _window):
+        self.app.listeners.remove(self._refresh)
+        self.app.window_closed()
+        return False
+
     def _about(self):
         Adw.AboutDialog(application_name="Plus One", application_icon=APP_ID, version=__version__,
                         comments=_("Your Galaxy Tab as a second monitor, and to sign PDFs with its S Pen"),
                         website=WEBSITE, issue_url=WEBSITE + "/issues",
                         license_type=Gtk.License.MIT_X11).present(self)
-
-    def _on_close(self, _window):
-        self.app.listeners.remove(self._refresh)
-        self.app.window_closed()
-        return False
 
 
 class PairDialog(Adw.Dialog):
@@ -452,260 +771,6 @@ class PairDialog(Adw.Dialog):
         self.closed = True
         self._answered(False)  # closed while comparing: not paired
         self.app.listeners.remove(self._list)
-
-
-class TabletsDialog(Adw.PreferencesDialog):
-    """The paired tablets: which one is in use, forget one, pair another."""
-
-    def __init__(self, app, window):
-        super().__init__(title=_("Paired tablets"), content_width=440, content_height=440)
-        self.app = app
-        self.window = window
-        page = Adw.PreferencesPage()
-        self.group = Adw.PreferencesGroup(description=_("The one in use gets the desktop and the PDFs. "
-                                                        "Forget one you no longer use."))
-        page.add(self.group)
-        more = Adw.PreferencesGroup()
-        pair = Adw.ActionRow(title=_("Pair another tablet…"), activatable=True)
-        pair.add_prefix(Gtk.Image(icon_name="list-add-symbolic"))
-        pair.connect("activated", lambda r: (self.close(), window.pair()))
-        more.add(pair)
-        page.add(more)
-        self.add(page)
-        self.rows = []
-        self._shown = None
-        self._refresh()
-        app.listeners.append(self._refresh)
-        self.connect("closed", lambda d: app.listeners.remove(self._refresh))
-
-    def _refresh(self):
-        active = self.app.tablets.active()
-        shown = ([(t.fingerprint, t.name) for t in self.app.tablets.all()],
-                 active.fingerprint if active else None, self.app.controller.running)
-        if shown == self._shown:
-            return
-        self._shown = shown
-        for row in self.rows:
-            self.group.remove(row)
-        self.rows = []
-        tablets, active, running = shown
-        first = None
-        for fingerprint, name in tablets:
-            row = Adw.ActionRow(title=name, use_markup=False, activatable=not running)
-            check = Gtk.CheckButton(active=fingerprint == active, sensitive=not running, valign=Gtk.Align.CENTER,
-                                    css_classes=["selection-mode"])
-            if first is None:
-                first = check
-            else:
-                check.set_group(first)
-            # Not from inside the signal: the rows are made again for it.
-            check.connect("toggled", lambda c, fp=fingerprint: c.get_active()
-                          and GLib.idle_add(once(self.app.use_tablet, fp)))
-            row.add_prefix(check)
-            row.set_activatable_widget(check)
-            forget = Gtk.Button(label=_("Forget"), valign=Gtk.Align.CENTER, css_classes=["flat"])
-            forget.connect("clicked", lambda b, fp=fingerprint, name=name: self._ask_forget(fp, name))
-            row.add_suffix(forget)
-            self.group.add(row)
-            self.rows.append(row)
-        self.group.set_title(_("Paired tablets") if tablets else _("No tablet paired"))
-
-    def _ask_forget(self, fingerprint, name):
-        dialog = Adw.AlertDialog(heading=_("Forget {tablet}?").format(tablet=name),
-                                 body=_("To use it again, pair it again: both screens show a code."))
-        dialog.add_response("cancel", _("Cancel"))
-        dialog.add_response("forget", _("Forget"))
-        dialog.set_response_appearance("forget", Adw.ResponseAppearance.DESTRUCTIVE)
-
-        def answered(_d, response):
-            if response == "forget":
-                self.app.forget_tablet(fingerprint)
-        dialog.connect("response", answered)
-        dialog.present(self)
-        return dialog
-
-
-class PreferencesDialog(Adw.PreferencesDialog):
-    """One page: what most people change, then Advanced for the rest."""
-
-    def __init__(self, app, window):
-        super().__init__(title=_("Preferences"))
-        self.app = app
-        self.window = window
-        self.settings = app.settings
-        s = self.settings
-        page = Adw.PreferencesPage()
-        self.add(page)
-
-        group = Adw.PreferencesGroup(title=_("Second screen"))
-        # Said as what it is for, not in Mbit/s (QUALITY_BITRATES).
-        self.quality_row = Adw.ComboRow(title=_("Picture"), model=Gtk.StringList.new(
-            [_(label) for label, _kbit in QUALITY_BITRATES]),
-            selected=min(range(len(QUALITY_BITRATES)), key=lambda i: abs(QUALITY_BITRATES[i][1] - s.bitrate)))
-        self.quality_row.set_subtitle(_("Sharper text takes more of the Wi-Fi"))
-        group.add(self.quality_row)
-        page.add(group)
-
-        group = Adw.PreferencesGroup(title=_("Signing"))
-        # Files and Open With are outside a Flatpak's reach.
-        sign_row = Adw.SwitchRow(title=_("Sign on Tablet"), active=s.sign_on_tablet, visible=not IN_FLATPAK,
-                                 subtitle=_("In Files and Open With, for PDFs"))
-        sign_row.connect("notify::active", lambda row, _p: app.set_sign_on_tablet(row.get_active()))
-        signatures = Adw.ActionRow(title=_("My signatures"), activatable=True,
-                                   subtitle=_("Placed with one tap when signing, here and on the tablet"))
-        signatures.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
-        signatures.connect("activated", lambda r: window._show_signatures())
-        group.add(sign_row)
-        group.add(signatures)
-        page.add(group)
-
-        group = Adw.PreferencesGroup(description=_("The tablet's camera, as a webcam for this PC's programs "
-                                                   "(switched on in the window)."))
-        self.facing_row = Adw.ComboRow(title=_("Camera"), model=Gtk.StringList.new([_("Front"), _("Back")]),
-                                       selected=FACING_LIST.index(s.camera_facing)
-                                       if s.camera_facing in FACING_LIST else 0)
-        self.quality_row_camera = Adw.ComboRow(title=_("Picture"), model=Gtk.StringList.new(
-            ["720p (1280 × 720)", "1080p (1920 × 1080)"]),
-            selected=QUALITY_LIST.index(s.camera_quality) if s.camera_quality in QUALITY_LIST else 0,
-            subtitle=_("1080p takes about twice the bandwidth. A change waits until no program uses the camera"))
-        for row in (self.facing_row, self.quality_row_camera):
-            row.connect("notify::selected", self._camera_options)
-            group.add(row)
-        page.add(group)
-        group = Adw.PreferencesGroup(description=_("The tablet's microphone, as a microphone for this PC's "
-                                                   "programs (switched on in the window)."))
-        neural = neural_available()
-        self.noise_row = Adw.ComboRow(
-            title=_("Noise reduction"),
-            model=Gtk.StringList.new([_("Off"), _("Light, on the tablet"), _("Neural, on this PC")]),
-            selected=NOISE_LIST.index(s.microphone_noise) if s.microphone_noise in NOISE_LIST else 2,
-            subtitle=_("Neural takes out more of the room's noise, with about half a processor core")
-            if neural else _("Neural needs DeepFilterNet's plugin in ~/.ladspa: light until then"))
-        self.noise_row.connect("notify::selected", lambda row, _p: app.set_microphone_noise(
-            NOISE_LIST[row.get_selected()]))
-        group.add(self.noise_row)
-        page.add(group)
-
-        group = Adw.PreferencesGroup(title=_("General"))
-        background = Adw.SwitchRow(title=_("Ready in the background"), active=s.background,
-                                   subtitle=_("Starts at login and stays ready after you close this window"))
-        background.connect("notify::active", lambda row, _p: app.set_background(row.get_active()))
-        # Shown once the shell says the extension is installed (never in a Flatpak).
-        self.extension_row = Adw.SwitchRow(title=_("Quick Settings toggle"), visible=False,
-                                           subtitle=_("Adds a “Tablet” button to GNOME's Quick Settings"))
-        self._extension_handler = self.extension_row.connect(
-            "notify::active", lambda row, _p: set_shell_extension(row.get_active()))
-        shell_extension_state(self._show_extension_state)
-        group.add(background)
-        group.add(self.extension_row)
-        page.add(group)
-
-        # The rest, for when the defaults do not do.
-        group = Adw.PreferencesGroup()
-        advanced = Adw.ExpanderRow(title=_("Advanced"))
-        # Entry 0 is "Automatic"; the rest are the tablet's sizes through the
-        # app, or Second Screen's modes (MODE_LIST): _fill_modes().
-        self.mode_row = Adw.ComboRow(title=_("Resolution"), subtitle_lines=2)
-        # Its subtitle says how to get the pen's pressure.
-        self.touch_row = Adw.SwitchRow(title=_("Touch and S Pen"), active=s.touch, subtitle_selectable=True,
-                                       subtitle={
-            "set up": _("Without Plus One's pen helper (the .deb installs it) the S Pen works as a mouse, "
-                        "without pressure"),
-        }.get(pen.uhid_missing(), ""))
-        # Plus One's app shows the desktop when it answers; Second Screen otherwise.
-        self.via_row = Adw.ComboRow(title=_("Second screen through"), model=Gtk.StringList.new(
-            [_("Plus One's app, when it is there"), _("Samsung's Second Screen")]))
-        self.via_row.set_selected(0 if s.display_via == "auto" else 1)
-        self._fill_modes()
-        has_adb = shutil.which("adb") is not None
-        self.adb_row = Adw.SwitchRow(title=_("Open Second Screen from here"), active=s.use_adb and has_adb,
-                                     sensitive=has_adb,
-                                     subtitle=_("Uses adb: needs wireless debugging on the tablet")
-                                     if has_adb else _("adb is not available"))
-        for row in (self.via_row, self.mode_row, self.touch_row, self.adb_row):
-            advanced.add_row(row)
-        group.add(advanced)
-        page.add(group)
-
-        # Read when a connection starts: locked while one is up.
-        self.session_rows = [self.quality_row, self.via_row, self.mode_row, self.touch_row, self.adb_row]
-        self.via_row.connect("notify::selected", lambda *_a: self._fill_modes())
-        for row, signal in ((self.quality_row, "notify::selected"), (self.via_row, "notify::selected"),
-                            (self.mode_row, "notify::selected"),
-                            (self.touch_row, "notify::active"), (self.adb_row, "notify::active")):
-            row.connect(signal, self._apply)
-
-        self._refresh()
-        app.listeners.append(self._refresh)
-        self.connect("closed", lambda d: app.listeners.remove(self._refresh))
-
-    def _app_sizes(self):
-        """The tablet's sizes through the app, once it said its screen."""
-        from .appdisplay import sizes
-        screen = parse_size(self.settings.app_screen)
-        return sizes(screen) if screen else []
-
-    def _fill_modes(self):
-        """Resolution's choices for the way chosen: the tablet's sizes (at its
-        proportions) through the app, Second Screen's modes otherwise."""
-        from .appdisplay import scale_for
-        s = self.settings
-        via_app = self.via_row.get_selected() == 0
-        if via_app:
-            choices = self._app_sizes()
-            labels = [_("Automatic")]
-            for w, h in choices:
-                labels.append(f"{w} × {h}" if scale_for((w, h)) == 1 else
-                              _("{width} × {height}, sharp: as {half}").format(
-                                  width=w, height=h, half=f"{w // 2} × {h // 2}"))
-            current = parse_size(s.app_size)
-            selected = 1 + choices.index(current) if current in choices else 0
-            subtitle = (_("Above 1920 × 1200 the picture comes a little later")
-                        if choices else _("The tablet's sizes appear after it showed the desktop once"))
-        else:
-            labels = [_("Automatic")] + [mode_label(m) for m in MODE_LIST]
-            current = (s.width, s.height, s.fps)
-            selected = 0 if s.auto_mode or current not in MODE_LIST else 1 + MODE_LIST.index(current)
-            subtitle = ""
-        self._filling = True
-        self.mode_row.set_model(Gtk.StringList.new(labels))
-        self.mode_row.set_selected(selected)
-        self.mode_row.set_subtitle(subtitle)
-        self._filling = False
-
-    def _refresh(self):
-        in_session = self.app.controller.state in (State.CONNECTING, State.STREAMING)
-        for row in self.session_rows:
-            row.set_sensitive(not in_session and (row is not self.adb_row or shutil.which("adb") is not None))
-
-    def _apply(self, *_args):
-        if getattr(self, "_filling", False):
-            return  # the choices being replaced, not chosen
-        s = self.settings
-        selected = self.mode_row.get_selected()
-        if self.via_row.get_selected() == 0:
-            choices = self._app_sizes()
-            s.app_size = "auto" if selected == 0 or selected > len(choices) else "%dx%d" % choices[selected - 1]
-        else:
-            s.auto_mode = selected == 0
-            if not s.auto_mode:
-                s.width, s.height, s.fps = MODE_LIST[selected - 1]
-        s.bitrate = QUALITY_BITRATES[self.quality_row.get_selected()][1]
-        s.touch = self.touch_row.get_active()
-        s.use_adb = self.adb_row.get_active()
-        s.display_via = "auto" if self.via_row.get_selected() == 0 else "second-screen"
-        self.app.save_settings()
-
-    def _camera_options(self, *_args):
-        self.app.set_camera_options(FACING_LIST[self.facing_row.get_selected()],
-                                    QUALITY_LIST[self.quality_row_camera.get_selected()])
-
-    def _show_extension_state(self, enabled):
-        if enabled is None:
-            return  # not installed, or not GNOME Shell
-        with self.extension_row.handler_block(self._extension_handler):
-            self.extension_row.set_active(enabled)
-        self.extension_row.set_visible(True)
 
 
 class LogDialog(Adw.Dialog):
