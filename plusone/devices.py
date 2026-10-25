@@ -36,6 +36,10 @@ LEVEL_EVERY = 20_000_000        # ns: how often the microphone's level is measur
 # ns of sound that may wait before the oldest goes: what waits stays, as delay,
 # once the sound comes as fast as it is played (160 ms measured 235 end to end).
 MIC_BEHIND = 60_000_000
+# ns held back once at the start, then passed on as it comes (not by the clock,
+# which is not PipeWire's here): PipeWire reads 21.3 ms at a time, the tablet
+# sends 20, and without something waiting it found nothing every 320 ms.
+MIC_CUSHION = 30_000_000
 # Software first: little work at these sizes, and decodebin's pick (NVIDIA's,
 # here) held the whole pipeline still until the tablet's first frame.
 H264_DECODERS = ("avdec_h264", "openh264dec", "vah264dec")
@@ -370,7 +374,11 @@ class Camera(Device):
         return self.rtc.Receiver("video", self._on_pad)
 
     def _on_pad(self, pipeline, pad):
-        chain = self.rtc.link(pipeline, pad, f"rtph264depay ! h264parse ! {self.decoder} ! videoconvert "
+        # Nothing before a key frame, a new one asked for (PLI) after a loss,
+        # and no frame the decoder knows to be broken.
+        decoder = f"{self.decoder} output-corrupt=false" if self.decoder == "avdec_h264" else self.decoder
+        chain = self.rtc.link(pipeline, pad, f"rtph264depay wait-for-keyframe=true request-keyframe=true "
+                                             f"! h264parse ! {decoder} ! videoconvert "
                                         f"! videoscale add-borders=true ! videorate ! {self.raw} "
                                         f"! appsink name=decoded emit-signals=true sync=false max-buffers=2 drop=true")
         chain.get_by_name("decoded").connect("new-sample", self._decoded_frame)
@@ -495,8 +503,8 @@ class Microphone(Device):
                          f"! audio/x-raw,format=S16LE,rate=48000,channels=1 "
                          f"! level name=meter interval={LEVEL_EVERY} post-messages=true ! volume name=gain "
                          f"! queue max-size-time={MIC_BEHIND} max-size-buffers=0 max-size-bytes=0 leaky=downstream "
-                         f"! pipewiresink stream-properties=\"props,node.name={MIC_FEED},node.autoconnect=false,"
-                         f"media.type=Audio\"")
+                         f"! pipewiresink sync=false stream-properties=\"props,node.name={MIC_FEED},"
+                         f"node.autoconnect=false,media.type=Audio\"")
         self.gain = chain.get_by_name("gain")
         # Its ports show once sound flows: waited for on another thread.
         threading.Thread(target=lambda: link_feed() or log("microphone: could not link Plus One's stream "

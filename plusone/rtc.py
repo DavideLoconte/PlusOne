@@ -14,10 +14,14 @@ gi.require_version("GstSdp", "1.0")
 gi.require_version("GstWebRTC", "1.0")
 from gi.repository import Gst, GstSdp, GstWebRTC  # noqa: E402
 
+from . import log  # noqa: E402
+
 TWCC = "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01"
 CAPS = {
+    # opus/48000/2 whatever the channels (RFC 7587): libwebrtc rejects the
+    # medium otherwise, and gathers no candidates for it.
     "audio": ("application/x-rtp,media=audio,encoding-name=OPUS,payload=111,clock-rate=48000,"
-              f"rtcp-fb-transport-cc=(boolean)true,extmap-3=(string){TWCC}"),
+              f"encoding-params=(string)2,rtcp-fb-transport-cc=(boolean)true,extmap-3=(string){TWCC}"),
     # H.264, which the tablet encodes in hardware; no orientation extension,
     # so libwebrtc turns the frames upright itself.
     "video": ("application/x-rtp,media=video,encoding-name=H264,payload=102,clock-rate=90000,"
@@ -26,7 +30,9 @@ CAPS = {
               f"rtcp-fb-transport-cc=(boolean)true,extmap-3=(string){TWCC}"),
 }
 SSRC = {"audio": 0x504C5341, "video": 0x504C5356}  # "PLSA", "PLSV"
-JITTER = 50     # ms webrtcbin's jitter buffer holds (WebRTC's NetEq targets about 60)
+# ms webrtcbin's jitter buffer holds: sound as WebRTC's NetEq aims for; a
+# video key frame takes longer over Wi-Fi, and what comes after this is dropped.
+JITTER = {"audio": 60, "video": 150}
 GATHER = 3.0    # seconds for ICE's candidates, at most: host ones come at once
 BUNDLE_MAX = 3  # GstWebRTCBundlePolicy max-bundle
 
@@ -41,9 +47,12 @@ class Receiver:
         self.pipeline = Gst.Pipeline.new(f"plusone-{kind}")
         self.webrtc = Gst.ElementFactory.make("webrtcbin", "webrtc")
         self.webrtc.set_property("bundle-policy", BUNDLE_MAX)
-        self.webrtc.set_property("latency", JITTER)
+        self.webrtc.set_property("latency", JITTER[kind])
         self.pipeline.add(self.webrtc)
         self.webrtc.connect("pad-added", lambda _webrtc, pad: on_pad(self.pipeline, pad))
+        for state in ("connection-state", "ice-connection-state"):
+            self.webrtc.connect(f"notify::{state}", lambda w, spec: log(
+                f"{kind}: WebRTC {spec.name}", w.get_property(spec.name).value_nick))
         # An SSRC, or webrtcbin makes no offer (1.24); this side's, for its RTCP.
         transceiver = self.webrtc.emit("add-transceiver", GstWebRTC.WebRTCRTPTransceiverDirection.RECVONLY,
                                        Gst.Caps.from_string(f"{CAPS[kind]},ssrc=(uint){SSRC[kind]}"))

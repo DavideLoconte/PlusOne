@@ -55,6 +55,7 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
             },
             object : PeerConnection.Observer {
                 override fun onIceGatheringChange(state: PeerConnection.IceGatheringState) {
+                    Log.i(TAG, "ICE gathering: $state")
                     if (state == PeerConnection.IceGatheringState.COMPLETE) gathered.complete(Unit)
                 }
                 override fun onConnectionChange(state: PeerConnection.PeerConnectionState) {
@@ -63,7 +64,9 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
                 override fun onSignalingChange(state: PeerConnection.SignalingState) {}
                 override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {}
                 override fun onIceConnectionReceivingChange(receiving: Boolean) {}
-                override fun onIceCandidate(candidate: IceCandidate) {}
+                override fun onIceCandidate(candidate: IceCandidate) {
+                    Log.i(TAG, "ICE candidate: ${candidate.sdp}")
+                }
                 override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {}
                 override fun onAddStream(stream: MediaStream) {}
                 override fun onRemoveStream(stream: MediaStream) {}
@@ -82,6 +85,7 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
             }
         }
         await { connection.setRemoteDescription(it, SessionDescription(SessionDescription.Type.OFFER, offer)) }
+        Log.i(TAG, "${request.optString("type")}: the PC's offer taken")
         val answer = CompletableFuture<SessionDescription>()
         connection.createAnswer(object : Done() {
             override fun onCreateSuccess(description: SessionDescription) { answer.complete(description) }
@@ -89,8 +93,16 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
         }, MediaConstraints())
         val local = answer.get(WAIT, TimeUnit.MILLISECONDS)
         await { connection.setLocalDescription(it, local) }
-        gathered.get(WAIT, TimeUnit.MILLISECONDS)
-        return connection.localDescription.description
+        // The candidates in the answer: all of them, or those found by then
+        // (the host ones come at once; some interface may never say it is done).
+        try {
+            gathered.get(GATHER, TimeUnit.MILLISECONDS)
+        } catch (e: java.util.concurrent.TimeoutException) {
+            Log.i(TAG, "ICE still gathering: answering with what it has")
+        }
+        val description = connection.localDescription.description
+        Log.i(TAG, "${request.optString("type")}: answer with ${description.lines().count { it.startsWith("a=candidate") }} candidates")
+        return description
     }
 
     private fun cameraTrack(factory: PeerConnectionFactory): MediaStreamTrack {
@@ -155,7 +167,8 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
 
     companion object {
         const val TAG = "PlusOne"
-        const val WAIT = 5_000L  // ms for each step of the answer
+        const val WAIT = 5_000L    // ms for each step of the answer
+        const val GATHER = 5_000L  // ms for ICE's candidates, at most
     }
 }
 

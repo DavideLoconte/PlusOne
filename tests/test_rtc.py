@@ -9,7 +9,7 @@ if rtc is None:
                 allow_module_level=True)
 
 
-@pytest.mark.parametrize("kind, codec", [("audio", "OPUS/48000"), ("video", "H264/90000")])
+@pytest.mark.parametrize("kind, codec", [("audio", "OPUS/48000/2"), ("video", "H264/90000")])
 def test_an_offer_to_receive(kind, codec):
     receiver = rtc.Receiver(kind, lambda pipeline, pad: None)
     try:
