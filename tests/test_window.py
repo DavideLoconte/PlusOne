@@ -83,11 +83,11 @@ def test_without_a_tablet_the_window_offers_pairing(monkeypatch, tmp_path):
 def test_the_tablet_in_use(monkeypatch, tmp_path):
     win, app = make(monkeypatch, tmp_path, [(OFFICE, "Office"), (KITCHEN, "Kitchen")])
     assert win.stack.get_visible_child_name() == "tablet"
-    assert win.name_label.get_label() == "Kitchen" and win.status_label.get_label() == "Not on your network now"
+    assert win.name_label.get_label() == "Kitchen" and win.status_label.get_label() == "Not found: open Plus One on the tablet"
     assert win.screen_button.get_label() == "Use as second screen"
     app.nearby.found = [(KITCHEN[:16], "10.0.0.2", 47236, "Kitchen")]
     win._refresh()
-    assert win.status_label.get_label() == "On your network"
+    assert win.status_label.get_label() == "Ready"
     # Its name opens the choice: the paired tablets, then pairing another.
     choices = win.name_button.get_menu_model().get_item_link(0, "section")
     assert [choices.get_item_attribute_value(i, "label").get_string()

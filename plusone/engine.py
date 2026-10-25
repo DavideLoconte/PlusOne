@@ -104,6 +104,7 @@ class Controller:
         # verified for seconds after it) starts no session afterwards.
         self._generation = 0
         self._lan = set()  # start(): local_addresses()
+        self._reconnecting = False  # waiting for the tablet again after it closed Second Screen
         self._lock = threading.Lock()  # _running, _generation, the session's start
         # No session (or its teardown done): the next connection may start one.
         self._idle = threading.Event()
@@ -151,6 +152,7 @@ class Controller:
             return
         # This PC's addresses but Wi-Fi Direct's: a connection to them is the LAN's.
         self._lan = local_addresses()
+        self._reconnecting = False  # the user asked for this connection
         with self._lock:
             self._running = True
             self._generation += 1
@@ -212,6 +214,11 @@ class Controller:
         self._set_state(State.ERROR, template, **args)
 
     def _on_give_up(self):
+        if self._reconnecting:
+            # The user closed Second Screen on the tablet: the wait for it to
+            # be opened again ends quietly, not with a "did not answer".
+            self.stop()
+            return
         self.stop("The tablet did not answer: open Second Screen on it and connect again")
 
     def _on_found(self, name):
@@ -394,6 +401,7 @@ class Controller:
             # Reopening Second Screen soon reconnects. Give the tablet a moment
             # to tear its group down before searching again.
             self._set_state(State.WAITING, "Tap “Second screen” on the tablet")
+            self._reconnecting = True
             GLib.timeout_add_seconds(3, once(self._wait_for_tablet, RECONNECT_WINDOW))
         elif self._running:
             self.stop()

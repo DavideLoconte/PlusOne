@@ -230,7 +230,9 @@ class PlusOneApp(Adw.Application):
         self._registration = None
         for name, callback in (("connect", lambda *a: self.controller.start()),
                                ("disconnect", lambda *a: self.controller.stop()),
-                               ("show", lambda *a: self.activate())):
+                               ("show", lambda *a: self.activate()),
+                               ("pair", lambda *a: self._show_and_pair()),
+                               ("quit", lambda *a: self.quit())):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", callback)
             self.add_action(action)
@@ -241,6 +243,10 @@ class PlusOneApp(Adw.Application):
     def do_startup(self):
         Adw.Application.do_startup(self)
         Gst.init(None)
+        # GNOME's usual keys: preferences, close the window, quit (in the background too).
+        for action, keys in (("win.preferences", ["<Control>comma"]), ("window.close", ["<Control>w"]),
+                             ("app.quit", ["<Control>q"])):
+            self.set_accels_for_action(action, keys)
         if self.settings.background:
             set_autostart(True)
         set_sign_entry(self.settings.sign_on_tablet)
@@ -255,9 +261,16 @@ class PlusOneApp(Adw.Application):
         Adw.Application.do_shutdown(self)
 
     def do_activate(self):
+        self._window().present()
+
+    def _window(self):
         from .gui import Window
-        window = next((w for w in self.get_windows() if isinstance(w, Window)), None) or Window(self)
+        return next((w for w in self.get_windows() if isinstance(w, Window)), None) or Window(self)
+
+    def _show_and_pair(self):
+        window = self._window()
         window.present()
+        window.pair()
 
     def do_command_line(self, cmdline):
         args = cmdline.get_arguments()[1:]
@@ -360,9 +373,13 @@ class PlusOneApp(Adw.Application):
             note.set_body(detail)
             note.add_button(_("Disconnect"), "app.disconnect")
         elif state == State.ERROR or (state == State.IDLE and template):
-            note = Gio.Notification.new(title)
+            # A title that says what happened (not "Ready"), and the one button that helps.
+            note = Gio.Notification.new(title if state == State.ERROR else _("The tablet did not connect"))
             note.set_body(detail)
-            note.add_button(_("Connect"), "app.connect")
+            if template == "Pair a tablet first":
+                note.add_button(_("Pair a tablet"), "app.pair")
+            else:
+                note.add_button(_("Try again"), "app.connect")
         elif template == NOT_ANSWERING:
             # Nothing else would tell: the window may well be closed.
             note = Gio.Notification.new(title)

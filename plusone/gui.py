@@ -129,10 +129,15 @@ class Window(Adw.ApplicationWindow):
 
         self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
         empty = Adw.StatusPage(icon_name=TABLET_ICON, title=_("No tablet"),
-                               description=_("Pair your tablet to use it as a second screen and to sign PDFs on it."))
+                               description=_("Install Plus One on the tablet too, then pair it to use it as a second "
+                                             "screen, to sign PDFs and as a webcam."))
         pair = _pill(_("Pair a tablet"), "suggested-action")
         pair.connect("clicked", lambda b: self.pair())
-        empty.set_child(pair)
+        get = Gtk.LinkButton(uri=WEBSITE + "/releases/latest", label=_("Get the tablet app"))
+        first = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, halign=Gtk.Align.CENTER)
+        first.append(pair)
+        first.append(get)
+        empty.set_child(first)
         self.stack.add_named(empty, "empty")
         self.stack.add_named(self._tablet_page(), "tablet")
         self.toasts = Adw.ToastOverlay(child=self.stack)
@@ -151,7 +156,12 @@ class Window(Adw.ApplicationWindow):
                                           always_show_arrow=True, tooltip_text=_("Choose the tablet"))
         box.append(self.name_button)
         self.status_label = Gtk.Label(wrap=True, justify=Gtk.Justification.CENTER, css_classes=["dim-label"])
-        box.append(self.status_label)
+        # Something happens while it turns: looking for the tablet, connecting.
+        self.spinner = Gtk.Spinner(spinning=True, visible=False)
+        status = Gtk.Box(spacing=8, halign=Gtk.Align.CENTER)
+        status.append(self.spinner)
+        status.append(self.status_label)
+        box.append(status)
         buttons = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=24, halign=Gtk.Align.CENTER)
         # The same width for both, whatever the labels say.
         self.screen_button = _pill("", width=260)
@@ -188,19 +198,21 @@ class Window(Adw.ApplicationWindow):
         text = self._status(tablet)
         self.status_label.set_label(text)
         self.status_label.set_css_classes(["error"] if state == State.ERROR else ["dim-label"])
+        self.spinner.set_visible(state in (State.WAITING, State.CONNECTING))
         if not self.controller.running:
             self.screen_button.set_label(_("Use as second screen"))
             self.screen_button.set_css_classes(["pill", "suggested-action"])
         else:
-            self.screen_button.set_label(_("Disconnect") if state == State.STREAMING else _("Stop"))
-            self.screen_button.set_css_classes(["pill", "destructive-action"])
+            # Nothing is lost either way: no red.
+            self.screen_button.set_label(_("Disconnect") if state == State.STREAMING else _("Cancel"))
+            self.screen_button.set_css_classes(["pill"])
 
     def _status(self, tablet):
         title, detail = self.app.status_text()
         state = self.controller.state
         if state == State.IDLE and not self.controller.detail[0]:
             # Nothing happening: where the tablet is.
-            return _("On your network") if self.app.tablets.addresses(tablet) else _("Not on your network now")
+            return _("Ready") if self.app.tablets.addresses(tablet) else _("Not found: open Plus One on the tablet")
         mode = getattr(self.controller, "mode", None)
         if state == State.STREAMING and mode:
             # Its name is right above.
@@ -289,6 +301,9 @@ class PairDialog(Adw.Dialog):
         self.rows = []
         self.searching = Adw.ActionRow(title=_("Looking for tablets…"))
         self.searching.add_prefix(Gtk.Spinner(spinning=True))
+        # Nothing after a while: what to do, not a spinner forever.
+        GLib.timeout_add_seconds(10, once(lambda: self.closed or self.searching.set_title(
+            _("No tablet found yet. Open Plus One on the tablet, on the same Wi-Fi as this PC."))))
         self.nav.add(self._page(page, _("Pair a tablet")))
         self._listing = None
         self._list()

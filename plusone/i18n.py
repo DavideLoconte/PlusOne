@@ -215,6 +215,13 @@ _IT = {
         "Non abbinato: il codice non è stato confermato su entrambi gli schermi",
     "{name} did not answer": "{name} non ha risposto",
     "Try again": "Riprova",
+    "Install Plus One on the tablet too, then pair it to use it as a second screen, to sign PDFs and as a webcam.":
+        "Installa Plus One anche sul tablet, poi abbinalo per usarlo come secondo schermo, per firmare i PDF "
+        "e come webcam.",
+    "Get the tablet app": "Scarica l'app per il tablet",
+    "Not found: open Plus One on the tablet": "Non trovato: apri Plus One sul tablet",
+    "No tablet found yet. Open Plus One on the tablet, on the same Wi-Fi as this PC.":
+        "Ancora nessun tablet. Apri Plus One sul tablet, sulla stessa Wi-Fi di questo PC.",
     "The one in use gets the desktop and the PDFs. Forget one you no longer use.":
         "Quello in uso riceve lo schermo e i PDF. Dimentica quelli che non usi più.",
     "No tablet paired": "Nessun tablet abbinato",
