@@ -38,18 +38,18 @@ BUNDLE_MAX = 3  # GstWebRTCBundlePolicy max-bundle
 
 
 class Receiver:
-    """One device's webrtcbin, receiving: on_pad(pipeline, pad) links what
+    """One device's webrtcbin, receiving: on_pad(receiver, pad) links what
     it decodes once the media come."""
 
     def __init__(self, kind, on_pad):
         self.kind = kind
-        self.watched = False
+        self.broken = None
         self.pipeline = Gst.Pipeline.new(f"plusone-{kind}")
         self.webrtc = Gst.ElementFactory.make("webrtcbin", "webrtc")
         self.webrtc.set_property("bundle-policy", BUNDLE_MAX)
         self.webrtc.set_property("latency", JITTER[kind])
         self.pipeline.add(self.webrtc)
-        self.webrtc.connect("pad-added", lambda _webrtc, pad: on_pad(self.pipeline, pad))
+        self.webrtc.connect("pad-added", lambda _webrtc, pad: on_pad(self, pad))
         for state in ("connection-state", "ice-connection-state"):
             self.webrtc.connect(f"notify::{state}", lambda w, spec: log(
                 f"{kind}: WebRTC {spec.name}", w.get_property(spec.name).value_nick))
@@ -92,14 +92,6 @@ class Receiver:
         if self.webrtc.get_property("remote-description") is None:
             raise ValueError("webrtcbin did not take the app's answer")
 
-    def watch_bus(self):
-        """The pipeline's bus, its messages on the main loop until close()."""
-        bus = self.pipeline.get_bus()
-        if not self.watched:
-            bus.add_signal_watch()
-            self.watched = True
-        return bus
-
     def losses(self):
         """(packets received, lost, retransmissions asked for, key frames asked
         for) so far, from webrtcbin's statistics."""
@@ -120,15 +112,27 @@ class Receiver:
             reply.foreach(each)
         return received, lost, nacks, plis
 
+    def fail(self, reason):
+        """What links the media found it could not: the session is over."""
+        self.broken = self.broken or reason
+
     def failed(self):
-        """Whether the connection to the tablet failed or was lost."""
-        return self.webrtc.get_property("connection-state") in (
-            GstWebRTC.WebRTCPeerConnectionState.FAILED, GstWebRTC.WebRTCPeerConnectionState.CLOSED)
+        """Why the session is over, or None: the connection to the tablet
+        failed or was lost, or what plays the media broke (its error, from
+        the bus, which is read here: else its messages pile up)."""
+        bus = self.pipeline.get_bus()
+        while (message := bus.pop()) is not None:
+            if message.type == Gst.MessageType.ERROR and not self.broken:
+                error, _debug = message.parse_error()
+                self.broken = f"{message.src.get_name()}: {error.message}"
+        if self.broken:
+            return self.broken
+        state = self.webrtc.get_property("connection-state")
+        if state in (GstWebRTC.WebRTCPeerConnectionState.FAILED, GstWebRTC.WebRTCPeerConnectionState.CLOSED):
+            return f"WebRTC {state.value_nick}"
+        return None
 
     def close(self):
-        if self.watched:
-            self.pipeline.get_bus().remove_signal_watch()
-            self.watched = False
         self.pipeline.set_state(Gst.State.NULL)
 
 

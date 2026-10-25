@@ -151,7 +151,9 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
         if (!camera) Rtc.recording?.let { Rtc.recording = null; it.close() }
         try { capturer?.stopCapture() } catch (e: InterruptedException) {}
         capturer?.dispose()
-        pc?.dispose()  // its senders and tracks with it
+        pc?.dispose()  // its senders, and their own references to the tracks
+        tracks.forEach { it.dispose() }
+        tracks = emptyList()
         videoSource?.dispose()
         audioSource?.dispose()
         helper?.dispose()
@@ -181,6 +183,10 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
         const val WAIT = 5_000L    // ms for each step of the answer
         const val HIGH = 3         // webrtc::Priority::kHigh
         const val GATHER = 5_000L  // ms for ICE's candidates, at most
+        // ms without a word from the PC (it pings every 5 s, devices.py:
+        // KEEPALIVE) before the capture ends: a PC gone without closing the
+        // connection (asleep, off the network) does not keep the microphone on.
+        const val SILENT_PC = 15_000
     }
 }
 

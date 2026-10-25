@@ -7,6 +7,7 @@ it when the program does.
 """
 import ctypes
 import glob
+import itertools
 import os
 import shutil
 import struct
@@ -30,7 +31,8 @@ REFUSED_RETRY = 10  # seconds, after the app said no (the user may change their 
 IN_USE_AFTER = 0.2  # seconds a program holds the device before the tablet is asked
 IDLE_AFTER = 3      # seconds without one before the tablet stops
 SILENT_FOR = 5      # seconds of a session without a packet before it is made again
-MIC_FEED = "plusone-mic-feed"  # the stream Plus One feeds the microphone with
+KEEPALIVE = 5       # seconds between the PC's pings while it holds a session (Rtc.kt: SILENT_PC)
+MIC_FEED = "plusone-mic-feed"  # the streams Plus One feeds the microphone with: MIC_FEED-<n>
 # ns of sound that may wait before the oldest goes: what waits stays, as delay,
 # once the sound comes as fast as it is played (160 ms measured 235 end to end).
 MIC_BEHIND = 60_000_000
@@ -102,6 +104,8 @@ class Feed:
             try:
                 sock, wire = companion.open_link(where[0], where[1])
                 self._sock = sock
+                if not self._wanted.is_set():
+                    continue  # stopped while it connected: stop() had no socket to close
                 receiver = self.receiver()
                 wire.send(dict(self.request, sdp=receiver.offer()))
                 reply = wire.receive()
@@ -113,11 +117,18 @@ class Feed:
                 log(f"{kind}: from the tablet, over WebRTC")
                 self.on_ready()
                 # Held while wanted, the link up and the media flowing: the
-                # app hangs up by closing it, Plus One by closing it too.
-                said, heard, last = (0, 0, 0), 0, time.monotonic()
-                while self._wanted.is_set() and not receiver.failed():
+                # app hangs up by closing it, Plus One by closing it too. The
+                # pings tell the app this PC is still there (else it lets go).
+                said, heard, last, pinged = (0, 0, 0), 0, time.monotonic(), time.monotonic()
+                while self._wanted.is_set():
+                    problem = receiver.failed()
+                    if problem:
+                        raise ConnectionError(problem)
                     if wire.readable(1.0):
                         wire.receive()
+                    if time.monotonic() - pinged > KEEPALIVE:
+                        wire.send({"type": "ping"})
+                        pinged = time.monotonic()
                     received, *losses = receiver.losses()
                     if received > heard:
                         heard, last = received, time.monotonic()
@@ -377,11 +388,11 @@ class Camera(Device):
         """The tablet's video, decoded and made the device's size, into the producer."""
         return self.rtc.Receiver("video", self._on_pad)
 
-    def _on_pad(self, pipeline, pad):
+    def _on_pad(self, receiver, pad):
         # Nothing before a key frame, a new one asked for (PLI) after a loss,
         # and no frame the decoder knows to be broken.
         decoder = f"{self.decoder} output-corrupt=false" if self.decoder == "avdec_h264" else self.decoder
-        chain = self.rtc.link(pipeline, pad, f"rtph264depay wait-for-keyframe=true request-keyframe=true "
+        chain = self.rtc.link(receiver.pipeline, pad, f"rtph264depay wait-for-keyframe=true request-keyframe=true "
                                              f"! h264parse ! {decoder} ! videoconvert "
                                         f"! videoscale add-borders=true ! videorate ! {self.raw} "
                                         f"! appsink name=decoded emit-signals=true sync=false max-buffers=2 drop=true")
@@ -420,6 +431,7 @@ class Microphone(Device):
         self.module = None
         self.links = set()
         self.watch = None
+        self._streams = itertools.count(1)
 
     def enable(self, description="Tablet microphone (Plus One)"):
         if self.module:
@@ -475,8 +487,16 @@ class Microphone(Device):
             line, _length = stream.read_line_finish_utf8(result)
         except GLib.Error:
             line = None
-        if line is None or watch is not self.watch:
-            return  # pw-link ended, or the microphone was switched off
+        if watch is not self.watch:
+            return  # the microphone was switched off
+        if line is None:
+            # pw-link ended by itself: PipeWire was restarted, and the source
+            # went with it. Made again once PipeWire is back.
+            log("microphone: PipeWire went away")
+            self.module = None  # gone; its number may be another module's by now
+            self.disable()
+            GLib.timeout_add_seconds(RETRY, once(self._come_back))
+            return
         changed = self._parser(line)
         if changed:
             sign, link = changed
@@ -484,6 +504,11 @@ class Microphone(Device):
                 (self.links.add if sign in "=+" else self.links.discard)(link)
                 self._used(bool(self.links))
         stream.read_line_async(GLib.PRIORITY_DEFAULT, None, self._line, watch)
+
+    def _come_back(self):
+        self.app.devices.apply()
+        if self.state == "setup":
+            GLib.timeout_add_seconds(RETRY, once(self._come_back))  # PipeWire not back yet
 
     # -- the tablet's sound into the source ---------------------------------------
     def begin(self):
@@ -500,10 +525,13 @@ class Microphone(Device):
         still missing the decoder conceals."""
         return self.rtc.Receiver("audio", self._on_pad)
 
-    def _on_pad(self, pipeline, pad):
+    def _on_pad(self, receiver, pad):
+        # A name of its own: linked by name, and the last session's stream
+        # may still be there for a moment (or a second one of this session's).
+        name = f"{MIC_FEED}-{next(self._streams)}"
         # Decoded, and into the source as it is: the tablet's libwebrtc has
         # already set its level and taken the noise out.
-        self.rtc.link(pipeline, pad,
+        self.rtc.link(receiver.pipeline, pad,
                       f"rtpopusdepay ! opusdec plc=true ! audioconvert ! audioresample "
                       f"! audio/x-raw,format=S16LE,rate=48000,channels=1 "
                       f"! queue max-size-time={MIC_BEHIND} max-size-buffers=0 max-size-bytes=0 leaky=downstream "
@@ -511,24 +539,25 @@ class Microphone(Device):
                       # came after webrtcbin started). PipeWire is asked to read 10 ms at
                       # a time: each 20 ms packet lasts it two reads. At its usual 21.3 ms
                       # a packet was always 64 samples short, and the source went silent.
-                      f"! pipewiresink sync=false stream-properties=\"props,node.name={MIC_FEED},"
+                      f"! pipewiresink sync=false stream-properties=\"props,node.name={name},"
                       f"node.autoconnect=false,media.type=Audio,node.latency=480/48000\"")
-        # Its ports show once sound flows: waited for on another thread.
-        threading.Thread(target=lambda: link_feed() or log("microphone: could not link Plus One's stream "
-                                                             "into the source"), daemon=True).start()
+        # Its ports show once sound flows: waited for on another thread. Not
+        # linked, the program would hear nothing: the session is made again.
+        threading.Thread(target=lambda: link_feed(name) or receiver.fail("could not link Plus One's stream "
+                                                                         "into the source"), daemon=True).start()
 
     def _ready(self):
         GLib.idle_add(once(lambda: self.feed and self._set_state("in use")))
 
 
-def link_feed(wait=5):
-    """Links Plus One's stream into the microphone's source, once PipeWire shows
-    its ports: True if done."""
+def link_feed(name, wait=5):
+    """Links Plus One's stream (node name) into the microphone's source, once
+    PipeWire shows its ports: True if done."""
     deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
         outputs = subprocess.run(["pw-link", "--output"], capture_output=True, text=True).stdout.split()
         inputs = subprocess.run(["pw-link", "--input"], capture_output=True, text=True).stdout.split()
-        feed = [p for p in outputs if p.startswith(MIC_FEED + ":output")]
+        feed = [p for p in outputs if p.startswith(name + ":output")]
         source = [p for p in inputs if p.startswith(MIC_NAME + ":")]
         if feed and source:
             return subprocess.run(["pw-link", feed[0], source[0]], capture_output=True).returncode == 0

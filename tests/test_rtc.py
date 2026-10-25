@@ -11,7 +11,7 @@ if rtc is None:
 
 @pytest.mark.parametrize("kind, codec", [("audio", "OPUS/48000/2"), ("video", "H264/90000")])
 def test_an_offer_to_receive(kind, codec):
-    receiver = rtc.Receiver(kind, lambda pipeline, pad: None)
+    receiver = rtc.Receiver(kind, lambda receiver, pad: None)
     try:
         offer = receiver.offer()
     finally:
@@ -24,10 +24,24 @@ def test_an_offer_to_receive(kind, codec):
 
 
 def test_an_answer_that_is_not_sdp():
-    receiver = rtc.Receiver("audio", lambda pipeline, pad: None)
+    receiver = rtc.Receiver("audio", lambda receiver, pad: None)
     try:
         receiver.offer()
         with pytest.raises(ValueError):
             receiver.answer("not SDP at all")
+    finally:
+        receiver.close()
+
+
+def test_what_breaks_in_the_pipeline_ends_the_session():
+    from gi.repository import GLib, Gst
+    receiver = rtc.Receiver("audio", lambda receiver, pad: None)
+    try:
+        assert receiver.failed() is None
+        error = GLib.Error.new_literal(Gst.ResourceError.quark(), "no stream", Gst.ResourceError.FAILED)
+        receiver.pipeline.post_message(Gst.Message.new_error(receiver.webrtc, error, "debug"))
+        assert "no stream" in receiver.failed()
+        receiver.fail("could not link")  # the first reason stays
+        assert "no stream" in receiver.failed()
     finally:
         receiver.close()

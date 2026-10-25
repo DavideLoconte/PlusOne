@@ -126,7 +126,7 @@ class FakeSock:
 
 class FakeReceiver:
     def __init__(self):
-        self.answered, self.closed = None, False
+        self.answered, self.closed, self.broken = None, False, None
 
     def offer(self):
         return "v=0 offer"
@@ -135,7 +135,7 @@ class FakeReceiver:
         self.answered = sdp
 
     def failed(self):
-        return False
+        return self.broken
 
     def losses(self):
         self.received = getattr(self, "received", 0) + 50
@@ -161,6 +161,46 @@ def test_the_feed_offers_and_hangs_up(monkeypatch):
     feed.stop()
     feed._thread.join(5)
     assert receivers[0].closed and len(receivers) == 1
+
+
+def test_a_session_that_breaks_is_made_again_and_pings_meanwhile(monkeypatch):
+    monkeypatch.setattr(devices, "RETRY", 0.05)
+    monkeypatch.setattr(devices, "KEEPALIVE", 0.1)
+    wires = []
+
+    def open_link(targets, expect):
+        wires.append(FakeWire({"type": "answer", "sdp": "v=0 answer"}))
+        return FakeSock(wires[-1]), wires[-1]
+    monkeypatch.setattr(companion, "open_link", open_link)
+    receivers = []
+    feed = devices.Feed({"type": "microphone"}, lambda: ([("10.0.0.2", 47236)], "a1b2"),
+                        lambda: receivers.append(FakeReceiver()) or receivers[-1], lambda: None, lambda reason: None)
+    feed.start()
+    assert spin(lambda: {"type": "ping"} in (wires[0].sent if wires else []))
+    receivers[0].broken = "pipewiresink: no stream"
+    assert spin(lambda: len(receivers) == 2)
+    feed.stop()
+    feed._thread.join(5)
+    assert receivers[0].closed and receivers[1].closed
+
+
+def test_pipewire_going_away_makes_the_source_again(monkeypatch):
+    later = []
+    monkeypatch.setattr(devices.GLib, "timeout_add_seconds", lambda seconds, call: later.append(call))
+    app = FakeApp()
+    applied = []
+    app.devices = types.SimpleNamespace(apply=lambda: applied.append(1))
+    mic = devices.Microphone(app)
+    watch = types.SimpleNamespace(force_exit=lambda: None)
+    mic.module, mic.watch, mic.state = "536870913", watch, "ready"
+    unloaded = []
+    monkeypatch.setattr(devices.subprocess, "run", lambda *args, **kwargs: unloaded.append(args))
+    ended = types.SimpleNamespace(read_line_finish_utf8=lambda result: (None, 0))
+    mic._line(ended, None, watch)
+    # Not unloaded by its number: after PipeWire's restart it may be another module's.
+    assert mic.state == "off" and mic.module is None and unloaded == []
+    later.pop()()
+    assert applied == [1]
 
 
 def test_a_refusal_is_said_and_asked_again_later(monkeypatch):

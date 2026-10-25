@@ -268,7 +268,8 @@ class CompanionService : Service() {
             wire.send(JSONObject().put("type", "answer").put("sdp", answer))
             showCaptures()
             lowLatency(true)
-            socket.soTimeout = 0  // the PC holds it as long as its program uses the device
+            // The PC holds it as long as its program uses the device, and pings.
+            socket.soTimeout = RtcCapture.SILENT_PC
             while (wire.receive().optString("type") != "stop") continue
         } finally {
             capture.stop()
