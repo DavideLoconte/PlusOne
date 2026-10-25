@@ -54,6 +54,9 @@ jobs:
 
   apk:
     runs-on: ubuntu-24.04
+    # The signing key lives in this environment's secrets, which GitHub
+    # hands only to jobs run for a v* tag (its deployment rule).
+    environment: release
     env:
       # The release key (tools/android-docker.sh): base64 of the PKCS#12 file.
       ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
