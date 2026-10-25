@@ -31,6 +31,18 @@ RTSP_DEADLINE = 8
 MAX_FIND = 600  # seconds, NetworkManager's limit; a find ends after 30 s unless told
 GIVE_UP_RECHECK = 5  # seconds, while an attempt runs past the time to give up
 
+_client = None
+
+
+def nm_client():
+    """One NetworkManager client for the process (made on the main thread,
+    which the links use): one per Connect fetched all of NetworkManager's
+    objects again, on the main loop, and kept another copy in step."""
+    global _client
+    if _client is None:
+        _client = NM.Client.new(None)
+    return _client
+
 
 def _path(obj):
     """D-Bus object path of a libnm object. NM.Device.get_path() is something
@@ -101,7 +113,7 @@ class P2PLink:
         self._give_up_at = None
         self._polling = False
         self._reset = False  # the Wi-Fi device was recreated while we looked
-        self.client = NM.Client.new(None)
+        self.client = nm_client()
         self.device = next(d for d in self.client.get_devices() if isinstance(d, NM.DeviceWifiP2P))
         if isinstance(match, str):
             match = [match]
@@ -203,7 +215,15 @@ class P2PLink:
         # any time, and stop() ends the find.
         timeout = min(MAX_FIND, self.give_up_after or MAX_FIND)
         self.device.start_find(GLib.Variant("a{sv}", {"timeout": GLib.Variant("i", timeout)}),
-                               None, None, None)
+                               None, self._find_started, None)
+
+    def _find_started(self, device, result, data):
+        try:
+            device.start_find_finish(result)
+        except GLib.Error as e:
+            # The tablet is then never found: at least the log says why
+            # (Wi-Fi off, the device busy, NetworkManager refusing).
+            log("Wi-Fi Direct: could not look for the tablet:", e.message)
 
     def _search(self):
         """Look for the tablet (again)."""
