@@ -9,7 +9,8 @@ finish-args:
   - --share=ipc
   - --socket=wayland
   - --socket=fallback-x11
-  # /dev/uhid turns the S Pen into a real tablet; also the NVIDIA encoder devices.
+  # /dev/uhid turns the S Pen into a real tablet (--device=dri would do for
+  # the encoders, NVIDIA's included; uhid needs all).
   - --device=all
   - --filesystem=xdg-run/pipewire-0 # capture of the virtual monitor
   - --talk-name=org.gnome.Mutter.ScreenCast
@@ -120,8 +121,8 @@ modules:
       - pip3 install --no-index --no-deps --find-links="file://${PWD}" --prefix=${FLATPAK_DEST} pypdf
     sources:
       - type: file
-        url: https://files.pythonhosted.org/packages/3c/60/eccdd92dd4af3e4bea6d6a342f7588c618a15b9bec4b968af581e498bcc4/pypdf-4.3.1-py3-none-any.whl
-        sha256: 64b31da97eda0771ef22edb1bfecd5deee4b72c3d1736b7df2689805076d6418
+        url: https://files.pythonhosted.org/packages/18/42/a945f65cc61c739ec80f4112c4b78ed1791f25d33f45f19389c9c9e247e2/pypdf-6.20.0-py3-none-any.whl
+        sha256: f003fc2014814d264fe7dd3f9d435c158e23e1a85a2233f87a0a2d6d21c914ad
 
   - name: plus-one
     buildsystem: simple

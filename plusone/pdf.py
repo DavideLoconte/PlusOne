@@ -252,6 +252,14 @@ def _stamp(writer, page, form):
     page[NameObject("/Contents")] = ArrayObject([writer._add_object(before), *original, writer._add_object(after)])
 
 
+def _pypdf_before(version):
+    import pypdf
+    try:
+        return tuple(int(part) for part in pypdf.__version__.split(".")[:2]) < version
+    except ValueError:
+        return False
+
+
 def save_signed(src, marks_by_page, dst=None):
     """Write src with marks_by_page ({page index: [Stroke | Text]}) on top;
     marks for a page it does not have are left out. Returns the path
@@ -261,7 +269,7 @@ def save_signed(src, marks_by_page, dst=None):
 
     reader = PdfReader(src)
     writer = PdfWriter(clone_from=reader)
-    if "/Info" not in reader.trailer:
+    if "/Info" not in reader.trailer and _pypdf_before((4, 3)):
         # pypdf 4.0 pointed the trailer's /Info at another object (the page
         # tree) when the original had none: Ghostscript then saw no pages.
         writer._info = writer._add_object(DictionaryObject())

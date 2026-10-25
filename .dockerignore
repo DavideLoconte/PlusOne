@@ -5,3 +5,8 @@ dist
 .flatpak-builder
 flatpak-build
 flatpak-repo
+android/.gradle
+android/**/build
+*.p12
+*.jks
+*.keystore

@@ -10,3 +10,6 @@ android/.gradle/
 android/app/build/
 android/build/
 android/local.properties
+*.p12
+*.jks
+*.keystore

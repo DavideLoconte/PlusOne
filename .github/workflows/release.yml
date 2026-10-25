@@ -4,14 +4,18 @@ on:
   push:
     tags: ["v*"]
 
+# Read only, but for the job that publishes the release: the others run
+# the build (and the app's dependencies), and must not be able to push.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   deb:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
       - name: Tag matches the app version
         run: |
           version="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' plusone/__init__.py)"
@@ -23,7 +27,7 @@ jobs:
         run: |
           mkdir -p dist
           docker run --rm -v "$PWD/dist:/src/dist" plus-one-ci
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: deb
           path: dist/*.deb
@@ -31,17 +35,19 @@ jobs:
   flatpak:
     runs-on: ubuntu-24.04
     container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50@sha256:1de59efef01a946d9f28f1ec3458bf6f61dcee3507d7fecdd473f8134da4ec77
       options: --privileged
     steps:
-      - uses: actions/checkout@v4
-      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6.8
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3  # v6.8
         with:
           bundle: plus-one_${{ github.ref_name }}_x86_64.flatpak
           manifest-path: packaging/flatpak/io.github.gabrielesantangelo.PlusOne.yml
-          cache-key: flatpak-builder-${{ hashFiles('packaging/flatpak/*.yml') }}
+          cache: false  # a release is built from its sources alone
           upload-artifact: false
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: flatpak
           path: plus-one_*.flatpak
@@ -53,7 +59,9 @@ jobs:
       ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
       PLUSONE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
       - name: Companion app, signed (skipped without the key in the secrets)
         if: env.ANDROID_KEYSTORE != ''
         run: |
@@ -62,7 +70,7 @@ jobs:
           PLUSONE_KEYSTORE="$RUNNER_TEMP/keys/release.p12" tools/android-docker.sh assembleRelease
           mkdir -p dist
           cp android/app/build/outputs/apk/release/app-release.apk "dist/plus-one-companion_${GITHUB_REF_NAME}.apk"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         if: env.ANDROID_KEYSTORE != ''
         with:
           name: apk
@@ -71,9 +79,13 @@ jobs:
   publish:
     needs: [deb, flatpak, apk]
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           path: dist
           merge-multiple: true

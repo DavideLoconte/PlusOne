@@ -116,6 +116,13 @@ def launcher():
     return str(Path(__file__).resolve().parents[1] / "bin" / "plus-one")
 
 
+def exec_arg(command):
+    """command as one argument of a desktop entry's Exec line: quoted, as
+    the Desktop Entry spec wants a path with spaces (or a %) to be."""
+    escaped = "".join("\\" + c if c in '"`$\\' else c for c in command).replace("%", "%%")
+    return f'"{escaped}"'
+
+
 def set_autostart(enabled, config_dir=None):
     """Start in the background at login: an XDG autostart entry, or the
     Background portal inside a Flatpak (which cannot write ~/.config/autostart)."""
@@ -135,8 +142,9 @@ def set_autostart(enabled, config_dir=None):
         path.unlink(missing_ok=True)
         return
     path.parent.mkdir(parents=True, exist_ok=True)
+    # TryExec: once Plus One is removed, the session stops trying to start it.
     path.write_text("[Desktop Entry]\nType=Application\nName=Plus One\n"
-                    f"Exec={launcher()} --gapplication-service\nIcon={APP_ID}\n"
+                    f"TryExec={launcher()}\nExec={exec_arg(launcher())} --gapplication-service\nIcon={APP_ID}\n"
                     "NoDisplay=true\nX-GNOME-Autostart-enabled=true\n")
 
 
@@ -158,7 +166,8 @@ def set_sign_entry(shown, data_dir=None):
     if not shown and ours == "absent":
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("[Desktop Entry]\nType=Application\nName=Sign on Tablet\n"
-                        f"Exec={launcher()} --sign %F\nHidden=true\n{HIDDEN_KEY}=created\n")
+                        f"TryExec={launcher()}\nExec={exec_arg(launcher())} --sign %F\nHidden=true\n"
+                        f"{HIDDEN_KEY}=created\n")
     elif not shown and ours is None:
         entry.set_boolean("Desktop Entry", "Hidden", True)
         entry.set_string("Desktop Entry", HIDDEN_KEY, "edited")

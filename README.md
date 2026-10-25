@@ -59,7 +59,10 @@ sudo apt install ./plus-one_0.4.0_all.deb
 The package pulls in GTK 4, libadwaita, GStreamer and NetworkManager bindings
 from your distribution. It also installs a udev rule that lets the logged-in
 user create virtual HID devices (`/dev/uhid`), which is how the S Pen becomes a
-tablet with pressure; any program you run gets the same ability.
+tablet with pressure. Plus One only ever creates the S Pen's own device, but
+the access is the user's: any program you run can create a virtual keyboard
+or mouse too, and type or click in your session (Wayland's isolation does not
+stop that). Without the rule the pen works as a mouse.
 
 The *Tablet* Quick Settings toggle (a GNOME Shell extension) is included but
 off: after logging out and back in, turn it on in Plus One's window
@@ -90,6 +93,10 @@ The GNOME runtime it needs comes from Flathub. Differences from the `.deb`:
               udevadm trigger --action=change --subsystem-match=misc --sysname-match=uhid'
   ```
 - No *Open Second Screen from here* (adb is not in the sandbox).
+- The sandbox is not much of a boundary: Plus One needs GNOME's screen
+  capture and remote input without asking (the virtual monitor and the
+  tablet's touches), the host's dconf (mapping the pen to the monitor) and
+  the devices (`/dev/uhid`).
 - The Quick Settings toggle is a GNOME Shell extension, which a Flatpak cannot
   install. Get `plus-one@gabrielesantangelo.github.io.shell-extension.zip` from
   the same release, then run

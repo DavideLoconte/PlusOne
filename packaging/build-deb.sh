@@ -54,7 +54,8 @@ install -m 644 "$top/README.md" "$root/usr/share/doc/$pkg/README.md"
     echo
     echo "  * Release $version."
     echo
-    echo " -- $maintainer  $(date -R)"
+    # The last commit's date, not the build's: the same sources make the same package.
+    echo " -- $maintainer  $(date -R -d "@${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct 2>/dev/null || date +%s)}")"
 } | gzip -9n > "$root/usr/share/doc/$pkg/changelog.gz"
 chmod 644 "$root/usr/share/doc/$pkg/"*
 

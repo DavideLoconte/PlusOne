@@ -11,8 +11,9 @@ docker build -q -t plus-one-android - < Dockerfile.android > /dev/null
 tasks="${*:-assembleDebug}"
 signing=""
 if [ -n "$PLUSONE_KEYSTORE" ]; then
-    keys="$(cd "$(dirname "$PLUSONE_KEYSTORE")" && pwd)"
-    signing="-v $keys:/keys:ro -e PLUSONE_KEYSTORE=/keys/$(basename "$PLUSONE_KEYSTORE")
+    # The key file alone, read only: not the folder it is in.
+    key="$(cd "$(dirname "$PLUSONE_KEYSTORE")" && pwd)/$(basename "$PLUSONE_KEYSTORE")"
+    signing="-v $key:/keys/release.p12:ro -e PLUSONE_KEYSTORE=/keys/release.p12
              -e PLUSONE_KEYSTORE_PASSWORD -e PLUSONE_KEY_ALIAS"
 fi
 # shellcheck disable=SC2086 # $signing is a list of options
