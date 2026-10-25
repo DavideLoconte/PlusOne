@@ -116,6 +116,13 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
     val marks = HashMap<Int, MutableList<Mark>>()
     private val history = ArrayDeque<Pair<Int, List<Mark>>>()
     val canUndo get() = history.isNotEmpty()
+
+    /** An undo step: page p's marks before a change. The oldest steps go, so a
+     * long session does not keep a copy of the page per stroke. */
+    private fun remember(step: Pair<Int, List<Mark>>) {
+        history.addLast(step)
+        while (history.size > UNDO_STEPS) history.removeFirst()
+    }
     val isEmpty get() = selection == null && marks.values.all { it.isEmpty() }
 
     // Marks picked to move, turn or scale (Selection.kt): they leave their
@@ -721,7 +728,7 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
 
     private fun addMarks(page: Int, new: List<Mark>) {
         val list = marks.getOrPut(page) { mutableListOf() }
-        history.addLast(page to list.toList())
+        remember(page to list.toList())
         list.addAll(new)
         scene = snapshot()
         onChange()
@@ -765,7 +772,7 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
 
     fun deleteSelection() {
         val s = selection ?: return
-        history.addLast(s.page to committed(s))
+        remember(s.page to committed(s))
         selection = null
         grab = null
         onSelection(false)
@@ -811,7 +818,7 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
         val py = toPageY(s.page, y)
         if (!grabStepped) {
             // One undo step per drag, taken when it actually moves something.
-            history.addLast(s.page to committed(s))
+            remember(s.page to committed(s))
             grabStepped = true
             onChange()
         }
@@ -883,7 +890,7 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
             }
             if (hit.isEmpty()) continue
             // The first removal on a page opens an undo step; the rest of the pass joins it.
-            if (erasedPages.add(p)) history.addLast(p to list.toList())
+            if (erasedPages.add(p)) remember(p to list.toList())
             list.removeAll(hit)
             onChange()
         }
@@ -910,7 +917,7 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
         deselect()
         val list = marks[index] ?: return
         if (list.isEmpty()) return
-        history.addLast(index to list.toList())
+        remember(index to list.toList())
         list.clear()
         changed()
         onChange()
@@ -1068,6 +1075,7 @@ class SignView(context: Context, private val pdf: Pdf, private val continuous: B
 
     companion object {
         const val ERASER_RADIUS = 24f      // pixels around the nib
+        const val UNDO_STEPS = 300
         const val PALM_WINDOW = 400L        // ms after the pen was seen during which touches are a palm
         const val DOUBLE_TAP_ZOOM = 2.5f
         const val TAP_SIZE = 10f            // dp: a lasso smaller than this is a tap on a mark

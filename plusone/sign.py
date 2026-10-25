@@ -50,6 +50,7 @@ MAX_PAGE_PIXELS = 16_000_000
 TILE = 512  # device pixels per side of a page texture tile
 OVERVIEW_PIXELS = 3_000_000
 PEN_SAVE_DELAY = 500  # ms after the last change of colour, thickness or stabilization
+UNDO_STEPS = 300
 # cairo's 32-bit pixels are native-endian words: B, G, R, A bytes here.
 LITTLE = sys.byteorder == "little"
 OPAQUE = Gdk.MemoryFormat.B8G8R8X8 if LITTLE else Gdk.MemoryFormat.X8R8G8B8
@@ -1029,7 +1030,9 @@ class SignWindow(Adw.ApplicationWindow):
         self.doc = doc
         self.index = 0
         self.marks = {}       # page index -> [Stroke | Text]
-        self.history = []     # (page index, its marks before a change), for undo
+        # (page index, its marks before a change), for undo; the oldest steps
+        # go, so a long session does not keep a copy of the page per stroke.
+        self.history = collections.deque(maxlen=UNDO_STEPS)
         self.pending = None   # marks waiting for a tap to be placed
         self.selection = None  # picking.Selection: marks picked off their page's list
         self.result = None
