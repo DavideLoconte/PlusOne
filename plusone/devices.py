@@ -39,13 +39,11 @@ MIC_FEED = "plusone-mic-feed"  # the streams Plus One feeds the microphone with:
 MIC_BEHIND = 60_000_000
 # The tablet's sound, louder: libwebrtc's gain control on Android is a fixed
 # +9 dB, and a tablet's microphone a meter away leaves the voice at -27 dBFS,
-# where calls want about -18. Raised by this much, then a compressor evens out
-# what is loud (4:1 over -10 dBFS, gently) and a limiter keeps it under -1 dBFS:
-# a voice chain as OBS's or Discord's, all GStreamer's own elements.
-MIC_GAIN = 2.8  # +9 dB
-MIC_LEVEL = ("volume volume={gain} "
-             "! audiodynamic mode=compressor characteristics=soft-knee threshold=0.3 ratio=0.35 "
-             "! audiodynamic mode=compressor characteristics=hard-knee threshold=0.89 ratio=0")
+# where calls want about -18. Only a gain for now, small enough that the
+# voice's peaks stay under full scale (audiodynamic, GStreamer's "compressor",
+# bends each sample over its threshold: it distorted the loud syllables).
+MIC_GAIN = 2.0  # +6 dB
+MIC_LEVEL = "volume volume={gain}"
 # Software first: little work at these sizes, and decodebin's pick (NVIDIA's,
 # here) held the whole pipeline still until the tablet's first frame.
 H264_DECODERS = ("avdec_h264", "openh264dec", "vah264dec")
