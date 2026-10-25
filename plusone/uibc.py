@@ -52,6 +52,8 @@ class UibcServer:
         self.sock.listen(1)
         self.down = set()
         self.conns = set()  # open sink connections, closed with the server
+        self.current = None  # the newest: the touches and the pen are its
+        self.dropped = 0  # pen reports without a pen
         threading.Thread(target=self._serve, daemon=True).start()
 
     def _serve(self):
@@ -65,7 +67,14 @@ class UibcServer:
                 conn.close()
                 continue
             log("UIBC: sink connected from", addr)
+            # One sink: a connection from before this one is over.
+            for old in list(self.conns):
+                try:
+                    old.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
             self.conns.add(conn)
+            self.current = conn
             threading.Thread(target=self._handle, args=(conn, addr), daemon=True).start()
 
     def _recv(self, conn, n):
@@ -85,11 +94,12 @@ class UibcServer:
         except Exception as e:  # noqa: BLE001 - report and keep the app alive
             log("UIBC: handler crashed:", repr(e))
         finally:
-            # Fingers still down would stay held in the desktop.
-            for slot in list(self.down):
-                self.injector.touch_up(slot)
-            self.down.clear()
-            self._close_pen()
+            if self.current is conn:  # else a newer connection's, left to it
+                # Fingers still down would stay held in the desktop.
+                for slot in list(self.down):
+                    self.injector.touch_up(slot)
+                self.down.clear()
+                self._close_pen()
             self.conns.discard(conn)
             conn.close()
 
@@ -150,6 +160,7 @@ class UibcServer:
             if self.pen_factory:
                 try:
                     self.pen = self.pen_factory()
+                    self.dropped = 0
                 except Exception as e:  # noqa: BLE001 - touch keeps working without the pen
                     log("pen unavailable:", repr(e))
         elif self.pen:
@@ -165,12 +176,16 @@ class UibcServer:
             pen_feed.publish(data)
             self.pen.report(data)
         else:
-            log("UIBC: pen report before any descriptor, dropped")
+            # About 285 a second: said once, and now and then, not each time.
+            if self.dropped % 2000 == 0:
+                log(f"UIBC: pen reports without a pen, dropped ({self.dropped + 1} so far)")
+            self.dropped += 1
 
     def _close_pen(self):
-        if self.pen:
-            self.pen.close()
-            self.pen = None
+        # From the UIBC thread and from close() (the main loop): one of them closes it.
+        pen, self.pen = self.pen, None
+        if pen:
+            pen.close()
 
     def close(self):
         self._close_pen()

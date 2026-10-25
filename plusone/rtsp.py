@@ -196,37 +196,59 @@ class WfdSession:
             self.pending[self.rtsp.request("GET_PARAMETER", "rtsp://localhost/wfd1.0",
                                            extra={"Session": self.session_id})] = "M16"
 
-    def _rtcp_sink(self):
+    def _rtcp_socket(self):
         # The sink sends RTCP receiver reports to server_port + 1; with no
         # socket there the PC answers port-unreachable and the sink tears down.
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(("0.0.0.0", self.rtcp_port))
-        sock.settimeout(1)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("0.0.0.0", self.rtcp_port))
+            sock.settimeout(1)
+        except OSError:
+            sock.close()
+            raise
+        return sock
+
+    def _rtcp_sink(self, sock):
         last_lost = 0
-        while not self.stop_event.is_set():
-            try:
-                pkt, sender = sock.recvfrom(2048)
-            except socket.timeout:
-                continue
-            if sender[0] != self.sink_ip:
-                continue  # only the tablet's reports count
-            if len(pkt) >= 32 and pkt[1] == 201:
-                lost = int.from_bytes(pkt[13:16], "big", signed=True)
-                if 0 <= last_lost < lost:
-                    log(f"RTCP: {lost - last_lost} packets lost")
-                last_lost = lost
-        sock.close()
+        with sock:
+            while not self.stop_event.is_set():
+                try:
+                    pkt, sender = sock.recvfrom(2048)
+                except socket.timeout:
+                    continue
+                except OSError as e:
+                    log("RTCP: no more reports:", e)
+                    return
+                if sender[0] != self.sink_ip:
+                    continue  # only the tablet's reports count
+                if len(pkt) >= 32 and pkt[1] == 201:
+                    lost = int.from_bytes(pkt[13:16], "big", signed=True)
+                    if 0 <= last_lost < lost:
+                        log(f"RTCP: {lost - last_lost} packets lost")
+                    last_lost = lost
 
     def run(self):
-        threading.Thread(target=self._rtcp_sink, daemon=True).start()
+        try:
+            rtcp = self._rtcp_socket()
+        except OSError as e:
+            # The tablet would end the session for it, without a word why.
+            log(f"session not started: RTCP port {self.rtcp_port} unavailable ({e})")
+            self.stop_event.set()
+            self.on_close()
+            self.conn.close()
+            return
+        threading.Thread(target=self._rtcp_sink, args=(rtcp,), daemon=True).start()
         rtsp = self.rtsp
         self.pending = {rtsp.request("OPTIONS", "*", extra={"Require": "org.wfa.wfd1.0"}): "M1"}
         m3_query = ("wfd_video_formats\r\nwfd_audio_codecs\r\nwfd_client_rtp_ports\r\n"
                     "wfd_uibc_capability\r\nwfd_display_edid\r\n")
-        state = {"m1": False, "m2": False}
+        state = {"m1": False, "m2": False, "m3": False}
 
         def send_m3():
+            if state["m3"]:
+                return  # once: a later OPTIONS from the sink does not start M3-M5 over
+            state["m3"] = True
             self.pending[rtsp.request("GET_PARAMETER", "rtsp://localhost/wfd1.0", m3_query)] = "M3"
 
         try:
@@ -296,6 +318,7 @@ class WfdSession:
         finally:
             self.stop_event.set()
             self.on_close()
+            self.conn.close()  # not left to the garbage collector (on_close holds the session)
 
     def stop(self):
         if not self.stop_event.is_set():

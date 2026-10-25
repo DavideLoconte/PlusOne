@@ -122,7 +122,8 @@ class Nearby:
         self._browsers = []
         self.services.clear()
         self.tablets.clear()
-        self.companions.clear()
+        # Replaced, not cleared: other threads iterate it (tablets.verify).
+        self.companions = {}
 
     # -- Avahi -----------------------------------------------------------------
     def _appeared(self, bus, name, owner):

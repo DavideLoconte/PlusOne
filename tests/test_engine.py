@@ -54,7 +54,7 @@ def group_member(monkeypatch, tablets):
     sessions it would serve."""
     import ipaddress
     controller = Controller(Settings(), tablets=tablets)
-    controller._running = True
+    controller._running, controller._generation = True, 1
     network = ipaddress.ip_network("192.168.49.0/24")
     controller.link = types.SimpleNamespace(network=lambda: network, connected=False, stop=lambda: None,
                                             owns=lambda a: ipaddress.ip_address(a) in network)
@@ -73,7 +73,7 @@ def test_only_the_wi_fi_direct_group_gets_the_desktop(monkeypatch):
     assert not controller._from_tablet("192.168.1.20")
     left, right = socket.socketpair()
     with left, right:
-        controller._serve(left, ("192.168.1.20", 5000))
+        controller._serve(left, ("192.168.1.20", 5000), 1)
         assert served == [] and controller.link.connected is False and controller._idle.is_set()
     assert controller.tablets.checked == []  # not even asked about
 
@@ -88,7 +88,7 @@ def test_only_the_tablet_in_use_gets_the_desktop(monkeypatch):
     controller.on_state = lambda state, template, args: states.append((state, template))
     left, right = socket.socketpair()
     with left, right:
-        controller._serve(left, ("192.168.49.7", 5000))
+        controller._serve(left, ("192.168.49.7", 5000), 1)
         assert served == [] and tablets.checked == ["192.168.49.7"]
     context = GLib.MainContext.default()
     while context.pending():
@@ -103,5 +103,40 @@ def test_the_tablet_in_use_is_served(monkeypatch):
     controller, served = group_member(monkeypatch, tablets)
     left, right = socket.socketpair()
     with left, right:
-        controller._serve(left, ("192.168.49.7", 5000))
+        controller._serve(left, ("192.168.49.7", 5000), 1)
     assert len(served) == 1 and tablets.checked == ["192.168.49.7"]
+
+
+def test_stopped_while_the_tablet_is_verified_starts_no_session(monkeypatch):
+    # Disconnect pressed during the seconds the tablet's check takes: no
+    # session, no touch server, and the next Connect is not blocked by it.
+    import socket
+    tablets = FakeTablets()
+    controller, served = group_member(monkeypatch, tablets)
+
+    def verify(address):
+        controller._running = False  # stop() meanwhile
+        controller._generation += 1
+        return None
+    tablets.verify = verify
+    left, right = socket.socketpair()
+    with left, right:
+        controller._serve(left, ("192.168.49.7", 5000), 1)
+    assert served == [] and controller.session is None and controller.uibc is None
+    assert controller._idle.is_set() and controller.link.connected is False
+
+
+def test_a_session_that_cannot_start_leaves_nothing_behind(monkeypatch):
+    import socket
+    controller, served = group_member(monkeypatch, FakeTablets())
+
+    def hung_up(*args, **kwargs):
+        raise OSError(107, "Transport endpoint is not connected")
+    monkeypatch.setattr(engine, "WfdSession", hung_up)
+    left, right = socket.socketpair()
+    with left, right:
+        try:
+            controller._serve(left, ("192.168.49.7", 5000), 1)
+        except OSError:
+            pass
+    assert controller._idle.is_set() and controller.link.connected is False and controller.session is None

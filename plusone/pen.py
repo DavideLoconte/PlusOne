@@ -124,9 +124,17 @@ class UhidPen:
         return struct.pack("<IH", UHID_INPUT2, len(data)) + data
 
     def __init__(self):
-        self.fd = os.open(UHID_PATH, os.O_RDWR | os.O_CLOEXEC | os.O_NONBLOCK)
+        fd = os.open(UHID_PATH, os.O_RDWR | os.O_CLOEXEC | os.O_NONBLOCK)
+        try:
+            os.write(fd, self.create_event(S_PEN))
+        except OSError:
+            os.close(fd)
+            raise
+        self.fd = fd
         self.closing = False
-        os.write(self.fd, self.create_event(S_PEN))
+        # report() (the UIBC thread) against the drain thread's close: a
+        # write must never reach a number another file has by then.
+        self._lock = threading.Lock()
         # The kernel queues start/open notifications; drain them so the queue
         # never fills up. The drain thread closes the fd, once told to: closed
         # here, its number could be another file's by the time it reads.
@@ -141,20 +149,25 @@ class UhidPen:
         except OSError:
             pass
         finally:
-            os.close(self.fd)
+            with self._lock:
+                self.closing = True
+                os.close(self.fd)
 
     def report(self, data):
-        if is_report(data) and not self.closing:
-            os.write(self.fd, self.input_event(data))
+        if is_report(data):
+            with self._lock:
+                if not self.closing:
+                    os.write(self.fd, self.input_event(data))
 
     def close(self):
-        if self.closing:
-            return
-        try:
-            os.write(self.fd, struct.pack("<I", UHID_DESTROY))
-        except OSError:
-            pass
-        self.closing = True
+        with self._lock:
+            if self.closing:
+                return
+            try:
+                os.write(self.fd, struct.pack("<I", UHID_DESTROY))
+            except OSError:
+                pass
+            self.closing = True
 
 
 class PointerPen:

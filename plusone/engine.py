@@ -100,6 +100,10 @@ class Controller:
         self.encoder = None
         self.mode = None  # (width, height, fps) of the current session
         self._running = False
+        # Each start() a new one: a connection accepted before stop() (and
+        # verified for seconds after it) starts no session afterwards.
+        self._generation = 0
+        self._lock = threading.Lock()  # _running, _generation, the session's start
         # No session (or its teardown done): the next connection may start one.
         self._idle = threading.Event()
         self._idle.set()
@@ -144,10 +148,12 @@ class Controller:
         except (OSError, RuntimeError, KeyError) as e:  # KeyError: an encoder not known
             self._set_state(State.ERROR, "{error}", error=str(e))
             return
-        self._running = True
+        with self._lock:
+            self._running = True
+            self._generation += 1
         if not s.test_pattern:
             self.monitor = VirtualMonitor(on_ready=self._start_stream)
-        threading.Thread(target=self._accept_loop, daemon=True).start()
+        threading.Thread(target=self._accept_loop, args=(self.srv, self._generation), daemon=True).start()
         if s.use_adb:
             self._set_state(State.WAITING, "Opening Second Screen on the tablet…")
             threading.Thread(target=self._adb_open, daemon=True).start()
@@ -158,7 +164,9 @@ class Controller:
         """reason: English template shown with the idle state (see i18n)."""
         if not self._running:
             return
-        self._running = False
+        with self._lock:
+            self._running = False
+            self._generation += 1
         self._end_session()
         if self.srv:
             try:
@@ -209,14 +217,17 @@ class Controller:
     def _on_link_hint(self):
         self._set_state(State.CONNECTING, NOT_ANSWERING)
 
-    def _accept_loop(self):
-        while self._running:
+    def _current(self, generation):
+        return self._running and self._generation == generation
+
+    def _accept_loop(self, srv, generation):
+        while self._current(generation):
             try:
-                conn, addr = self.srv.accept()
+                conn, addr = srv.accept()
             except OSError:
                 return
             try:
-                self._serve(conn, addr)
+                self._serve(conn, addr, generation)
             except Exception as e:  # noqa: BLE001 - one bad connection must not end the listening
                 log("RTSP connection dropped:", repr(e))
                 conn.close()
@@ -237,8 +248,8 @@ class Controller:
             time.sleep(0.1)
         return False
 
-    def _serve(self, conn, addr):
-        if not self._running:  # stopped while the tablet dialled in
+    def _serve(self, conn, addr, generation):
+        if not self._current(generation):  # stopped while the tablet dialled in
             conn.close()
             return
         if not self._from_tablet(addr[0]):
@@ -253,23 +264,38 @@ class Controller:
             template, args = problem
             self._from_thread(lambda: self._fail(template, **args))
             return
-        self._idle.clear()
-        if self.link:
-            self.link.connected = True
-        log("sink connected from", addr[0])
         s = self.settings
-        if s.touch and self.monitor:
-            try:
-                self.uibc = UibcServer(self.monitor, UIBC_PORT, pen_factory=self._make_pen, peer=addr[0])
-            except OSError as e:
-                log("touch disabled:", e)
         this = []  # the session, for on_close
-        self.session = WfdSession(conn, self._on_play, self._on_idr,
-                                  on_close=lambda: self._from_thread(self._on_session_closed, this[0]),
-                                  mode=None if s.auto_mode else (s.width, s.height, s.fps),
-                                  uibc_port=UIBC_PORT if self.uibc else None)
-        this.append(self.session)
-        this[0].run()
+        with self._lock:
+            # Verifying took seconds: stopped meanwhile (or started again), no session.
+            if not self._current(generation):
+                conn.close()
+                return
+            self._idle.clear()
+            try:
+                if s.touch and self.monitor:
+                    try:
+                        self.uibc = UibcServer(self.monitor, UIBC_PORT, pen_factory=self._make_pen,
+                                               peer=addr[0])
+                    except OSError as e:
+                        log("touch disabled:", e)
+                session = WfdSession(conn, self._on_play, self._on_idr,
+                                     on_close=lambda: self._from_thread(self._on_session_closed, this[0]),
+                                     mode=None if s.auto_mode else (s.width, s.height, s.fps),
+                                     uibc_port=UIBC_PORT if self.uibc else None, sink_ip=addr[0])
+            except Exception:
+                # The tablet hung up meanwhile, say: nothing left half-started.
+                if self.uibc:
+                    self.uibc.close()
+                    self.uibc = None
+                self._idle.set()
+                raise
+            this.append(session)
+            self.session = session
+            if self.link:
+                self.link.connected = True  # its give-up and retries end: the session runs
+        log("sink connected from", addr[0])
+        session.run()
 
     def _make_pen(self):
         # Called on the UIBC thread once the tablet says it has a pen.
