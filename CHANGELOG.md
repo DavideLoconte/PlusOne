@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.0 (in progress)
+## 0.6.0
 
 Your tablet, and only it.
 
