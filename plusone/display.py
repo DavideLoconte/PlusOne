@@ -98,3 +98,39 @@ class VirtualMonitor:
 
     def pointer_button(self, button, pressed):
         self._notify("NotifyPointerButton", GLib.Variant("(ib)", (button, pressed)))
+
+
+def set_virtual_monitor_scale(scale):
+    """The newest virtual monitor at this scale (2: HiDPI), the others as
+    they are: whether it could. Mutter forgets a virtual monitor's settings
+    (its serial is new every session), so Plus One sets the scale each time,
+    through the same configuration call GNOME Settings uses, temporarily."""
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    serial, monitors, logical, _props = bus.call_sync(
+        "org.gnome.Mutter.DisplayConfig", "/org/gnome/Mutter/DisplayConfig", "org.gnome.Mutter.DisplayConfig",
+        "GetCurrentState", None, None, Gio.DBusCallFlags.NONE, -1, None).unpack()
+    current = {}  # connector -> (current mode id, its supported scales)
+    for spec, modes, _mprops in monitors:
+        for mode_id, _w, _h, _rate, _preferred, scales, mode_props in modes:
+            if mode_props.get("is-current"):
+                current[spec[0]] = (mode_id, scales)
+    virtual = [spec for spec, _modes, _p in monitors if spec[0].startswith("Meta-")]
+    if not virtual:
+        return False
+    target = max(virtual, key=lambda spec: int(spec[3], 16))[0]
+    if target not in current or not any(abs(s - scale) < 0.01 for s in current[target][1]):
+        log(f"display: scale {scale} not offered for the tablet's monitor")
+        return False
+    config = []
+    for x, y, lscale, transform, primary, specs, _lprops in logical:
+        connectors = [spec[0] for spec in specs]
+        if any(c not in current for c in connectors):
+            return False  # a monitor without a current mode: not ours to guess
+        config.append((x, y, scale if target in connectors else lscale, transform, primary,
+                       [(c, current[c][0], {}) for c in connectors]))
+    bus.call_sync("org.gnome.Mutter.DisplayConfig", "/org/gnome/Mutter/DisplayConfig",
+                  "org.gnome.Mutter.DisplayConfig", "ApplyMonitorsConfig",
+                  GLib.Variant("(uua(iiduba(ssa{sv}))a{sv})", (serial, 1, config, {})),
+                  None, Gio.DBusCallFlags.NONE, -1, None)
+    log(f"display: the tablet's monitor at scale {scale}")
+    return True

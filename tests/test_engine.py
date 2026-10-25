@@ -17,6 +17,9 @@ class FakeTablets:
     def addresses(self, tablet):
         return self.app_at
 
+    def screen_seen(self, screen):
+        self.screen = screen
+
     def active(self):
         return self.tablet
 
@@ -202,10 +205,11 @@ def test_the_app_shows_the_desktop_when_it_answers(monkeypatch):
     controller.start()
     assert second == [] and len(FakeAppDisplay.made) == 1
     shown = FakeAppDisplay.made[0]
-    assert shown.targets == [("10.0.0.7", 47236)] and shown.mode == (1920, 1200, 60)
+    # The size once the tablet says its screen (about 1920x1200 at its proportions).
+    assert shown.targets == [("10.0.0.7", 47236)] and shown.mode == (None, None, 60)
     assert controller.state == State.CONNECTING
-    shown.callbacks["on_started"]((1920, 1200, 60))
-    assert controller.state == State.STREAMING
+    shown.callbacks["on_started"]((1920, 1200, 60), (2880, 1800))
+    assert controller.state == State.STREAMING and controller.tablets.screen == (2880, 1800)
     shown.callbacks["on_paused"](True)
     assert "paused" in controller.detail[0] and controller.state == State.STREAMING
     controller.stop()
@@ -246,3 +250,17 @@ def test_a_late_callback_of_an_ended_session_changes_nothing(monkeypatch):
     old.callbacks["on_started"]((1920, 1200, 60))
     old.callbacks["on_ended"](OSError(), False)
     assert controller.state == State.IDLE and second == []
+
+
+def test_a_size_chosen_for_the_app_is_asked_for(monkeypatch):
+    settings = Settings()
+    settings.app_size = "2880x1800"
+    controller, second = app_controller(monkeypatch, settings=settings)
+    controller.start()
+    assert FakeAppDisplay.made[0].mode == (2880, 1800, 60)
+
+
+def test_sizes_are_read_with_care():
+    assert engine.parse_size("2880x1800") == (2880, 1800)
+    for nonsense in ("auto", None, "", "12x9", "axb", "99999x2"):
+        assert engine.parse_size(nonsense) is None

@@ -4,6 +4,7 @@ Runs on the GLib main loop of whoever owns it (GLib.MainLoop for the CLI,
 the GTK application for the GUI). Blocking work (adb, the RTSP session)
 happens on helper threads and reports back through GLib.idle_add.
 """
+import importlib.util
 import socket
 import threading
 import time
@@ -62,6 +63,10 @@ class Settings:
     # The second screen through Plus One's app when it answers on the
     # network ("auto"), or always through Samsung's Second Screen.
     display_via: str = "auto"
+    # Its size through the app: "auto" (about 1920x1200) or "WxH" at the
+    # tablet's proportions; and the tablet's screen, as its app last said.
+    app_size: str = "auto"
+    app_screen: str | None = None
 
 
 class State:
@@ -87,6 +92,15 @@ def conflicting_apps():
         if owned:
             running.append(label)
     return running
+
+
+def parse_size(text):
+    """(width, height) of "WxH", or None ("auto", nothing, nonsense)."""
+    try:
+        width, height = (int(v) for v in str(text).split("x"))
+    except ValueError:
+        return None
+    return (width, height) if 320 <= width <= 7680 and 240 <= height <= 4320 else None
 
 
 class Controller:
@@ -203,12 +217,11 @@ class Controller:
         """The app on the tablet shows the desktop: over the home Wi-Fi, no
         Second Screen. If it cannot (no app answering, refused, failed
         before showing anything), Second Screen as before."""
-        try:
-            from .appdisplay import AppDisplay
-        except ImportError as e:  # python3-cryptography missing (from the sources)
-            log("app display: not available:", e)
+        if importlib.util.find_spec("cryptography") is None:  # from the sources, without it
+            log("app display: python3-cryptography is missing: Second Screen")
             self._start_second_screen()
             return
+        from .appdisplay import AppDisplay
         s = self.settings
         try:
             self.encoder = media.pick_encoder(s.encoder)
@@ -219,13 +232,16 @@ class Controller:
         with self._lock:
             self._running = True
             self._generation += 1
-        mode = (1920, 1200, 60) if s.auto_mode else (s.width, s.height, s.fps)
+        size = parse_size(s.app_size) or (None, None)  # None: chosen once the tablet says its screen
+        mode = (*size, 60)
         self._set_state(State.CONNECTING, "Opening the desktop on {name}…", name=tablet.name)
         generation = self._generation
 
-        def started(mode):
+        def started(mode, screen=None):
             if generation == self._generation:
                 self.mode = mode
+                if screen:
+                    self.tablets.screen_seen(screen)  # the preferences offer its sizes
                 self._set_state(State.STREAMING, "{name} · {width}×{height} @ {fps} Hz",
                                 name=tablet.name, width=mode[0], height=mode[1], fps=mode[2])
 

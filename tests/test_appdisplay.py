@@ -4,10 +4,10 @@ import struct
 
 import pytest
 
-pytest.importorskip("cryptography")
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: E402
-
 from plusone import appdisplay  # noqa: E402
+
+crypto = pytest.importorskip("cryptography.hazmat.primitives.ciphers.aead")
+AESGCM = crypto.AESGCM
 
 KEY = bytes(range(32))
 
@@ -158,3 +158,18 @@ def test_silence_lifts_what_touches():
     clock.now += appdisplay.INPUT_SILENCE
     touch.check()
     assert [c[0] for c in monitor.calls] == ["touch_down", "touch_up"]
+
+
+def test_sizes_keep_the_tablet_s_proportions():
+    assert appdisplay.sizes((2880, 1800))[:4] == [(2880, 1800), (2560, 1600), (2304, 1440), (1920, 1200)]
+    assert appdisplay.sizes((1800, 2880))[0] == (2880, 1800)  # portrait reported: landscape
+    for w, h in appdisplay.sizes((2800, 1752)):
+        assert h % 2 == 0 and abs(w / h - 2800 / 1752) < 0.01
+    assert appdisplay.auto_size((2880, 1800)) == (1920, 1200)
+    assert appdisplay.auto_size((1920, 1080)) == (1920, 1080)
+
+
+def test_big_sizes_are_hidpi_with_the_bitrate_to_match():
+    assert appdisplay.scale_for((2880, 1800)) == 2 and appdisplay.scale_for((1920, 1200)) == 1
+    assert appdisplay.bitrate_for(20000, (2880, 1800)) == 45000
+    assert appdisplay.bitrate_for(20000, (1280, 800)) == 20000  # never less than asked

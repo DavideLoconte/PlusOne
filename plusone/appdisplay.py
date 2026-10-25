@@ -16,7 +16,6 @@ import threading
 import time
 
 import gi
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 gi.require_version("Gst", "1.0")
 from gi.repository import GLib, Gst  # noqa: E402
@@ -42,6 +41,39 @@ INPUT_SILENCE = 0.4  # seconds: the app repeats what touches every 0.1 s; quiet 
 SECOND_FINGER = 0.08  # seconds
 TAP_TIME = 0.3
 TAP_MOVE = 0.02
+
+
+# Widths offered for the desktop in the app, each at the tablet's proportions
+# where that comes out in whole, even pixels; the tablet's own size first.
+WIDTHS = (3840, 2560, 2304, 1920, 1680, 1440, 1280)
+REFERENCE = 1920 * 1200  # the size the bitrate presets are for
+HIDPI_WIDTH = 2560       # from this wide, the monitor at scale 2 (text as at half the size, sharp)
+
+
+def sizes(screen):
+    """The sizes the desktop can have on a tablet of this screen (w, h),
+    largest first, all at its proportions (to within 0.5%: even heights)."""
+    width, height = max(screen), min(screen)
+    found = [(width, height)]
+    for w in WIDTHS:
+        h = round(w * height / width / 2) * 2
+        if w < width and abs(w / h - width / height) < 0.005 * width / height:
+            found.append((w, h))
+    return found
+
+
+def auto_size(screen):
+    """The size closest to 1920x1200 in pixels, at the tablet's proportions."""
+    return min(sizes(screen), key=lambda size: abs(size[0] * size[1] - REFERENCE))
+
+
+def scale_for(size):
+    return 2 if size[0] >= HIDPI_WIDTH else 1
+
+
+def bitrate_for(bitrate, size):
+    """The presets' bitrate (kbit/s, for 1920x1200) for this many pixels."""
+    return int(bitrate * max(1.0, size[0] * size[1] / REFERENCE))
 
 
 class Input:
@@ -174,6 +206,9 @@ class Channel:
     """The session's UDP socket, sealed both ways."""
 
     def __init__(self, key):
+        # Here, not at the top: the preferences use this module's sizes
+        # where python3-cryptography may be missing (from the sources).
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         self.aead = AESGCM(key)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 << 20)
@@ -223,7 +258,7 @@ class AppStreamer:
     """The virtual monitor (or a test pattern), encoded, to the app."""
 
     def __init__(self, source, channel, width, height, fps, bitrate, encoder, on_stats=None, input=None,
-                 on_visible=None):
+                 on_visible=None, preview=False):
         """input: an Input for the fingers and the pen, or None.
         on_visible(shown): from the listening thread, when the app starts or
         stops showing the desktop (left for another app, its screen off)."""
@@ -237,6 +272,12 @@ class AppStreamer:
                      f"video/x-raw,format={media.CAPTURE_FORMAT},width={width},height={height},"
                      f"framerate={fps}/1 ! "
                      f"timeoverlay font-desc=\"Sans 90\" valignment=center halignment=center")
+            if preview:
+                # The same picture in a window here: a photo of both screens
+                # reads the delay to the tablet's glass off the two timers.
+                video += (" ! tee name=preview ! queue max-size-buffers=1 leaky=downstream ! "
+                          "videoscale ! video/x-raw,width=960,height=600 ! videoconvert ! "
+                          "autovideosink sync=false preview.")
         else:
             video = (f"pipewiresrc path={source} do-timestamp=true always-copy=false keepalive-time=100 ! "
                      f"video/x-raw,format={media.CAPTURE_FORMAT},width={width},height={height},"
@@ -369,15 +410,18 @@ def describe(stats):
 class AppDisplay:
     """A display session with the paired tablet's app: the virtual monitor
     (or a test pattern), its stream, the fingers and the pen, for as long as
-    the app shows it. Callbacks run on the main loop:
-    on_started((width, height, fps)), on_ended(error or None, started),
-    on_paused(paused)."""
+    the app shows it. mode: (width, height, fps), the size None for the one
+    closest to 1920x1200 at the tablet's proportions (also when the size
+    asked for is not at them: another tablet). Callbacks run on the main
+    loop: on_started((width, height, fps), tablet's screen),
+    on_ended(error or None, started), on_paused(paused)."""
 
-    def __init__(self, targets, app_id, mode, bitrate, encoder, touch=True, test=False,
+    def __init__(self, targets, app_id, mode, bitrate, encoder, touch=True, test=False, preview=False,
                  on_started=None, on_ended=None, on_paused=None):
         self.targets, self.app_id, self.mode = targets, app_id, mode
         self.bitrate, self.encoder, self.touch, self.test = bitrate, encoder, touch, test
-        self.on_started = on_started or (lambda mode: None)
+        self.preview = preview
+        self.on_started = on_started or (lambda mode, screen: None)
         self.on_ended = on_ended or (lambda error, started: None)
         self.on_paused = on_paused or (lambda paused: None)
         self.channel = self.monitor = self.streamer = self.sock = None
@@ -416,6 +460,10 @@ class AppDisplay:
             self.tablet_size = (int(reply["width"]), int(reply["height"]))
             log(f"app display: {address} shows {self.tablet_size[0]}x{self.tablet_size[1]}"
                 f" at {float(reply.get('refresh', 0)):.0f} Hz")
+            width, height, fps = self.mode
+            if (width, height) not in sizes(self.tablet_size):
+                width, height = auto_size(self.tablet_size)
+            self.mode = (width, height, fps)
             GLib.idle_add(once(self._open))
             self._hold(wire)
         except Exception as e:  # noqa: BLE001 - not there, refused, or gone: said to the caller
@@ -464,16 +512,36 @@ class AppDisplay:
             monitor = self.monitor
             touch = Input(monitor, (width, height), lambda: pen.for_monitor(monitor, (width, height)))
         try:
-            self.streamer = AppStreamer(source, self.channel, width, height, fps, self.bitrate, self.encoder,
+            self.streamer = AppStreamer(source, self.channel, width, height, fps,
+                                        bitrate_for(self.bitrate, (width, height)), self.encoder,
                                         on_stats=lambda stats: log("app display:", describe(stats)),
                                         input=touch,
-                                        on_visible=lambda shown: GLib.idle_add(once(self.on_paused, not shown)))
+                                        on_visible=lambda shown: GLib.idle_add(once(self.on_paused, not shown)),
+                                        preview=self.preview)
             self.streamer.start()
         except Exception as e:  # noqa: BLE001 - said, not left half-started
             self._ended(e)
             return
         self.started = True
-        self.on_started(self.mode)
+        if self.monitor is not None and scale_for((width, height)) != 1:
+            GLib.timeout_add(300, self._scale, 5)
+        self.on_started(self.mode, self.tablet_size)
+
+    def _scale(self, tries):
+        """The virtual monitor appears in the display configuration a
+        moment after its stream: a few tries."""
+        if self._stopped.is_set():
+            return False
+        from .display import set_virtual_monitor_scale
+        try:
+            if set_virtual_monitor_scale(scale_for(self.mode[:2])):
+                return False
+        except GLib.Error as e:
+            log("display: scale not set:", e.message)
+            return False
+        if tries > 1:
+            GLib.timeout_add(500, self._scale, tries - 1)
+        return False
 
     def _ended(self, error=None):
         if self._stopped.is_set():
@@ -499,21 +567,22 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="python3 -m plusone.appdisplay")
     ap.add_argument("address", help="the tablet's address on the network")
     ap.add_argument("--port", type=int, default=companion.APP_PORT)
-    ap.add_argument("--size", default="1920x1200", help="WxH")
+    ap.add_argument("--size", default="auto", help="WxH at the tablet's proportions, or auto")
     ap.add_argument("--fps", type=int, default=60)
     ap.add_argument("--bitrate", type=int, default=20000, help="kbit/s")
     ap.add_argument("--encoder", default="auto")
     ap.add_argument("--seconds", type=int, default=20)
     ap.add_argument("--test", action="store_true", help="a test pattern instead of a virtual monitor")
+    ap.add_argument("--preview", action="store_true", help="the test pattern in a window here too, to photograph")
     args = ap.parse_args(argv)
     Gst.init(None)
     paired = companion.Paired().all()
     if len(paired) != 1:
         raise SystemExit("pair exactly one tablet first")
-    width, height = map(int, args.size.split("x"))
+    width, height = (None, None) if args.size == "auto" else map(int, args.size.split("x"))
     loop = GLib.MainLoop()
     session = AppDisplay([(args.address, args.port)], next(iter(paired))[:16], (width, height, args.fps),
-                         args.bitrate, media.pick_encoder(args.encoder), test=args.test,
+                         args.bitrate, media.pick_encoder(args.encoder), test=args.test, preview=args.preview,
                          on_ended=lambda error, started: (log("app display: ended", repr(error)), loop.quit()))
     session.start()
     GLib.timeout_add_seconds(args.seconds, loop.quit)

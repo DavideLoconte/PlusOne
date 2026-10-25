@@ -13,7 +13,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 from . import __version__, companion, i18n, log, once, pen  # noqa: E402
 from .app import APP_ID, IN_FLATPAK, set_shell_extension, shell_extension_state  # noqa: E402
 from .devices import neural_available  # noqa: E402
-from .engine import State  # noqa: E402
+from .engine import State, parse_size  # noqa: E402
 from .i18n import _  # noqa: E402
 from .rtsp import MODES  # noqa: E402
 
@@ -591,11 +591,9 @@ class PreferencesDialog(Adw.PreferencesDialog):
         # The rest, for when the defaults do not do.
         group = Adw.PreferencesGroup()
         advanced = Adw.ExpanderRow(title=_("Advanced"))
-        # Entry 0 is "Automatic" (from the tablet's EDID); the rest follow MODE_LIST.
-        self.mode_row = Adw.ComboRow(title=_("Resolution"), model=Gtk.StringList.new(
-            [_("Automatic")] + [mode_label(m) for m in MODE_LIST]))
-        current = (s.width, s.height, s.fps)
-        self.mode_row.set_selected(0 if s.auto_mode or current not in MODE_LIST else 1 + MODE_LIST.index(current))
+        # Entry 0 is "Automatic"; the rest are the tablet's sizes through the
+        # app, or Second Screen's modes (MODE_LIST): _fill_modes().
+        self.mode_row = Adw.ComboRow(title=_("Resolution"), subtitle_lines=2)
         # Its subtitle says how to get the pen's pressure.
         self.touch_row = Adw.SwitchRow(title=_("Touch and S Pen"), active=s.touch, subtitle_selectable=True,
                                        subtitle={
@@ -606,6 +604,7 @@ class PreferencesDialog(Adw.PreferencesDialog):
         self.via_row = Adw.ComboRow(title=_("Second screen through"), model=Gtk.StringList.new(
             [_("Plus One's app, when it is there"), _("Samsung's Second Screen")]))
         self.via_row.set_selected(0 if s.display_via == "auto" else 1)
+        self._fill_modes()
         has_adb = shutil.which("adb") is not None
         self.adb_row = Adw.SwitchRow(title=_("Open Second Screen from here"), active=s.use_adb and has_adb,
                                      sensitive=has_adb,
@@ -618,6 +617,7 @@ class PreferencesDialog(Adw.PreferencesDialog):
 
         # Read when a connection starts: locked while one is up.
         self.session_rows = [self.quality_row, self.via_row, self.mode_row, self.touch_row, self.adb_row]
+        self.via_row.connect("notify::selected", lambda *_a: self._fill_modes())
         for row, signal in ((self.quality_row, "notify::selected"), (self.via_row, "notify::selected"),
                             (self.mode_row, "notify::selected"),
                             (self.touch_row, "notify::active"), (self.adb_row, "notify::active")):
@@ -627,17 +627,57 @@ class PreferencesDialog(Adw.PreferencesDialog):
         app.listeners.append(self._refresh)
         self.connect("closed", lambda d: app.listeners.remove(self._refresh))
 
+    def _app_sizes(self):
+        """The tablet's sizes through the app, once it said its screen."""
+        from .appdisplay import sizes
+        screen = parse_size(self.settings.app_screen)
+        return sizes(screen) if screen else []
+
+    def _fill_modes(self):
+        """Resolution's choices for the way chosen: the tablet's sizes (at its
+        proportions) through the app, Second Screen's modes otherwise."""
+        from .appdisplay import scale_for
+        s = self.settings
+        via_app = self.via_row.get_selected() == 0
+        if via_app:
+            choices = self._app_sizes()
+            labels = [_("Automatic")]
+            for w, h in choices:
+                labels.append(f"{w} × {h}" if scale_for((w, h)) == 1 else
+                              _("{width} × {height}, sharp: as {half}").format(
+                                  width=w, height=h, half=f"{w // 2} × {h // 2}"))
+            current = parse_size(s.app_size)
+            selected = 1 + choices.index(current) if current in choices else 0
+            subtitle = (_("Above 1920 × 1200 the picture comes a little later")
+                        if choices else _("The tablet's sizes appear after it showed the desktop once"))
+        else:
+            labels = [_("Automatic")] + [mode_label(m) for m in MODE_LIST]
+            current = (s.width, s.height, s.fps)
+            selected = 0 if s.auto_mode or current not in MODE_LIST else 1 + MODE_LIST.index(current)
+            subtitle = ""
+        self._filling = True
+        self.mode_row.set_model(Gtk.StringList.new(labels))
+        self.mode_row.set_selected(selected)
+        self.mode_row.set_subtitle(subtitle)
+        self._filling = False
+
     def _refresh(self):
         in_session = self.app.controller.state in (State.CONNECTING, State.STREAMING)
         for row in self.session_rows:
             row.set_sensitive(not in_session and (row is not self.adb_row or shutil.which("adb") is not None))
 
     def _apply(self, *_args):
+        if getattr(self, "_filling", False):
+            return  # the choices being replaced, not chosen
         s = self.settings
         selected = self.mode_row.get_selected()
-        s.auto_mode = selected == 0
-        if not s.auto_mode:
-            s.width, s.height, s.fps = MODE_LIST[selected - 1]
+        if self.via_row.get_selected() == 0:
+            choices = self._app_sizes()
+            s.app_size = "auto" if selected == 0 or selected > len(choices) else "%dx%d" % choices[selected - 1]
+        else:
+            s.auto_mode = selected == 0
+            if not s.auto_mode:
+                s.width, s.height, s.fps = MODE_LIST[selected - 1]
         s.bitrate = QUALITY_BITRATES[self.quality_row.get_selected()][1]
         s.touch = self.touch_row.get_active()
         s.use_adb = self.adb_row.get_active()

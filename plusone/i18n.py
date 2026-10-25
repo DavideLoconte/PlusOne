@@ -135,6 +135,10 @@ _IT = {
     "Tap “Second screen” on the tablet": "Tocca «Second screen» sul tablet",
     "Opening the desktop on {name}…": "Apro il desktop su {name}…",
     "Second screen through": "Secondo schermo tramite",
+    "{width} × {height}, sharp: as {half}": "{width} × {height}, nitido: come {half}",
+    "Above 1920 × 1200 the picture comes a little later": "Sopra 1920 × 1200 l'immagine arriva un po' più tardi",
+    "The tablet's sizes appear after it showed the desktop once":
+        "Le misure del tablet compaiono dopo che ha mostrato il desktop una volta",
     "Plus One's app, when it is there": "L'app Plus One, se c'è",
     "Samsung's Second Screen": "Second Screen di Samsung",
     "{name}: paused while Plus One is not on its screen": "{name}: in pausa finché Plus One non è sul suo schermo",

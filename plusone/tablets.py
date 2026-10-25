@@ -60,6 +60,14 @@ class Tablets:
             self.settings.tablet = None
             self.save()
 
+    def screen_seen(self, screen):
+        """The tablet's app said its screen is (w, h): remembered for the
+        preferences' sizes."""
+        text = f"{max(screen)}x{min(screen)}"
+        if self.settings.app_screen != text:
+            self.settings.app_screen = text
+            self.save()
+
     def addresses(self, tablet):
         """Where its app is announced on the network: [(address, port)]."""
         return self.nearby.addresses(tablet.app_id) if self.nearby else []
