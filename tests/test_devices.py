@@ -30,6 +30,19 @@ def test_links_from_pw_link():
     assert parse("garbage") is None
 
 
+def test_level_meters_do_not_record():
+    def node(id, **props):
+        return {"id": id, "type": "PipeWire:Interface:Node", "info": {"props": props}}
+
+    def link(out, into):
+        return {"type": "PipeWire:Interface:Link", "info": {"output-node-id": out, "input-node-id": into}}
+    objects = [node(1, **{"node.name": devices.MIC_NAME}), node(2, **{"node.name": "plusone-mic-feed-1"}),
+               node(3, **{"node.name": "GNOME Settings", "media.name": "Peak detect", "stream.monitor": True}),
+               node(4, **{"node.name": "Google Chrome input"}), link(2, 1), link(1, 3)]
+    assert devices.recorders(objects) == 0  # Plus One's own stream in, a level meter out
+    assert devices.recorders(objects + [link(1, 4)]) == 1
+
+
 def test_opening_a_device_is_counted(tmp_path):
     path = tmp_path / "video9"
     path.write_bytes(b"")

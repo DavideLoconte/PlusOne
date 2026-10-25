@@ -8,6 +8,7 @@ it when the program does.
 import ctypes
 import glob
 import itertools
+import json
 import os
 import shutil
 import struct
@@ -432,6 +433,7 @@ class Microphone(Device):
         self.links = set()
         self.watch = None
         self._streams = itertools.count(1)
+        self._asked = 0  # the last look at who records (pw-dump), its number
 
     def enable(self, description="Tablet microphone (Plus One)"):
         if self.module:
@@ -440,7 +442,7 @@ class Microphone(Device):
         if self.rtc is None:
             self._set_state("webrtc")
             return
-        if not (shutil.which("pactl") and shutil.which("pw-link")):
+        if not all(shutil.which(tool) for tool in ("pactl", "pw-link", "pw-dump")):
             self._set_state("setup")
             return
         unload_stale()
@@ -502,8 +504,31 @@ class Microphone(Device):
             sign, link = changed
             if link[0].startswith(MIC_NAME + ":"):
                 (self.links.add if sign in "=+" else self.links.discard)(link)
-                self._used(bool(self.links))
+                self._who_records()
         stream.read_line_async(GLib.PRIORITY_DEFAULT, None, self._line, watch)
+
+    def _who_records(self):
+        """Whether a program records from the source, from what pw-dump says
+        of the streams linked to it: a level meter's ("Peak detect": GNOME
+        Settings' Sound panel, pavucontrol) does not count, or an open Sound
+        panel would keep the tablet's microphone on, only to show a level."""
+        if not self.links:
+            self._asked += 1  # an answer still coming is out of date
+            self._used(False)
+            return
+        self._asked += 1
+        dump = Gio.Subprocess.new(["pw-dump"], Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE)
+        dump.communicate_utf8_async(None, None, self._dumped, (self.watch, self._asked))
+
+    def _dumped(self, dump, result, asked):
+        try:
+            _ok, out, _err = dump.communicate_utf8_finish(result)
+            count = recorders(json.loads(out))
+        except (GLib.Error, ValueError, TypeError, AttributeError) as e:
+            log("microphone: who records, not known:", repr(e))
+            count = len(self.links)  # as if each were a program's
+        if asked == (self.watch, self._asked):
+            self._used(count > 0)
 
     def _come_back(self):
         self.app.devices.apply()
@@ -563,6 +588,21 @@ def link_feed(name, wait=5):
             return subprocess.run(["pw-link", feed[0], source[0]], capture_output=True).returncode == 0
         time.sleep(0.05)
     return False
+
+
+def recorders(objects):
+    """How many streams record from the microphone's source, in pw-dump's
+    objects: links from it, to streams other than level meters'."""
+    nodes = {o.get("id"): (o.get("info") or {}).get("props") or {}
+             for o in objects if o.get("type") == "PipeWire:Interface:Node"}
+    source = {id for id, props in nodes.items() if props.get("node.name") == MIC_NAME}
+    count = 0
+    for o in objects:
+        info = o.get("info") or {}
+        if o.get("type") == "PipeWire:Interface:Link" and info.get("output-node-id") in source:
+            meter = nodes.get(info.get("input-node-id"), {}).get("stream.monitor")
+            count += meter not in (True, "true", "1")
+    return count
 
 
 class LinkParser:
