@@ -48,7 +48,6 @@ CHUNK = 24  # settled stroke segments turned into one texture while drawing
 # the 8x zoom is 32 million pixels, 128 MB plus a copy for the texture.
 MAX_PAGE_PIXELS = 16_000_000
 TILE = 512  # device pixels per side of a page texture tile
-TILE_BUDGET = 0.008  # seconds of tile rendering per frame; the overview shows meanwhile
 OVERVIEW_PIXELS = 3_000_000
 PEN_SAVE_DELAY = 500  # ms after the last change of colour, thickness or stabilization
 # cairo's 32-bit pixels are native-endian words: B, G, R, A bytes here.
@@ -180,18 +179,35 @@ class PageRaster:
 
     def _render(self, area, marks):
         """The page and marks again, within area (all of it if None)."""
+        self._render_boxes([area] if area is not None else None, marks)
+
+    def _render_boxes(self, boxes, marks):
+        """The page and marks again within boxes (all of it if None), in one
+        pass of poppler: what costs is the pass (a scanned page's image is
+        decoded whatever the clip), not the area. One pass per tile took 9
+        times as long for 9 tiles (1 s on a scanned page, measured)."""
         cr = cairo.Context(self.surface)
-        if area is not None:
-            x0, y0, x1, y1 = area
-            cr.rectangle(x0, y0, x1 - x0, y1 - y0)
+        if boxes is not None:
+            if not boxes:
+                return
+            for x0, y0, x1, y1 in boxes:
+                cr.rectangle(x0, y0, x1 - x0, y1 - y0)
             cr.clip()
-            marks = [m for m in marks if (box := self.area([m])) and _overlap(box, area)]
+            marks = [m for m in marks if (box := self.area([m])) and any(_overlap(box, b) for b in boxes)]
         cr.set_source_rgb(1, 1, 1)
         cr.paint()
         cr.scale(self.scale, self.scale)
         self.page.render(cr)
         draw_marks(cr, marks)
-        self.changed(area)
+        for box in boxes if boxes is not None else [None]:
+            self.changed(box)
+
+    def render_tiles(self, keys):
+        """These tiles, those not rendered yet, in one pass."""
+        missing = [key for key in keys if key not in self.rendered]
+        if missing:
+            self._render_boxes([self._tile_box(*key) for key in missing], self.drawn)
+            self.rendered.update(missing)
 
     def changed(self, area):
         """Pixels within area (all if None) changed: their tiles go."""
@@ -219,8 +235,7 @@ class PageRaster:
             before, after = {id(m) for m in drawn}, {id(m) for m in marks}
             area = self.area([m for m in drawn if id(m) not in after]
                              + [m for m in marks if id(m) not in before])
-            for box in self._rendered_boxes(area):
-                self._render(box, marks)
+            self._render_boxes(self._rendered_boxes(area), marks)
         self.drawn = tuple(marks)
 
     def _rendered_boxes(self, area):
@@ -354,6 +369,7 @@ class PageArea(Gtk.Widget):
         self._origin = (0.0, 0.0)  # where the page is drawn (whole device pixels)
         self._pinching = False
         self._overview = None   # the whole page at the fitted zoom: stands in for tiles not rendered yet
+        self._overview_shown = False  # the last frame's tiles waited behind the overview
         self._fit_scale = 1.0
         self._stroke = None
         self._model = None    # the stroke's modeler, in widget pixels
@@ -882,8 +898,7 @@ class PageArea(Gtk.Widget):
         if overview is None or overview.index != index or abs(overview.scale / scale - 1) >= 0.15:
             overview = self._overview = PageRaster(index, scale, self.window.page(), self.page_size())
         overview.update(self.window.marks.get(index, []))
-        for key in overview.tile_boxes():
-            overview.tile(*key)
+        overview.render_tiles(overview.tile_boxes())  # all of it, in one pass
         return overview
 
     def do_snapshot(self, snapshot):
@@ -906,20 +921,21 @@ class PageArea(Gtk.Widget):
         scale = raster.scale
         k = v.zoom / scale  # widget pixels per page device pixel
         visible = (-ox / k, -oy / k, (self.get_width() - ox) / k, (self.get_height() - oy) / k)
-        # Tiles not rendered yet (after a zoom, or coming into view) render a
-        # few per frame over the whole page drawn small: rendering them all
-        # at once took 30-200 ms, right as fingers or pen moved.
+        # Tiles not rendered yet (after a zoom, or coming into view): the
+        # whole page drawn small shows this frame, and the next renders them
+        # all in one pass (one per tile, a few per frame, made a scanned page
+        # take a second of frames).
         overview = self._overview_raster()
+        keys = raster.tile_boxes(visible)
+        missing = [key for key in keys if key not in raster.rendered]
         # Fingers zooming out: tiles at the old, bigger zoom would be thrown
         # away when they let go, so the overview alone fills in.
-        budget = 0 if self._pinching and raster.scale > 1.5 * needed else TILE_BUDGET
-        deadline = time.perf_counter() + budget
-        ready, waiting = [], False
-        for key in raster.tile_boxes(visible):
-            if key in raster.rendered or time.perf_counter() < deadline:
-                ready.append(raster.tile(*key))
-            else:
-                waiting = True
+        if missing and self._overview_shown and not (self._pinching and raster.scale > 1.5 * needed):
+            raster.render_tiles(missing)
+            missing = []
+        self._overview_shown = bool(missing)
+        waiting = bool(missing)
+        ready = [raster.tile(*key) for key in keys if key in raster.rendered]
         if waiting:
             ko = v.zoom / overview.scale
             for key in overview.tile_boxes():
