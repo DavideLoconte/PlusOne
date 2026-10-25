@@ -38,3 +38,10 @@ def own_turns(monkeypatch):
     leaves no turn unused for the next."""
     from plusone import companion
     monkeypatch.setattr(companion, "_turns", companion._Turns())
+
+
+@pytest.fixture(autouse=True)
+def own_pairings(tmp_path, monkeypatch):
+    """No test reads or writes this PC's identity or paired tablets."""
+    from plusone import companion
+    monkeypatch.setattr(companion, "CONFIG", str(tmp_path / "companion"))

@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.0 (in progress)
+
+Your tablet, and only it.
+
+- **Pairing from the window**: *Pair a tablet* lists the tablets with
+  Plus One's app on your Wi-Fi; pick one, compare the six-digit code on
+  both screens, confirm on both. Signing no longer pairs by itself, and the
+  app only pairs when the PC's user asked for it.
+- **One tablet in use**, for the desktop and for the PDFs: several can be
+  paired, the one in use is picked under its name in the window; *Paired
+  tablets* in the menu forgets one. Other tablets on the network get
+  nothing (Files no longer offers a choice of tablet).
+- **Second Screen checked with the app**: once a tablet joins over Wi-Fi
+  Direct, and before any picture leaves the PC, Plus One connects to
+  Plus One's app over that same link and wants the paired certificate, a
+  tablet that knows this PC, and the address it came from (so nobody can
+  pass the check on to the real tablet). Otherwise the desktop is not sent
+  and the window says why. This replaces 0.5's "the first tablet streamed
+  to is the only one", which trusted a name anyone can copy. Plus One's app
+  must run on the tablet for Second Screen too.
+- **A new window**: the tablet in use, its state and two buttons (*Use as
+  second screen*, *Sign a PDF…*); everything else in the menu: preferences
+  (Screen, Signing, General), My signatures, Paired tablets, Log, About.
+- The app listens on a fixed port (47236), so the PC finds it over Wi-Fi
+  Direct at once. Protocol version 3: update the app and Plus One together.
+
 ## 0.5.0
 
 The companion app: ink under the nib.

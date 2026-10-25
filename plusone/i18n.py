@@ -14,23 +14,14 @@ _IT = {
     "Connecting…": "Collegamento…",
     "Connected": "Connesso",
     "Problem": "Problema",
-    "Press Connect, then tap “Second screen” in the tablet's quick settings":
-        "Premi Collega, poi tocca «Second screen» nel pannello rapido del tablet",
     "Connect": "Collega",
     "Disconnect": "Scollega",
-    "Display": "Schermo",
     "Resolution": "Risoluzione",
     "Automatic": "Automatica",
     "Quality": "Qualità",
     "Mbit/s: higher is sharper but uses more bandwidth": "Mbit/s: più alto = più nitido, più banda",
-    "Options": "Opzioni",
     "Touch and S Pen": "Touch e S Pen",
     "Sign on Tablet": "Firma sul tablet",
-    "In Files, for PDFs, while a tablet is on the network":
-        "In File, per i PDF, quando c'è un tablet in rete",
-    "On the network now: {name}": "In rete ora: {name}",
-    "A tablet is on the network now": "Ora c'è un tablet in rete",
-    "No tablet on the network now": "Ora nessun tablet in rete",
     "Ready in the background": "Pronto in background",
     "Starts at login and stays ready after you close this window":
         "Parte all'accesso e resta pronto anche dopo aver chiuso questa finestra",
@@ -115,33 +106,18 @@ _IT = {
     "This PC's Wi-Fi cannot do Wi-Fi Direct": "Il Wi-Fi di questo PC non supporta il Wi-Fi Direct",
     "Sending {name} to Plus One on {tablet}": "Invio di {name} a Plus One su {tablet}",
     "Not paired": "Non abbinato",
-    "The codes were not confirmed on both the PC and the tablet":
-        "I codici non sono stati confermati sia sul PC sia sul tablet",
-    "Pair with {tablet}?": "Abbinare {tablet}?",
-    "Check that the tablet shows the same code: {code}":
-        "Controlla che il tablet mostri lo stesso codice: {code}",
-    "Pair": "Abbina",
     "Sign {name} on {tablet}": "Firma {name} su {tablet}",
     "{count} PDFs to sign on {tablet}": "{count} PDF da firmare su {tablet}",
-    "Tablet for signing": "Tablet per firmare",
     "It had a digital signature: in the signed copy, it no longer holds":
         "Aveva una firma digitale: nella copia firmata non vale più",
-    "Only this tablet gets the desktop": "Solo questo tablet riceve lo schermo",
     "Forget": "Dimentica",
     "Paired tablets": "Tablet abbinati",
-    "They sign without a code. Forget one you no longer use.":
-        "Firmano senza codice. Dimentica quelli che non usi più.",
     "Forget {tablet}?": "Dimenticare {tablet}?",
-    "Signing on it again asks for a code, on this PC and on the tablet.":
-        "Per firmarci di nuovo servirà un codice, su questo PC e sul tablet.",
     "The S Pen has no pressure: sudo usermod -aG plus-one $USER, then log in again":
         "La S Pen non ha la pressione: sudo usermod -aG plus-one $USER, poi rientra nella sessione",
     "Log out and back in for the S Pen's pressure": "Esci e rientra nella sessione per la pressione della S Pen",
     "Without access to /dev/uhid the S Pen works as a mouse, without pressure":
         "Senza accesso a /dev/uhid la S Pen funziona come un mouse, senza pressione",
-    "With more than one on the network, Files asks too": "Con più di uno in rete, lo chiede anche File",
-    "Automatic: the last one used": "Automatico: l'ultimo usato",
-    "A tablet no longer paired": "Un tablet non più abbinato",
     "Signed {count} PDFs": "{count} PDF firmati",
     "Update Plus One": "Aggiorna Plus One",
     "The app on the tablet and Plus One on this PC are different versions: signing with Second Screen instead":
@@ -149,8 +125,6 @@ _IT = {
     "Lost the tablet": "Tablet perso",
     "What was signed on the tablet did not reach the PC: {name} is unchanged":
         "Quanto firmato sul tablet non è arrivato al PC: {name} è rimasto com'era",
-    "Pair only if the tablet shows this same code, and confirm there too:":
-        "Abbina solo se il tablet mostra questo stesso codice, e conferma anche lì:",
     "Opening Second Screen on the tablet…": "Apro Second Screen sul tablet…",
     "Tap “Second screen” on the tablet": "Tocca «Second screen» sul tablet",
     "The tablet did not answer: open Second Screen on it and connect again":
@@ -158,6 +132,56 @@ _IT = {
     "Connecting to {name}…": "Collegamento a {name}…",
     "The tablet is not answering: close and reopen Second Screen":
         "Il tablet non risponde: chiudi e riapri Second Screen",
+    # 0.6: pairing from the window, the tablet in use
+    "Preferences": "Preferenze",
+    "About Plus One": "Informazioni su Plus One",
+    "Main menu": "Menu principale",
+    "Pair a tablet": "Abbina un tablet",
+    "No tablet": "Nessun tablet",
+    "Pair your tablet to use it as a second screen and to sign PDFs on it.":
+        "Abbina il tuo tablet per usarlo come secondo schermo e per firmarci i PDF.",
+    "Choose the tablet": "Scegli il tablet",
+    "Use as second screen": "Usa come secondo schermo",
+    "Stop": "Interrompi",
+    "Sign a PDF…": "Firma un PDF…",
+    "Second screen · {width} × {height} at {fps} Hz": "Secondo schermo · {width} × {height} a {fps} Hz",
+    "On your network": "Sulla tua rete",
+    "Not on your network now": "Ora non è sulla tua rete",
+    "Pair another tablet…": "Abbina un altro tablet…",
+    "With Plus One on your Wi-Fi": "Con Plus One sulla tua Wi-Fi",
+    "Not there? Open Plus One on the tablet, on the same Wi-Fi as this PC.":
+        "Non c'è? Apri Plus One sul tablet, sulla stessa Wi-Fi di questo PC.",
+    "Looking for tablets…": "Cerco i tablet…",
+    "Paired": "Abbinato",
+    "Pair only if the tablet shows this same code. Confirm there too.":
+        "Abbina solo se il tablet mostra lo stesso codice. Conferma anche lì.",
+    "Same code": "Il codice è uguale",
+    "Confirm on the tablet…": "Conferma sul tablet…",
+    "Paired with {name}": "Abbinato a {name}",
+    "Not paired: the code was not confirmed on both screens":
+        "Non abbinato: il codice non è stato confermato su entrambi gli schermi",
+    "{name} did not answer": "{name} non ha risposto",
+    "Try again": "Riprova",
+    "The one in use gets the desktop and the PDFs. Forget one you no longer use.":
+        "Quello in uso riceve lo schermo e i PDF. Dimentica quelli che non usi più.",
+    "No tablet paired": "Nessun tablet abbinato",
+    "To use it again, pair it again: both screens show a code.":
+        "Per usarlo di nuovo, abbinalo di nuovo: entrambi gli schermi mostreranno un codice.",
+    "Screen": "Schermo",
+    "Signing": "Firma",
+    "General": "Generale",
+    "In Files and Open With, for PDFs": "In File e Apri con, per i PDF",
+    "Copy": "Copia",
+    "Your Galaxy Tab as a second monitor, and to sign PDFs with its S Pen":
+        "Il tuo Galaxy Tab come secondo monitor, e per firmare i PDF con la S Pen",
+    "Pair your tablet in Plus One to sign {name} on it": "Abbina il tuo tablet in Plus One per firmarci {name}",
+    "{name} no longer knows this PC: pair it again": "{name} non riconosce più questo PC: abbinalo di nuovo",
+    "Pair a tablet first": "Prima abbina un tablet",
+    "This is not {name}: the desktop was not sent": "Questo non è {name}: lo schermo non è stato inviato",
+    "Plus One on {name} and on this PC are different versions: update them":
+        "Plus One su {name} e su questo PC sono versioni diverse: aggiornali",
+    "Plus One does not answer on {name}: open it on the tablet and connect again":
+        "Plus One non risponde su {name}: aprilo sul tablet e collega di nuovo",
 }
 
 # Templates that read the same in every language.

@@ -5,6 +5,10 @@ from plusone import i18n
 from plusone import companion
 from plusone.engine import NOT_ANSWERING, Settings, State
 from plusone.signing import Signing
+from plusone.tablets import Tablets
+
+TAB = "a1b2" + "0" * 60  # the paired tablet's fingerprint
+APP = TAB[:16]           # what its app announces
 
 
 class FakeController:
@@ -23,9 +27,6 @@ class FakeNearby:
     def __init__(self):
         self.app_on = None  # (address, port, name, app id) of the companion app, if any
 
-    def companion(self, paired=(), prefer=()):
-        return self.app_on
-
     def apps(self):
         return [(a[3], a[0], a[1], a[2]) for a in [self.app_on] if a]
 
@@ -33,11 +34,27 @@ class FakeNearby:
         return [(a[0], a[1]) for a in [self.app_on] if a and a[3] == app_id]
 
 
+class FakePaired:
+    def __init__(self, entries):
+        self.data = entries
+
+    def entries(self):
+        return {fp: dict(entry) for fp, entry in self.data.items()}
+
+    def learn(self, fp, **fields):
+        self.data[fp].update(fields)
+
+    def forget(self, fp):
+        self.data.pop(fp, None)
+
+
 class FakeApp:
-    def __init__(self):
+    def __init__(self, paired=True):
         self.controller = FakeController()
         self.settings = Settings()
         self.nearby = FakeNearby()
+        self.tablets = Tablets(self.settings, nearby=self.nearby,
+                               paired=FakePaired({TAB: {"name": "Galaxy Tab"}} if paired else {}))
         self.notes = []
 
     def add_action(self, action):
@@ -61,8 +78,8 @@ class FakeWindow:
         self.presented += 1
 
 
-def make(monkeypatch):
-    app = FakeApp()
+def make(monkeypatch, paired=True):
+    app = FakeApp(paired)
     signing = Signing(app)
     opened, notes = [], []
     monkeypatch.setattr(signing, "_open_on_tablet", opened.append)
@@ -132,18 +149,18 @@ def spin(until, timeout=5):
 
 def test_the_tablets_app_signs_when_it_is_on_the_network(monkeypatch, tmp_path):
     app, signing, _, _ = make(monkeypatch)
-    app.nearby.app_on = ("10.0.0.2", 40000, "Galaxy Tab", "a1b2")
+    app.nearby.app_on = ("10.0.0.2", 40000, "Galaxy Tab", APP)
     marks = {"pages": [{"page": 1, "marks": [
         {"type": "stroke", "width": 1.2, "color": [0, 0, 0], "points": [10, 20, 0.5, 30, 40, 0.6]}]}]}
     asked, saved = [], []
-    monkeypatch.setattr(companion, "sign", lambda target, path, ask, **kw: asked.append((target, path)) or marks)
+    monkeypatch.setattr(companion, "sign", lambda target, path, **kw: asked.append((target, path, kw["expect"]))
+                        or marks)
     import plusone.pdf
     monkeypatch.setattr(plusone.pdf, "save_signed", lambda path, m: saved.append(m) or path + ".signed")
     path = str(tmp_path / "form.pdf")
     signing.request(path)
     assert spin(lambda: saved)
-    assert asked == [([("10.0.0.2", 40000)], path)] and app.controller.starts == 0  # no Second Screen
-    assert app.settings.last_tablet == "a1b2"  # "Automatic" picks it next time
+    assert asked == [([("10.0.0.2", 40000)], path, APP)] and app.controller.starts == 0  # no Second Screen
     stroke = saved[0][1][0]
     assert stroke.points == [(10, 20, 0.5), (30, 40, 0.6)] and stroke.width == 1.2
     assert spin(lambda: path not in signing.in_app)
@@ -151,7 +168,7 @@ def test_the_tablets_app_signs_when_it_is_on_the_network(monkeypatch, tmp_path):
 
 def test_an_unreachable_app_falls_back_to_second_screen(monkeypatch, tmp_path):
     app, signing, _, notes = make(monkeypatch)
-    app.nearby.app_on = ("10.0.0.2", 40000, "Galaxy Tab", "a1b2")
+    app.nearby.app_on = ("10.0.0.2", 40000, "Galaxy Tab", APP)
 
     def unreachable(*args, **kwargs):
         raise ConnectionRefusedError()
@@ -173,45 +190,29 @@ def test_pen_and_signatures_from_the_tablet_are_kept(monkeypatch, tmp_path):
     assert [s["width"] for s in signatures.load()[0]] == [120.0]
 
 
-def test_the_first_answer_to_pairing_counts(monkeypatch):
-    # Closing the dialog after "Pair" answers "close" too: it must not undo the pairing.
-    import threading
+def test_only_the_tablet_in_use_signs(monkeypatch, tmp_path):
+    # Another tablet's app on the network, paired or not, gets nothing.
     app, signing, _, _ = make(monkeypatch)
-    shown = []
-    monkeypatch.setattr(signing, "_show_pairing", lambda tablet, code: shown.append(code))
-    monkeypatch.setattr(signing, "_pairing_over", lambda code: None)
-    results = []
-    askers = [threading.Thread(target=lambda: results.append(signing._ask_pairing("Tab", "123456")))
-              for _ in range(2)]  # two PDFs at once: the same tablet, the same code
-    for t in askers:
-        t.start()
-    assert spin(lambda: shown) and spin(lambda: "123456" in signing.pairing)
-    signing._answer_pairing("123456", True)
-    signing._answer_pairing("123456", False)
-    for t in askers:
-        t.join(5)
-    assert results == [True, True] and shown == ["123456"]
+    app.nearby.app_on = ("10.0.0.7", 40000, "Someone's Tab", "ffff" + "0" * 12)
+    monkeypatch.setattr(companion, "sign", lambda *a, **k: (_ for _ in ()).throw(AssertionError("sent")))
+    signing.request(str(tmp_path / "form.pdf"))
+    assert app.controller.starts == 1  # Second Screen, which checks the tablet itself
 
 
-def test_a_paired_app_comes_first():
-    from plusone.nearby import Nearby
-    nearby = Nearby()
-    nearby.companions = {"a": ("10.0.0.2", 1000, "Stranger", "aaaa"), "b": ("10.0.0.9", 2000, "Tab", "bbbb")}
-    assert nearby.companion() == ("10.0.0.2", 1000, "Stranger", "aaaa")
-    assert nearby.companion(["bbbb" + "0" * 60]) == ("10.0.0.9", 2000, "Tab", "bbbb")
+def test_nothing_is_sent_without_a_paired_tablet(monkeypatch, tmp_path):
+    app, signing, _, notes = make(monkeypatch, paired=False)
+    app.nearby.app_on = ("10.0.0.2", 40000, "Galaxy Tab", APP)
+    monkeypatch.setattr(companion, "sign", lambda *a, **k: (_ for _ in ()).throw(AssertionError("sent")))
+    signing.request(str(tmp_path / "form.pdf"))
+    assert app.notes == ["sign"] and app.controller.starts == 0 and not signing.queue
 
 
-def test_the_tablet_chosen_signs():
-    # Asked for in Files, chosen in the window, the last one used: in that
-    # order, among those on the network.
+def test_one_app_per_tablet():
     from plusone.nearby import Nearby
     nearby = Nearby()
     nearby.companions = {"a": ("10.0.0.2", 1000, "Kitchen", "aaaa"), "b": ("10.0.0.9", 2000, "Office", "bbbb"),
                          "b6": ("10.0.0.9", 2000, "Office", "bbbb")}  # the same app on two interfaces
     assert [a[0] for a in nearby.apps()] == ["aaaa", "bbbb"]
-    paired = ["aaaa" + "0" * 60, "bbbb" + "0" * 60]
-    assert nearby.companion(paired, ["bbbb", "aaaa"])[3] == "bbbb"
-    assert nearby.companion(paired, ["cccc", "aaaa"])[3] == "aaaa"  # cccc is not around
 
 
 def test_a_dropped_link_finds_the_same_tablet_again(monkeypatch):
@@ -221,6 +222,5 @@ def test_a_dropped_link_finds_the_same_tablet_again(monkeypatch):
     app, signing, _, _ = make(monkeypatch)
     app.nearby = Nearby()
     app.nearby.companions = {"a": ("10.0.0.2", 1000, "Kitchen", "aaaa"), "b": ("10.0.0.9", 2001, "Office", "bbbb")}
-    app.settings.sign_tablet = "aaaa"
     assert signing._locate_app("bbbb") == [("10.0.0.9", 2001)]
     assert signing._locate_app("cccc") is None

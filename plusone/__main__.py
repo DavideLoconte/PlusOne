@@ -58,6 +58,9 @@ def main():
                         bitrate=args.bitrate, encoder=args.encoder, use_adb=not args.no_adb,
                         touch=not args.no_input, test_pattern=args.test, peer=args.peer,
                         reconnect=not args.once)
+    # The tablet in use is the window's: the only one that gets the desktop.
+    from .app import load_settings
+    settings.tablet = load_settings().tablet
 
     def on_state(state, template, args):
         if state == State.IDLE or (state == State.ERROR and not controller.running):

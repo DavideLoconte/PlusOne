@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">Your Samsung Galaxy Tab as a wireless second monitor for GNOME on Linux.<br>
-No app to install on the tablet: it talks to the <b>Second Screen</b> feature Samsung ships for Windows PCs.</p>
+It talks to the <b>Second Screen</b> feature Samsung ships for Windows PCs, and its small app on the tablet proves the tablet is yours.</p>
 
 ---
 
@@ -19,8 +19,11 @@ No app to install on the tablet: it talks to the <b>Second Screen</b> feature Sa
 
 - **Real extended display.** A virtual monitor appears in *Settings → Displays*;
   drag windows onto the tablet like onto any other screen.
-- **Nothing to install on the tablet.** Uses the built-in *Second screen* quick
-  settings tile (One UI).
+- **Only your tablet.** Pair it once in Plus One's window: both screens show
+  the same code. Before any picture leaves the PC, Plus One asks Plus One's
+  app on the tablet, over that same Wi-Fi Direct link, to prove it is that
+  tablet: another device calling itself your tablet gets nothing. The video
+  itself comes from the built-in *Second screen* tile (One UI).
 - **Low latency.** About 50 ms end to end in our measurements, 60 fps, hardware
   H.264 (NVENC, VA-API) or x264.
 - **Touch and S Pen.** Fingers drive the desktop; the S Pen becomes a real Linux
@@ -74,7 +77,7 @@ mouse; to leave it, `sudo gpasswd -d $USER plus-one`.
 
 The *Tablet* Quick Settings toggle (a GNOME Shell extension) is included but
 off: after logging out and back in, turn it on in Plus One's window
-(*Options → Quick Settings toggle*) or in the *Extensions* app. Plus One never
+(*Preferences → General → Quick Settings toggle*) or in the *Extensions* app. Plus One never
 enables shell extensions by itself.
 
 Uninstall with `sudo apt remove plus-one`.
@@ -132,8 +135,16 @@ sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gstreamer-1.0 gir
 
 ## Usage
 
+Once: install Plus One's app on the tablet (`plus-one-companion_*.apk` from
+the release, Android 13 or later) and open it. Then in Plus One's window on
+the PC, **Pair a tablet**: pick yours from the list of tablets with the app
+on your Wi-Fi, check that both screens show the same six-digit code and
+confirm on both. Pair more tablets with **Pair another tablet…** under the
+tablet's name, which also picks the one in use; **Paired tablets** in the
+menu forgets one.
+
 1. Click **Tablet** in GNOME's Quick Settings (top-right corner), or press
-   **Connect** in the Plus One window.
+   **Use as second screen** in the Plus One window.
 2. On the tablet, swipe down for quick settings and tap **Second screen**.
 3. A few seconds later the tablet shows a new monitor, to the right of your
    other screens. Arrange it in *Settings → Displays*.
@@ -162,8 +173,9 @@ Right-click a PDF in Files → **Sign on Tablet** (or *Open With → Sign on
 Tablet*, or launch *Sign on Tablet* from the app grid and pick a file). Files
 offers it while a tablet is on your network or connected: Plus One sees it
 when the tablet announces itself, which Android's Quick Share and KDE Connect
-both do. **Options → Sign on Tablet** in the Plus One window turns it off
-everywhere, and shows which tablet Plus One sees.
+both do. **Preferences → Signing → Sign on Tablet** in the Plus One window
+turns it off everywhere. The PDF goes to the tablet in use only, and only to
+a paired one; **Sign a PDF…** in the window does the same.
 
 1. If the tablet is not connected yet, Plus One connects it: tap **Second
    screen** on the tablet.
@@ -180,8 +192,8 @@ stabilization (how much the ink smooths the pen's movement); Plus One
 remembers them. **My signature** places your saved signature with one tap;
 its arrow lists them all: pick another, remove one, or draw a new one on a
 pad (with the pen or the mouse). The first time, **Keep as my signature**
-also saves what you just drew. **Options → My signatures** in the Plus One
-window manages them too. **Date** and **Text** add a date or a few words
+also saves what you just drew. **My signatures** in the Plus One window's
+menu manages them too. **Date** and **Text** add a date or a few words
 where you tap; **Undo**, **Clear page**, page arrows and **Fit**.
 
 What you place comes selected, in a blue box: drag it from inside, turn it
@@ -209,10 +221,9 @@ it on the home network.
    when Android asks), and open **Plus One** once.
 2. In the app, allow it to **display over other apps**, so a PDF sent from
    the PC opens by itself (without it, a notification to tap).
-3. Sign on Tablet from Files as above. The first time, the PC and the tablet
-   both show the same six-digit code: confirm it on both. From then on they
+3. Pair it in Plus One's window on the PC (see *Usage*). From then on they
    recognize each other, and nothing else on the network can send PDFs to
-   the tablet or read what you sign.
+   the tablet or read what you sign. Signing never pairs by itself.
 
 The app has the same tools (pen colour and thickness, your signatures,
 date, text, the S Pen's button to erase, undo, pinch to zoom). The pen and
@@ -224,10 +235,9 @@ quiet notification; **Ready in the background** in the app turns that off (it
 is then ready for 10 minutes after you open it). If the Wi-Fi drops while you
 sign, Plus One finds the app again and gets the signature when you are done.
 
-**More than one tablet.** With two or more tablets running the app on the
-network, *Sign on Tablet* in Files asks which; **Options → Tablet for
-signing** in the window picks one for good, or *Automatic*, the last one
-used.
+**More than one tablet.** Pair each of them; the one in use, picked under
+its name in the window, is the one that gets the PDFs and the desktop.
+Other tablets on the network, with the app or not, get nothing.
 
 **Several pages.** The pages lie one under the other, as in a note app: a
 finger scrolls through them, and the pen signs on whichever page it touches.
@@ -257,6 +267,9 @@ buffering (measured roughly 90 → 50 ms together with the other tweaks):
 If the tablet is connected over adb (see below) Plus One writes this file for you.
 
 ### Settings
+
+In the window's menu, **Preferences**: *Screen* (resolution, quality, touch,
+adb), *Signing* (Sign on Tablet in Files, your signatures) and *General*.
 
 | Setting | |
 |---|---|
@@ -298,7 +311,10 @@ latency.
 | Problem | What to do |
 |---|---|
 | *“Close GNOME Network Displays”* | It uses the same Wi-Fi Direct device. Quit it. |
-| Never connects | Reopen Second Screen on the tablet. A VPN with a firewall/kill switch can block the link; turn it off to check. Open *Log* at the bottom of the window. |
+| Never connects | Reopen Second Screen on the tablet. A VPN with a firewall/kill switch can block the link; turn it off to check. Open *Log* in the window's menu. |
+| *“Plus One does not answer on …”* | Plus One's app must be running on the tablet: open it (and keep *Ready in the background* on in the app). The desktop is only sent once it proved the tablet is yours. |
+| *“This is not …: the desktop was not sent”* | Something else came over Wi-Fi Direct as your tablet, or the tablet in use is another one: check its name in the window. |
+| *“… no longer knows this PC”* | The app forgot this PC (reinstalled, or *Forget* on the tablet): pair it again from the window. |
 | *“Connection is not secure”* on the tablet | Shown at every connection: the stream is not HDCP-protected. Harmless. |
 | Picture squashed or with black bars | Use one of the listed modes; the tablet lays out the picture by the negotiated mode. |
 | Stutter / artefacts | Lower *Quality*, move closer, avoid 2.4 GHz congestion. Packet loss shows in the log. |
@@ -348,10 +364,11 @@ What comes next, and the convenience rules every feature follows, is in
 plusone/          the app: app.py (background app, D-Bus, notifications), gui.py (window),
                   engine.py (ties display, p2p, rtsp, media, uibc, pen together),
                   signing.py + sign.py + pdf.py + ink.py + modeler.py (Sign on Tablet),
-                  nearby.py (tablets on the network)
+                  nearby.py (tablets on the network), tablets.py (the paired ones, the one in
+                  use, and the check that Second Screen's tablet is it), companion.py (the app's protocol)
 data/gnome-shell/ the Quick Settings extension
 data/nautilus/    the Files context-menu entry
-android/          the companion app for the tablet (Kotlin, 0.5, in progress)
+android/          the companion app for the tablet (Kotlin)
 tests/            unit and protocol tests (a scripted fake tablet, no hardware needed)
 packaging/        build-deb.sh and maintainer scripts
 tools/            CI scripts; tools/re/ has the reverse-engineering and measurement helpers

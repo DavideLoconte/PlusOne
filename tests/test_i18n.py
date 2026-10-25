@@ -14,6 +14,10 @@ def strings_in(filename):
     tree = ast.parse(open(os.path.join(ROOT, filename)).read())
     found = set()
     for node in ast.walk(tree):
+        # tablets.py says why not as (template, args)
+        if isinstance(node, ast.Return) and isinstance(node.value, ast.Tuple) and node.value.elts \
+                and isinstance(node.value.elts[0], ast.Constant) and isinstance(node.value.elts[0].value, str):
+            found.add(node.value.elts[0].value)
         if not isinstance(node, ast.Call):
             continue
         name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
@@ -31,7 +35,7 @@ def app_constants():
     from_module = set()
     tree = ast.parse(open(os.path.join(ROOT, "app.py")).read())
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") in ("TITLES", "IDLE_HINT"):
+        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "TITLES":
             for const in ast.walk(node.value):
                 if isinstance(const, ast.Constant) and isinstance(const.value, str) \
                         and not const.value.endswith("-symbolic"):
@@ -41,7 +45,8 @@ def app_constants():
 
 @pytest.mark.parametrize("text", sorted(
     (strings_in("gui.py") | strings_in("app.py") | strings_in("engine.py") | strings_in("sign.py")
-     | strings_in("signing.py") | strings_in("signature_pad.py") | app_constants() | {NOT_ANSWERING})
+     | strings_in("signing.py") | strings_in("signature_pad.py") | strings_in("tablets.py") | app_constants()
+     | {NOT_ANSWERING})
     - i18n.NEUTRAL))
 def test_has_italian(text):
     assert text in i18n._IT, f"missing Italian translation for {text!r}"

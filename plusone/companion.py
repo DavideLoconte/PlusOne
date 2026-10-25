@@ -1,9 +1,11 @@
 """The companion app on the tablet (android/): it signs PDFs with ink drawn
 on the tablet itself, under the nib, instead of through Second Screen.
 
-The app listens on the home network and says so with mDNS (_plusone._tcp,
-found by nearby.py). Plus One connects over TLS, each side presenting a
-self-signed certificate. The first time, both screens show a six-digit code
+The app listens on the home network (and on Wi-Fi Direct, during Second
+Screen) at APP_PORT and says so with mDNS (_plusone._tcp, found by
+nearby.py). Plus One connects over TLS, each side presenting a self-signed
+certificate. Pairing happens only when the user asks for it, choosing the
+tablet in Plus One's window (pair()): both screens show a six-digit code
 made from the two certificates and the user confirms it on both (like
 Bluetooth's numeric comparison); then each side remembers the other's
 certificate. The code also mixes a random number from each side, the app's
@@ -32,7 +34,8 @@ from gi.repository import GLib
 
 from . import log, write_private
 
-PROTOCOL = 2
+PROTOCOL = 3
+APP_PORT = 47236             # the app's (CompanionService.kt PORT), unless it was taken
 CONNECT_TIMEOUT = 5          # seconds
 PAIRING_TIMEOUT = 120        # seconds for the user to compare the codes
 IO_TIMEOUT = 30              # seconds for a message to go through
@@ -68,10 +71,11 @@ def fingerprint(der):
     return hashlib.sha256(der).hexdigest()
 
 
-def identity(directory=CONFIG):
+def identity(directory=None):
     """(certificate path, key path, certificate DER) of this PC, made on
     first use with openssl (on every Ubuntu, and in the GNOME runtime): an
     EC P-256 key and a self-signed certificate."""
+    directory = directory or CONFIG
     cert, key = os.path.join(directory, "cert.pem"), os.path.join(directory, "key.pem")
     with _making_identity:  # two PDFs at once: one key, one certificate
         if not (os.path.exists(cert) and os.path.exists(key)):
@@ -90,26 +94,46 @@ def identity(directory=CONFIG):
 
 
 class Paired:
-    """Tablets the user paired with: certificate fingerprint -> name."""
+    """Tablets the user paired with, by certificate fingerprint: their name,
+    and their Wi-Fi Direct address once Second Screen came from them."""
 
-    def __init__(self, directory=CONFIG):
-        self.path = os.path.join(directory, "paired.json")
+    def __init__(self, directory=None):
+        self.path = os.path.join(directory or CONFIG, "paired.json")
 
-    def all(self):
+    def entries(self):
+        """{fingerprint: {"name": ..., maybe "wifi_direct": ...}}."""
         try:
             with open(self.path) as f:
                 data = json.load(f)
-            return data if isinstance(data, dict) else {}
         except (OSError, ValueError):
             return {}
+        entries = {}
+        for fp, entry in (data.items() if isinstance(data, dict) else ()):
+            if isinstance(entry, str):
+                entry = {"name": entry}  # 0.5 kept the name only
+            if isinstance(entry, dict) and isinstance(entry.get("name"), str):
+                entries[fp] = {key: value for key, value in entry.items()
+                               if key == "name" or (key == "wifi_direct" and isinstance(value, str))}
+        return entries
+
+    def all(self):
+        """{fingerprint: name}."""
+        return {fp: entry["name"] for fp, entry in self.entries().items()}
 
     def add(self, fp, name):
-        data = self.all()
-        data[fp] = name
+        data = self.entries()
+        data[fp] = dict(data.get(fp, {}), name=name)
         write_private(self.path, data)
 
+    def learn(self, fp, **fields):
+        """What was found out about a paired tablet (wifi_direct=its address)."""
+        data = self.entries()
+        if fp in data and any(data[fp].get(key) != value for key, value in fields.items()):
+            data[fp].update(fields)
+            write_private(self.path, data)
+
     def forget(self, fp):
-        data = self.all()
+        data = self.entries()
         if data.pop(fp, None) is not None:
             write_private(self.path, data)
 
@@ -177,8 +201,7 @@ MAX_JOBS = 24        # PDFs waiting on the tablet at once (the app takes 32 conn
 class _Turns:
     """PDFs sent together (five selected in Files) go to the tablet one at a
     time, in the order they were asked for: the tablet's queue keeps that
-    order, and a first pairing asks once, the others finding the tablet
-    paired."""
+    order."""
 
     def __init__(self):
         self._changed = threading.Condition()
@@ -210,11 +233,19 @@ def next_turn():
 
 
 def _connect(target, paired, ask_pairing, expect=None):
-    """(socket, wire, tablet name) of a TLS link to the app at target, the
-    tablet paired (asking the user through ask_pairing if needed, or raising
-    PairingRefused if ask_pairing is None). expect: the id the app was
-    announced with; if it is a paired tablet's, that tablet's certificate is
-    required (Impostor otherwise)."""
+    """(socket, wire, tablet name) of _handshake()."""
+    sock, wire, name, _fp, _hello = _handshake(target, paired, ask_pairing, expect)
+    return sock, wire, name
+
+
+def _handshake(target, paired, ask_pairing, expect=None, pin=None, timeout=CONNECT_TIMEOUT):
+    """(socket, wire, tablet name, its certificate's fingerprint, its hello)
+    of a TLS link to the app at target, the tablet paired: pairing if needed
+    when ask_pairing is given (the user chose this tablet to pair with; it
+    asks them to compare the code), else raising PairingRefused. expect:
+    the id the app was announced with; if it is a paired tablet's, that
+    tablet's certificate is required (Impostor otherwise). pin: the only
+    certificate fingerprint accepted."""
     cert, key, ours = identity()
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.minimum_version = ssl.TLSVersion.TLSv1_3
@@ -223,7 +254,7 @@ def _connect(target, paired, ask_pairing, expect=None):
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
     context.load_cert_chain(cert, key)
-    raw = socket.create_connection(target, timeout=CONNECT_TIMEOUT)
+    raw = socket.create_connection(target, timeout=timeout)
     try:
         sock = context.wrap_socket(raw)
     except Exception:
@@ -244,9 +275,12 @@ def _connect(target, paired, ask_pairing, expect=None):
         pinned = [p for p in known if expect and p.startswith(expect)]
         if pinned and fp not in pinned:
             raise Impostor(f"an app at {target[0]} announced as a paired tablet, with another certificate")
+        if pin and fp != pin:
+            raise Impostor(f"at {target[0]}, an app that is not the paired tablet's")
         known = fp in known
         sock.settimeout(IO_TIMEOUT)
-        wire.send({"type": "hello", "name": socket.gethostname(), "version": PROTOCOL, "paired": known})
+        wire.send({"type": "hello", "name": socket.gethostname(), "version": PROTOCOL, "paired": known,
+                   "pair": ask_pairing is not None})
         hello = small()
         name = str(hello.get("name") or "tablet")[:MAX_NAME]
         if hello.get("version") != PROTOCOL:
@@ -273,10 +307,61 @@ def _connect(target, paired, ask_pairing, expect=None):
                 raise PairingRefused(name)
             paired.add(fp, name)
             sock.settimeout(IO_TIMEOUT)
-        return sock, wire, name
+        return sock, wire, name, fp, hello
     except Exception:
         sock.close()
         raise
+
+
+def pair(targets, ask, paired=None):
+    """Blocking: pairs with the app at targets (the addresses of the tablet
+    the user picked), ask(name, code) -> bool asking them to compare the
+    code, which the tablet shows too. Returns (fingerprint, name); raises
+    PairingRefused if either side said no, OSError & co. if it did not answer."""
+    paired = paired or Paired()
+    error = None
+    for target in targets:
+        try:
+            sock, wire, name, fp, _hello = _handshake(target, paired, ask)
+        except (OSError, EOFError, ValueError) as e:
+            error = e
+            continue
+        with sock:
+            try:
+                wire.send({"type": "bye"})
+            except OSError:
+                pass
+        return fp, name
+    raise error or OSError("no address for the tablet")
+
+
+def verify(address, tablet, ports, paired=None, timeout=3):
+    """Whether the device at address, the other end of a Wi-Fi Direct group,
+    is the paired tablet whose certificate has the fingerprint tablet: its
+    app answers there (at one of ports), with that certificate, knows this
+    PC, and says it was reached at address, not through someone passing the
+    connection on from elsewhere. Returns the tablet's name; raises OSError
+    & co. (no app answering), Impostor, PairingRefused (the tablet does not
+    know this PC) or Incompatible."""
+    paired = paired or Paired()
+    error = None
+    for port in dict.fromkeys(ports):
+        try:
+            sock, wire, name, _fp, hello = _handshake((address, port), paired, None, pin=tablet,
+                                                      timeout=timeout)
+        except (OSError, EOFError, ValueError) as e:
+            error = e
+            continue
+        with sock:
+            at = str(hello.get("at", ""))
+            if at != address:
+                raise Impostor(f"{name} was reached at {at or 'an address it does not say'}, not {address}")
+            try:
+                wire.send({"type": "bye"})
+            except OSError:
+                pass
+        return name
+    raise error or OSError("no port to try")
 
 
 def _answer(wire, job, on_opened, name, on_signatures):
@@ -309,15 +394,15 @@ def _answer(wire, job, on_opened, name, on_signatures):
             return (marks if isinstance(marks, dict) else {"pages": []}) if kind == "signed" else None
 
 
-def sign(target, path, ask_pairing, paired=None, on_opened=None, pen=None, signatures=None,
+def sign(target, path, paired=None, on_opened=None, pen=None, signatures=None,
          on_signatures=None, locate=None, resume_for=RESUME_FOR, turn=None, expect=None):
     """Blocking (run it in a thread): send the PDF at path to the app at
     target ((host, port), or a list of them: the addresses the app was
     announced at, tried in turn) and wait for the user to sign it there.
     expect: the id it was announced with (_connect). Returns the
     result ({"pages": [...], "pen": ..., maybe "signature": ...}) or None if
-    the user cancelled. ask_pairing(name, code) -> bool asks this PC's user
-    (from this thread) when pairing is needed. pen ({"color", "width"}) and
+    the user cancelled. Only to a paired tablet: pairing is pair()'s, when
+    the user chooses a tablet in the window. pen ({"color", "width"}) and
     the saved signatures (signatures.message()) go along, so the tablet
     signs like the PC; on_signatures(the tablet's list) runs with the answer.
 
@@ -336,7 +421,7 @@ def sign(target, path, ask_pairing, paired=None, on_opened=None, pen=None, signa
         _turns.wait(turn)
         _places.acquire()
         try:
-            sock, wire, name, job = _send(target, path, paired, ask_pairing, pen, signatures, expect)
+            sock, wire, name, job = _send(target, path, paired, pen, signatures, expect)
         except BaseException:
             _places.release()
             raise
@@ -363,9 +448,9 @@ def _connect_any(targets, paired, ask_pairing, expect):
     raise error or OSError("no address for the tablet")
 
 
-def _send(target, path, paired, ask_pairing, pen, signatures, expect):
+def _send(target, path, paired, pen, signatures, expect):
     """(socket, wire, tablet name, job id) once the PDF is on the tablet."""
-    sock, wire, name = _connect_any(target, paired, ask_pairing, expect)
+    sock, wire, name = _connect_any(target, paired, None, expect)
     job = uuid.uuid4().hex
     try:
         with open(path, "rb") as f:

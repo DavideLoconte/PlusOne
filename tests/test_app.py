@@ -69,11 +69,10 @@ def test_a_broken_settings_file_is_not_trusted(tmp_path):
         path.write_text(content)
         assert load_settings(str(path)) == Settings()
     path.write_text('{"background": "no", "bitrate": "9999; rm", "fps": true, "encoder": 3, '
-                    '"known_sinks": ["Tab", 1], "sign_tablet": "abcd", "touch": false}')
+                    '"tablet": 7, "known_sinks": ["Tab"], "touch": false}')
     settings = load_settings(str(path))
     assert settings.background is True and settings.bitrate == Settings().bitrate and settings.fps == 60
-    assert settings.encoder == "auto" and settings.known_sinks == []
-    assert settings.sign_tablet == "abcd" and settings.touch is False
+    assert settings.encoder == "auto" and settings.tablet is None and settings.touch is False
 
 
 def test_settings_are_private(tmp_path, monkeypatch):
@@ -85,18 +84,20 @@ def test_settings_are_private(tmp_path, monkeypatch):
     assert os.stat(app.CONFIG).st_mode & 0o077 == 0
 
 
-def test_forgetting_a_tablet(tmp_path, monkeypatch):
+def test_forgetting_the_tablet_in_use_ends_its_session(tmp_path):
     import types
     from plusone import app, companion
     from plusone.engine import Settings
-    monkeypatch.setattr(app, "CONFIG", str(tmp_path / "settings.json"))
+    from plusone.tablets import Tablets
     paired = companion.Paired(str(tmp_path))
     kitchen, office = "abcd" * 16, "ef" * 32
     paired.add(kitchen, "Kitchen")
     paired.add(office, "Office")
-    monkeypatch.setattr(companion, "Paired", lambda: paired)
-    fake = types.SimpleNamespace(settings=Settings(sign_tablet=kitchen[:16], last_tablet=office[:16]))
+    stopped = []
+    fake = types.SimpleNamespace(tablets=Tablets(Settings(tablet=kitchen), paired=paired),
+                                 controller=types.SimpleNamespace(stop=lambda: stopped.append(True)),
+                                 _on_nearby=lambda: None)
+    app.PlusOneApp.forget_tablet(fake, office)
+    assert stopped == [] and paired.all() == {kitchen: "Kitchen"}
     app.PlusOneApp.forget_tablet(fake, kitchen)
-    assert paired.all() == {office: "Office"}
-    assert fake.settings.sign_tablet is None and fake.settings.last_tablet == office[:16]
-    assert app.load_settings(app.CONFIG).sign_tablet is None
+    assert stopped == [True] and paired.all() == {} and fake.tablets.active() is None

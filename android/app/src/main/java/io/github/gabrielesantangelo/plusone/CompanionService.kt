@@ -93,7 +93,12 @@ class CompanionService : Service() {
 
     private fun serve() {
         val socket = try {
-            Identity.sslContext().serverSocketFactory.createServerSocket(0) as SSLServerSocket
+            val factory = Identity.sslContext().serverSocketFactory
+            // A port the PC knows: over Wi-Fi Direct it checks who the
+            // tablet is before mDNS has said where the app listens.
+            (try { factory.createServerSocket(PORT) } catch (e: java.net.BindException) {
+                factory.createServerSocket(0)
+            }) as SSLServerSocket
         } catch (e: Exception) {
             Log.e(TAG, "cannot listen", e)
             return
@@ -138,7 +143,8 @@ class CompanionService : Service() {
         (getSystemService(NSD_SERVICE) as NsdManager).registerService(info, NsdManager.PROTOCOL_DNS_SD, listener)
     }
 
-    /** One PC: hello, pairing if either side does not know the other, then jobs. */
+    /** One PC: hello, pairing if either side does not know the other and the
+     * PC asks to pair (its user chose this tablet), then jobs. */
     private fun handle(socket: SSLSocket) {
         busy.incrementAndGet()
         lastUse = System.currentTimeMillis()
@@ -164,11 +170,16 @@ class CompanionService : Service() {
                 val hello = wire.receive(Wire.UNPAIRED_HEADER)
                 require(hello.optString("type") == "hello") { "expected hello" }
                 val pcName = hello.optString("name", "PC").take(64)
+                // "at": the address the PC reached, so it can tell this
+                // tablet answered itself (over Wi-Fi Direct, say), not
+                // through someone passing the connection on.
                 wire.send(JSONObject().put("type", "hello").put("name", deviceName(this))
-                    .put("version", PROTOCOL).put("paired", known))
+                    .put("version", PROTOCOL).put("paired", known).put("at", address(socket.localAddress)))
                 // Another version: the PC sees ours and says so to its user.
                 if (hello.optInt("version") != PROTOCOL) return
                 if (!known || !hello.optBoolean("paired")) {
+                    // Only when the user pairs, in Plus One's window on the PC.
+                    if (!hello.optBoolean("pair")) return
                     if (!pair(socket, wire, pc, pcName, guard)) return
                     Paired.add(this, fingerprint, pcName)
                 }
@@ -245,6 +256,10 @@ class CompanionService : Service() {
         return accepted && answer.get() == "pair-ok"
     }
 
+    /** An address as the PC writes it: IPv4 without the "::ffff:" prefix, no scope. */
+    private fun address(address: java.net.InetAddress): String =
+        address.hostAddress.orEmpty().substringBefore('%').removePrefix("::ffff:")
+
     private fun hex(s: String): ByteArray? =
         if (s.length % 2 != 0 || !s.all { it in "0123456789abcdef" }) null
         else ByteArray(s.length / 2) { s.substring(2 * it, 2 * it + 2).toInt(16).toByte() }
@@ -301,7 +316,8 @@ class CompanionService : Service() {
     companion object {
         const val TAG = "PlusOne"
         const val SERVICE_TYPE = "_plusone._tcp"
-        const val PROTOCOL = 2
+        const val PROTOCOL = 3
+        const val PORT = 47236                 // companion.py APP_PORT; another if it is taken
         const val MAX_CONNECTIONS = 32
         const val MAX_UNPAIRED = 4             // connections of peers not yet known, at a time
         const val HANDSHAKE_DEADLINE = 20_000L // ms for an unknown peer's whole handshake

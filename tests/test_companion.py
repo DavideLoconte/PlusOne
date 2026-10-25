@@ -9,6 +9,7 @@ import struct
 import threading
 
 import pytest
+from conftest import free_port
 
 from plusone import companion
 
@@ -93,9 +94,9 @@ class FakeApp:
     """The tablet's app as far as the protocol goes (CompanionService.kt):
     each connection runs one of the scripts given, in order."""
 
-    def __init__(self, tmp_path, scripts, version=companion.PROTOCOL, paired=True):
+    def __init__(self, tmp_path, scripts, version=companion.PROTOCOL, paired=True, at=None):
         self.cert, self.key, self.der = companion.identity(str(tmp_path / "app"))
-        self.scripts, self.version, self.paired = list(scripts), version, paired
+        self.scripts, self.version, self.paired, self.at = list(scripts), version, paired, at
         self.listener = socket.socket()
         self.listener.bind(("127.0.0.1", 0))
         self.listener.listen(4)
@@ -114,9 +115,11 @@ class FakeApp:
                 with context.wrap_socket(raw, server_side=True) as sock:
                     wire = companion.Wire(sock)
                     hello, _ = receive(wire)
-                    wire.send({"type": "hello", "name": "Tab", "version": self.version, "paired": self.paired})
+                    wire.send({"type": "hello", "name": "Tab", "version": self.version, "paired": self.paired,
+                               "at": self.at or sock.getsockname()[0]})
                     if not (self.paired and hello["paired"]) and self.version == companion.PROTOCOL:
-                        self._pair(wire, sock.getpeercert(binary_form=True), script)
+                        if hello.get("pair"):  # only when the user pairs, from the window
+                            self._pair(wire, sock.getpeercert(binary_form=True), script)
                     else:
                         script(wire)
             except Exception as e:  # noqa: BLE001 - shown by the test
@@ -168,11 +171,12 @@ def signs(marks, seen=None):
 def test_pairing_shows_the_same_code_on_both_sides(tmp_path, pc):
     path, paired = pc
     marks = {"pages": []}
-    app = FakeApp(tmp_path, [signs(marks)], paired=False)
+    app = FakeApp(tmp_path, [lambda wire: None, signs(marks)], paired=False)
     asked = []
-    result = companion.sign(app.target, path, lambda name, code: asked.append(code) or True, paired=paired)
-    assert result == marks and asked == app.codes and len(asked[0]) == 6
-    assert companion.fingerprint(app.der) in paired.all()
+    fp, name = companion.pair([app.target], lambda name, code: asked.append(code) or True, paired=paired)
+    assert asked == app.codes and len(asked[0]) == 6 and name == "Tab"
+    assert fp == companion.fingerprint(app.der) and paired.all() == {fp: "Tab"}
+    assert companion.sign(app.target, path, paired=paired) == marks
 
 
 def test_a_number_the_app_did_not_commit_to_is_refused(tmp_path, pc):
@@ -181,7 +185,7 @@ def test_a_number_the_app_did_not_commit_to_is_refused(tmp_path, pc):
     script.commit = hashlib.sha256(b"something else").hexdigest()
     app = FakeApp(tmp_path, [script], paired=False)
     with pytest.raises(companion.PairingRefused):
-        companion.sign(app.target, path, lambda name, code: True, paired=paired)
+        companion.pair([app.target], lambda name, code: True, paired=paired)
     assert not paired.all()
 
 
@@ -190,7 +194,7 @@ def test_another_version_of_the_app(tmp_path, pc):
     app = FakeApp(tmp_path, [lambda wire: None], version=companion.PROTOCOL + 1)
     paired.add(companion.fingerprint(app.der), "Tab")
     with pytest.raises(companion.Incompatible):
-        companion.sign(app.target, path, None, paired=paired)
+        companion.sign(app.target, path, paired=paired)
 
 
 def test_a_silent_link_is_found_dead(monkeypatch):
@@ -226,17 +230,17 @@ def test_a_dropped_link_is_resumed(tmp_path, pc):
 
     app = FakeApp(tmp_path, [drops, resumed])
     paired.add(companion.fingerprint(app.der), "Tab")
-    result = companion.sign(app.target, path, ask_pairing=None, paired=paired, locate=lambda: app.target,
+    result = companion.sign(app.target, path, paired=paired, locate=lambda: app.target,
                             signatures=ours, on_signatures=got.append)
     assert result == marks and got == [theirs] and not app.errors
 
 
-def test_a_batch_pairs_once_and_arrives_in_order(tmp_path, pc):
+def test_a_batch_arrives_in_order(tmp_path, pc):
     # Five PDFs selected in Files: each its own connection, but one after
-    # the other in the order asked for, so the first pairing asks once and
-    # the tablet's queue keeps that order, whichever thread runs first.
+    # the other in the order asked for, so the tablet's queue keeps that
+    # order, whichever thread runs first.
     _path, paired = pc
-    titles, asked = [], []
+    titles = []
 
     def queued(wire):
         message, _ = receive(wire)
@@ -248,26 +252,27 @@ def test_a_batch_pairs_once_and_arrives_in_order(tmp_path, pc):
     for i in range(3):
         (tmp_path / f"doc{i}.pdf").write_bytes(b"%PDF-1.7")
         paths.append(str(tmp_path / f"doc{i}.pdf"))
-    app = FakeApp(tmp_path, [queued] * 3, paired=False)
+    app = FakeApp(tmp_path, [queued] * 3)
+    paired.add(companion.fingerprint(app.der), "Tab")
     turns = [companion.next_turn() for _ in paths]
-    threads = [threading.Thread(target=companion.sign, args=(app.target, path, lambda n, c: asked.append(c) or True),
+    threads = [threading.Thread(target=companion.sign, args=(app.target, path),
                                 kwargs={"paired": paired, "turn": turn})
                for path, turn in zip(paths, turns)]
     for thread in reversed(threads):
         thread.start()
     for thread in threads:
         thread.join(10)
-    assert titles == ["doc0.pdf", "doc1.pdf", "doc2.pdf"] and len(asked) == 1 and not app.errors
+    assert titles == ["doc0.pdf", "doc1.pdf", "doc2.pdf"] and not app.errors
 
 
 def test_a_turn_goes_on_when_its_pdf_fails(tmp_path, pc):
     path, paired = pc
     first = companion.next_turn()
     with pytest.raises(OSError):
-        companion.sign(("127.0.0.1", 1), str(tmp_path / "missing.pdf"), None, paired=paired, turn=first)
+        companion.sign(("127.0.0.1", 1), str(tmp_path / "missing.pdf"), paired=paired, turn=first)
     app = FakeApp(tmp_path, [signs({"pages": []})])
     paired.add(companion.fingerprint(app.der), "Tab")
-    assert companion.sign(app.target, path, None, paired=paired) == {"pages": []}
+    assert companion.sign(app.target, path, paired=paired) == {"pages": []}
 
 
 def test_an_impostor_at_a_paired_tablets_address(tmp_path, pc):
@@ -277,11 +282,75 @@ def test_an_impostor_at_a_paired_tablets_address(tmp_path, pc):
     real = FakeApp(tmp_path / "real", [signs({"pages": []})])
     paired.add(companion.fingerprint(real.der), "Tab")
     impostor = FakeApp(tmp_path / "impostor", [lambda wire: None], paired=False)
-    asked = []
     expect = companion.fingerprint(real.der)[:16]
-    result = companion.sign([impostor.target, real.target], path, lambda name, code: asked.append(code) or True,
-                            paired=paired, expect=expect)
-    assert result == {"pages": []} and asked == []
+    result = companion.sign([impostor.target, real.target], path, paired=paired, expect=expect)
+    assert result == {"pages": []}
+
+
+def test_signing_never_pairs(tmp_path, pc):
+    # Only the window pairs, when the user picks the tablet: a PDF to an
+    # app that does not know this PC goes nowhere, and no code is shown.
+    path, paired = pc
+    app = FakeApp(tmp_path, [signs({"pages": []})], paired=False)
+    with pytest.raises(companion.PairingRefused):
+        companion.sign(app.target, path, paired=paired)
+    assert app.codes == [] and not paired.all()
+
+
+def test_pairing_a_tablet_paired_already_asks_nothing(tmp_path, pc):
+    _path, paired = pc
+    app = FakeApp(tmp_path, [lambda wire: None])
+    paired.add(companion.fingerprint(app.der), "Tab")
+    asked = []
+    assert companion.pair([app.target], lambda name, code: asked.append(code) or True,
+                          paired=paired) == (companion.fingerprint(app.der), "Tab")
+    assert asked == []
+
+
+def says_bye(wire):
+    assert receive(wire)[0] == {"type": "bye"}
+
+
+def test_the_tablet_in_the_wi_fi_direct_group_is_verified(tmp_path, pc):
+    # Its app answers at the address Second Screen came from, with the
+    # paired certificate, knowing this PC; the first port that answers counts.
+    _path, paired = pc
+    app = FakeApp(tmp_path, [says_bye])
+    fp = companion.fingerprint(app.der)
+    paired.add(fp, "Tab")
+    closed = free_port()
+    assert companion.verify("127.0.0.1", fp, [closed, app.target[1]], paired) == "Tab"
+
+
+def test_another_device_is_not_the_tablet(tmp_path, pc):
+    _path, paired = pc
+    real = FakeApp(tmp_path / "real", [says_bye])
+    paired.add(companion.fingerprint(real.der), "Tab")
+    other = FakeApp(tmp_path / "other", [says_bye])
+    paired.add(companion.fingerprint(other.der), "Other paired tablet")
+    with pytest.raises(companion.Impostor):
+        companion.verify("127.0.0.1", companion.fingerprint(real.der), [other.target[1]], paired)
+
+
+def test_the_tablet_reached_through_someone_else_is_not_verified(tmp_path, pc):
+    # The real tablet's app, but reached at another address than the group's
+    # (someone in the group passing the connection on over the LAN).
+    _path, paired = pc
+    app = FakeApp(tmp_path, [says_bye], at="192.168.1.30")
+    fp = companion.fingerprint(app.der)
+    paired.add(fp, "Tab")
+    with pytest.raises(companion.Impostor):
+        companion.verify("127.0.0.1", fp, [app.target[1]], paired)
+
+
+def test_a_tablet_that_forgot_this_pc_is_not_verified(tmp_path, pc):
+    _path, paired = pc
+    app = FakeApp(tmp_path, [says_bye], paired=False)
+    fp = companion.fingerprint(app.der)
+    paired.add(fp, "Tab")
+    with pytest.raises(companion.PairingRefused):
+        companion.verify("127.0.0.1", fp, [app.target[1]], paired)
+    assert app.codes == []
 
 
 def test_marks_that_make_no_sense_are_left_out():

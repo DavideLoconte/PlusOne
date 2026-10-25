@@ -29,6 +29,7 @@ from .engine import NOT_ANSWERING, Controller, Settings, State  # noqa: E402
 from .i18n import _  # noqa: E402
 from .nearby import Nearby  # noqa: E402
 from .signing import Signing  # noqa: E402
+from .tablets import Tablets  # noqa: E402
 
 APP_ID = "io.github.gabrielesantangelo.PlusOne"
 INTERFACE = APP_ID + "1"
@@ -41,10 +42,6 @@ INTERFACE_XML = f"""
     <method name="SignDocument">
       <arg type="s" name="path" direction="in"/>
     </method>
-    <method name="SignDocumentOn">
-      <arg type="s" name="path" direction="in"/>
-      <arg type="s" name="tablet" direction="in"/>
-    </method>
     <property name="Version" type="s" access="read"/>
     <property name="State" type="s" access="read"/>
     <property name="Active" type="b" access="read"/>
@@ -52,7 +49,6 @@ INTERFACE_XML = f"""
     <property name="Detail" type="s" access="read"/>
     <property name="Background" type="b" access="readwrite"/>
     <property name="SignAvailable" type="b" access="read"/>
-    <property name="SignTablets" type="a(ss)" access="read"/>
   </interface>
 </node>"""
 CONFIG = os.path.join(GLib.get_user_config_dir(), "plus-one", "settings.json")
@@ -67,7 +63,6 @@ TITLES = {
 EXTENSION = "plus-one@gabrielesantangelo.github.io"
 SIGN_ENTRY = f"{APP_ID}.Sign.desktop"
 HIDDEN_KEY = "X-PlusOne-Hidden"
-IDLE_HINT = "Press Connect, then tap “Second screen” in the tablet's quick settings"
 NOTIFICATION = "status"
 
 
@@ -91,8 +86,6 @@ def load_settings(path=CONFIG):
             ok = type(value) is type(default)
         elif isinstance(default, int):
             ok = type(value) is int and value > 0
-        elif isinstance(default, list):
-            ok = isinstance(value, list) and all(isinstance(v, str) for v in value)
         else:  # str or None
             ok = value is None or isinstance(value, str)
         if ok:
@@ -224,7 +217,9 @@ class PlusOneApp(Adw.Application):
         self.set_inactivity_timeout(10000)
         self.settings = load_settings()
         i18n.set_language(self.settings.language)
-        self.controller = Controller(self.settings, self._on_state)
+        self.nearby = Nearby(on_change=self._on_nearby)
+        self.tablets = Tablets(self.settings, self.save_settings, self.nearby)
+        self.controller = Controller(self.settings, self._on_state, self.tablets)
         self.listeners = []      # windows following the state
         self.log_listeners = []  # windows showing the log
         self.log_lines = collections.deque(maxlen=400)
@@ -238,7 +233,6 @@ class PlusOneApp(Adw.Application):
             action.connect("activate", callback)
             self.add_action(action)
         self.signing = Signing(self)
-        self.nearby = Nearby(on_change=self._on_nearby)
 
     # -- GApplication ------------------------------------------------------
     def do_startup(self):
@@ -247,8 +241,9 @@ class PlusOneApp(Adw.Application):
         if self.settings.background:
             set_autostart(True)
         set_sign_entry(self.settings.sign_on_tablet)
-        if self.settings.sign_on_tablet:
-            self.nearby.start()
+        # Which tablets have the app, and where: for pairing, signing and
+        # checking Second Screen's tablet. Avahi listens anyway.
+        self.nearby.start()
         self._update_hold()
 
     def do_activate(self):
@@ -263,7 +258,7 @@ class PlusOneApp(Adw.Application):
             for path in filter(None, paths):
                 self.signing.request(path)
             if not args[1:]:
-                self._choose_and_sign()
+                self.choose_and_sign()
         else:
             self.activate()
         return 0
@@ -273,7 +268,7 @@ class PlusOneApp(Adw.Application):
             if file.get_path():
                 self.signing.request(file.get_path())
 
-    def _choose_and_sign(self):
+    def choose_and_sign(self, parent=None):
         from gi.repository import Gtk
         pdfs = Gtk.FileFilter(name="PDF")
         pdfs.add_mime_type("application/pdf")
@@ -291,7 +286,7 @@ class PlusOneApp(Adw.Application):
             for file in files or []:
                 if file.get_path():
                     self.signing.request(file.get_path())
-        dialog.open_multiple(None, None, chosen)
+        dialog.open_multiple(parent, None, chosen)
 
     def do_dbus_register(self, connection, object_path):
         Adw.Application.do_dbus_register(self, connection, object_path)
@@ -325,15 +320,10 @@ class PlusOneApp(Adw.Application):
         """(title, detail) for the current state, in the current language."""
         state = self.controller.state
         template, args = self.controller.detail
-        if template:
-            detail = _(template).format(**args)
-        else:
-            detail = _(IDLE_HINT) if state == State.IDLE else ""
+        detail = _(template).format(**args) if template else ""
         return _(TITLES[state]), detail
 
     def _on_state(self, state, template, args):
-        if state == State.STREAMING:
-            save_settings(self.settings)  # the tablet is a known display now
         self._update_hold()
         if not self.signing.on_state(state):
             self._notify(state, template)
@@ -380,21 +370,18 @@ class PlusOneApp(Adw.Application):
         self._update_hold()
         self._emit_properties()
 
-    def set_sign_tablet(self, app_id):
-        """The tablet to sign on (its app's id), or None for the last one used."""
-        if app_id != self.settings.sign_tablet:
-            self.settings.sign_tablet = app_id
-            save_settings(self.settings)
+    def use_tablet(self, fingerprint):
+        """The paired tablet that gets the desktop and the PDFs from now on."""
+        self.tablets.use(fingerprint)
+        self._on_nearby()
 
     def forget_tablet(self, fingerprint):
-        """This PC forgets a paired tablet: signing on it asks for a code again."""
-        from .companion import Paired
-        Paired().forget(fingerprint)
-        for choice in ("sign_tablet", "last_tablet"):
-            app_id = getattr(self.settings, choice)
-            if app_id and fingerprint.startswith(app_id):
-                setattr(self.settings, choice, None)
-        save_settings(self.settings)
+        """This PC forgets a paired tablet: using it again takes pairing again."""
+        active = self.tablets.active()
+        if active and active.fingerprint == fingerprint:
+            self.controller.stop()  # its session, if it has one, ends with it
+        self.tablets.forget(fingerprint)
+        self._on_nearby()
 
     def set_sign_on_tablet(self, enabled):
         if enabled == self.settings.sign_on_tablet:
@@ -402,16 +389,12 @@ class PlusOneApp(Adw.Application):
         self.settings.sign_on_tablet = enabled
         save_settings(self.settings)
         set_sign_entry(enabled)
-        if enabled:
-            self.nearby.start()
-        else:
-            self.nearby.stop()
         self._on_nearby()
 
     def sign_available(self):
-        """Whether Files should offer "Sign on Tablet" now: switched on, and
-        a tablet connected or on the network (or no telling)."""
-        return self.settings.sign_on_tablet and (
+        """Whether Files should offer "Sign on Tablet" now: switched on, a
+        tablet paired, and one connected or on the network (or no telling)."""
+        return self.settings.sign_on_tablet and self.tablets.active() is not None and (
             self.controller.state in (State.CONNECTING, State.STREAMING) or self.nearby.present())
 
     def _on_nearby(self):
@@ -428,11 +411,7 @@ class PlusOneApp(Adw.Application):
                 "Title": GLib.Variant("s", title),
                 "Detail": GLib.Variant("s", detail),
                 "Background": GLib.Variant("b", self.settings.background),
-                "SignAvailable": GLib.Variant("b", self.sign_available()),
-                # The tablets with the app on the network, (id, name): Files
-                # offers a choice when there is more than one.
-                "SignTablets": GLib.Variant("a(ss)", [(app_id, name) for app_id, _a, _p, name
-                                                      in self.nearby.apps() if app_id])}
+                "SignAvailable": GLib.Variant("b", self.sign_available())}
 
     def _emit_properties(self):
         if self._registration:
@@ -450,9 +429,6 @@ class PlusOneApp(Adw.Application):
                 self.activate()
             elif method == "SignDocument":
                 self.signing.request(params.unpack()[0])
-            elif method == "SignDocumentOn":
-                path, tablet = params.unpack()
-                self.signing.request(path, tablet or None)
         finally:
             invocation.return_value(None)  # the caller waits for it, whatever happened
 

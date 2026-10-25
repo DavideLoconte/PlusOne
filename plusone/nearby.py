@@ -89,23 +89,6 @@ class Nearby:
         return sorted({(address, port) for address, port, _name, found in self.companions.values()
                        if found == app_id})
 
-    def companion(self, paired=(), prefer=()):
-        """(address, port, name, app id) of the app to sign with, or None: the
-        first of prefer (app ids, the most wanted first) on the network, else
-        one paired already (paired: certificate fingerprints) before any other."""
-        apps = self.apps()
-        for wanted in prefer:
-            for app_id, address, port, name in apps:
-                if app_id == wanted:
-                    return address, port, name, app_id
-        def known(app):
-            return bool(app[0]) and any(fp.startswith(app[0]) for fp in paired)
-        ranked = sorted(apps, key=lambda app: (not known(app), app[1], app[2]))
-        if not ranked:
-            return None
-        app_id, address, port, name = ranked[0]
-        return address, port, name, app_id
-
     def start(self):
         if self.bus is not None:
             return

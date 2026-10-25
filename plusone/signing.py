@@ -19,7 +19,6 @@ from .i18n import _
 
 MONITOR_WAIT = 5  # seconds for the tablet's monitor to appear once streaming
 NOTIFICATION = "sign"
-PAIRING = "pair"
 UPDATE = "update"
 # Shared with the signing window (sign.py).
 PEN = os.path.join(GLib.get_user_config_dir(), "plus-one", "pen.json")
@@ -34,22 +33,26 @@ class Signing:
         self.in_app = set()        # paths the tablet's app is signing
         self.tablet = None         # its name
         self.signed = []           # signed in a row (several PDFs sent at once): one notification
-        self.pairing = {}          # code -> (threading.Event, answer list), while the user compares
-        self._pairing_lock = threading.Lock()
-        self._pair_dialogs = {}    # code -> its window
         self.connected_for_us = False
         for name, callback in (("sign-here", self._sign_here), ("open-file", self._open_file),
-                               ("show-file", self._show_file), ("companion-pair", self._pair_answer),
-                               ("companion-no", self._pair_answer)):
+                               ("show-file", self._show_file)):
             action = Gio.SimpleAction.new(name, GLib.VariantType("s"))
             action.connect("activate", callback)
             app.add_action(action)
 
-    def request(self, path, tablet=None):
-        """Sign the PDF at path: in the tablet's app if one is on the network
-        (tablet: the id of the one chosen in Files), else through Second Screen."""
+    def request(self, path):
+        """Sign the PDF at path on the tablet in use: in its app if that is on
+        the network, else through Second Screen."""
         path = os.path.abspath(path)
         log("signing", path)
+        if self.app.tablets.active() is None:
+            note = Gio.Notification.new(_("No tablet paired"))
+            note.set_body(_("Pair your tablet in Plus One to sign {name} on it")
+                          .format(name=os.path.basename(path)))
+            note.set_default_action("app.show")
+            note.add_button_with_target(_("Sign on this PC"), "app.sign-here", GLib.Variant("s", path))
+            self.app.send_notification(NOTIFICATION, note)
+            return
         if not (self.in_app or self.windows or self.queue or self.opening):
             self.signed = []  # nothing on the way: a new batch
         # Asked again while the tablet takes its time: one window per
@@ -61,7 +64,7 @@ class Signing:
         if path in self.opening or path in self.in_app:
             return
         controller = self.app.controller
-        target = self._find_app(tablet) if self.app.settings.sign_on_tablet else None
+        target = self._find_app() if self.app.settings.sign_on_tablet else None
         if target and controller.state != State.STREAMING:
             self._sign_in_app(path, target)
             return
@@ -84,12 +87,9 @@ class Signing:
 
     # -- in the tablet's app ---------------------------------------------------
     def _sign_in_app(self, path, target):
-        address, port, tablet, app_id = target
+        targets, tablet, app_id = target
         log(f"signing in the app on {tablet}: {path}")
         self.in_app.add(path)
-        if app_id and self.app.settings.last_tablet != app_id:
-            self.app.settings.last_tablet = app_id  # the one "Automatic" picks next time
-            self.app.save_settings()
         self._notify_in_app(path, _("Sending {name} to Plus One on {tablet}"), tablet)
 
         from .ink import load_pen
@@ -106,14 +106,10 @@ class Signing:
         # Taken now, in the order the PDFs were asked for: they reach the tablet in it.
         turn = companion.next_turn()
 
-        # Every address the tablet is announced at: someone may announce it too.
-        targets = (self.app.nearby.addresses(app_id) if app_id else []) or [(address, port)]
-
         def work():
             result = error = None
             try:
-                result = companion.sign(targets, path, self._ask_pairing,
-                                        pen=pen, signatures=ours, expect=app_id or None,
+                result = companion.sign(targets, path, pen=pen, signatures=ours, expect=app_id,
                                         on_signatures=theirs, on_opened=opened,
                                         locate=lambda: self._locate_app(app_id),
                                         turn=turn)
@@ -130,24 +126,17 @@ class Signing:
                 GLib.idle_add(once(self._app_done, path, result, error))
         threading.Thread(target=work, daemon=True).start()
 
-    def _find_app(self, tablet=None):
-        """(address, port, name, app id) of the app to sign with: the tablet
-        asked for, else the one chosen in the window, else the last one used,
-        else one already paired."""
-        try:
-            paired = companion.Paired().all()
-        except OSError:
-            paired = {}
-        settings = self.app.settings
-        prefer = [tablet, settings.sign_tablet, settings.last_tablet]
-        return self.app.nearby.companion(paired, [p for p in prefer if p])
+    def _find_app(self):
+        """(addresses, name, app id) of the tablet in use's app on the
+        network, or None. Every address it is announced at: someone may
+        announce it too, and only the real one proves it (TLS)."""
+        tablet = self.app.tablets.active()
+        where = self.app.tablets.addresses(tablet) if tablet else []
+        return (where, tablet.name, tablet.app_id) if where else None
 
     def _locate_app(self, app_id):
         """Where the app the PDF went to is now (its port changes when it
         restarts): that tablet's addresses, not another's."""
-        if not app_id:  # an app that does not say which it is
-            found = self._find_app()
-            return [found[:2]] if found else None
         return self.app.nearby.addresses(app_id) or None
 
     def _app_done(self, path, result, error):
@@ -155,9 +144,10 @@ class Signing:
             return  # the user chose to sign on the PC meanwhile
         self.in_app.discard(path)
         if error == "refused":
-            log("companion: not paired")
+            log("companion: the tablet does not know this PC")
             note = Gio.Notification.new(_("Not paired"))
-            note.set_body(_("The codes were not confirmed on both the PC and the tablet"))
+            note.set_body(_("{name} no longer knows this PC: pair it again").format(name=self.tablet))
+            note.set_default_action("app.show")
             self.app.send_notification(NOTIFICATION, note)
             return
         if error == "incompatible":
@@ -226,69 +216,6 @@ class Signing:
             self.app.send_notification(NOTIFICATION, note)
             return
         self._signed(result, certified)
-
-    def _ask_pairing(self, tablet, code):
-        """From the app's thread: asks this PC's user to compare the code
-        (the tablet shows it too); blocks until they answer. Several PDFs
-        sent at once share the one question."""
-        with self._pairing_lock:
-            waiting = self.pairing.get(code)
-            asking = waiting is None
-            if asking:
-                waiting = self.pairing[code] = (threading.Event(), [])
-        answered, answer = waiting
-        if asking:
-            GLib.idle_add(once(self._show_pairing, tablet, code))
-        if not answered.wait(companion.PAIRING_TIMEOUT):
-            log("companion: pairing not confirmed on the PC in time")
-        if asking:
-            with self._pairing_lock:
-                self.pairing.pop(code, None)
-            GLib.idle_add(once(self._pairing_over, code))
-        return bool(answer and answer[0])
-
-    def _pairing_over(self, code):
-        self.app.withdraw_notification(PAIRING)
-        dialog = self._pair_dialogs.pop(code, None)
-        if dialog is not None:
-            dialog.close()
-
-    def _show_pairing(self, tablet, code):
-        """A window (a notification went unseen) and a notification."""
-        from gi.repository import Adw
-        dialog = Adw.MessageDialog(application=self.app, heading=_("Pair with {tablet}?").format(tablet=tablet),
-                                   body_use_markup=True,
-                                   body=_("Pair only if the tablet shows this same code, and confirm "
-                                          "there too:") + f"\n\n<span size='xx-large' font_family='monospace'>"
-                                        f"{code[:3]} {code[3:]}</span>")
-        dialog.add_response("cancel", _("Cancel"))
-        dialog.add_response("pair", _("Pair"))
-        dialog.set_response_appearance("pair", Adw.ResponseAppearance.SUGGESTED)
-        dialog.connect("response", lambda d, response: self._answer_pairing(code, response == "pair"))
-        self._pair_dialogs[code] = dialog
-        dialog.present()
-        note = Gio.Notification.new(_("Pair with {tablet}?").format(tablet=tablet))
-        note.set_body(_("Check that the tablet shows the same code: {code}")
-                      .format(code=f"{code[:3]} {code[3:]}"))
-        note.set_priority(Gio.NotificationPriority.HIGH)
-        note.add_button_with_target(_("Pair"), "app.companion-pair", GLib.Variant("s", code))
-        note.add_button_with_target(_("Cancel"), "app.companion-no", GLib.Variant("s", code))
-        self.app.send_notification(PAIRING, note)
-
-    def _pair_answer(self, action, param):
-        self._answer_pairing(param.get_string(), action.get_name() == "companion-pair")
-
-    def _answer_pairing(self, code, accepted):
-        """The first answer counts: closing the dialog answers "close" too."""
-        waiting = self.pairing.get(code)
-        if waiting and not waiting[0].is_set():
-            log("companion: pairing", "confirmed on the PC" if accepted else "refused on the PC")
-            answered, answer = waiting
-            answer.append(accepted)
-            answered.set()
-        dialog = self._pair_dialogs.pop(code, None)
-        if dialog is not None:
-            dialog.close()
 
     def _notify_in_app(self, path, template, tablet):
         """What the tablet's app has to sign: this PDF (template takes its

@@ -129,6 +129,7 @@ modules:
     build-commands:
       - install -d /app/lib/plus-one/plusone
       - install -m 644 plusone/*.py /app/lib/plus-one/plusone/
+      - install -Dm 644 plusone/icons/*.svg -t /app/lib/plus-one/plusone/icons
       - install -Dm 755 packaging/flatpak/plus-one.sh /app/bin/plus-one
       - install -Dm 644 data/io.github.gabrielesantangelo.PlusOne.desktop -t /app/share/applications
       - install -Dm 644 data/io.github.gabrielesantangelo.PlusOne.Sign.desktop -t /app/share/applications

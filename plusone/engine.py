@@ -7,7 +7,7 @@ happens on helper threads and reports back through GLib.idle_add.
 import socket
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from gi.repository import Gio, GLib
 
@@ -15,6 +15,7 @@ from . import log, media, once, pen, tablet
 from .display import VirtualMonitor, virtual_monitor_edid
 from .p2p import P2PLink
 from .rtsp import MODES, WfdSession
+from .tablets import Tablets
 from .uibc import UibcServer
 
 RTSP_PORT = 7236
@@ -38,9 +39,6 @@ class Settings:
     touch: bool = True
     test_pattern: bool = False
     peer: str | None = None  # the command line's --peer
-    # The tablets used as a display (Wi-Fi Direct names and MACs): once there
-    # is one, no other screen (a TV that mirrors, say) gets the desktop.
-    known_sinks: list = field(default_factory=list)
     reconnect: bool = True  # look for the tablet again for a while after it disconnects
     # The app (not the engine): keep running without a window and start at
     # login, so the Quick Settings toggle connects at once.
@@ -48,9 +46,9 @@ class Settings:
     language: str = "auto"
     # "Sign on Tablet" in Files and Open With.
     sign_on_tablet: bool = True
-    # The tablet to sign on (its app's id, nearby.apps()); None: the last one used.
-    sign_tablet: str | None = None
-    last_tablet: str | None = None
+    # The paired tablet in use (its app's certificate fingerprint, tablets.py):
+    # the only one that gets the desktop and the PDFs.
+    tablet: str | None = None
 
 
 class State:
@@ -79,9 +77,10 @@ def conflicting_apps():
 
 
 class Controller:
-    def __init__(self, settings, on_state=None):
+    def __init__(self, settings, on_state=None, tablets=None):
         self.settings = settings
         self.on_state = on_state or (lambda state, template, args: None)
+        self.tablets = tablets or Tablets(settings)
         self.state = State.IDLE
         self.detail = ("", {})
         self.link = None
@@ -118,6 +117,9 @@ class Controller:
         s = self.settings
         if not s.auto_mode and (s.width, s.height, s.fps) not in MODES:
             self._set_state(State.ERROR, "Mode {mode} is not supported", mode=f"{s.width}x{s.height}@{s.fps}")
+            return
+        if self.tablets.active() is None:
+            self._set_state(State.ERROR, "Pair a tablet first")
             return
         others = conflicting_apps()
         if others:
@@ -173,7 +175,7 @@ class Controller:
             return
         self._set_state(State.WAITING, "Tap “Second screen” on the tablet")
         try:
-            match = self.settings.peer or self.settings.known_sinks or None
+            match = self.settings.peer or self.tablets.match()
             self.link = P2PLink(match, on_found=self._on_found, on_hint=self._on_link_hint,
                                 give_up_after=window, on_give_up=self._on_give_up)
         except StopIteration:
@@ -234,6 +236,14 @@ class Controller:
         if not self._from_tablet(addr[0]):
             log("RTSP: hung up on", addr[0], "(not on the Wi-Fi Direct group)")
             conn.close()
+            return
+        # Before anything of the desktop leaves: is it the tablet in use?
+        problem = self.tablets.verify(addr[0])
+        if problem:
+            log("RTSP: hung up on", addr[0])
+            conn.close()
+            template, args = problem
+            self._from_thread(lambda: self._fail(template, **args))
             return
         self._idle.clear()
         if self.link:
@@ -299,17 +309,10 @@ class Controller:
         peer = self.link.peer if self.link else None
         name = peer.get_name() if peer else "tablet"
         if peer:
-            self._learn(peer)
+            # Proven the tablet in use (_serve): next time it is found by this.
+            self.tablets.learned(peer.get_hw_address())
         self._set_state(State.STREAMING, "{name} · {width}×{height} @ {fps} Hz",
                         name=name, width=width, height=height, fps=fps)
-
-    def _learn(self, peer):
-        """The tablet streamed to is a known display from now on (its name, and
-        its MAC, which Android may change); the owner saves the settings."""
-        known = self.settings.known_sinks
-        for value in (peer.get_name(), (peer.get_hw_address() or "").lower()):
-            if value and value.lower() not in [k.lower() for k in known]:
-                known.append(value)
 
     def _on_idr(self):
         if self.streamer:
