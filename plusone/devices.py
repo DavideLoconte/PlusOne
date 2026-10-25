@@ -29,6 +29,9 @@ REFUSED_RETRY = 10  # seconds, after the app said no (the user may change their 
 IN_USE_AFTER = 0.2  # seconds a program holds the device before the tablet is asked
 IDLE_AFTER = 3      # seconds without one before the tablet stops
 MIC_FEED = "plusone-mic-feed"  # the stream Plus One feeds the microphone with
+JITTER = 40                     # ms the microphone's packets wait to be put in order (WebRTC's NetEq targets ~60)
+LEVEL_EVERY = 20_000_000        # ns: how often the microphone's level is measured
+RTP_SSRC = 0x504C5331           # "PLS1": one stream, ours
 # ns of sound that may wait before the oldest goes: what waits stays, as delay,
 # once the sound comes as fast as it is played (160 ms measured 235 end to end).
 MIC_BEHIND = 60_000_000
@@ -446,34 +449,56 @@ class Microphone(Device):
     def end(self):
         self.stop_feed()
         if self.pipeline:
+            self.pipeline.get_bus().remove_signal_watch()
             self.pipeline.set_state(Gst.State.NULL)
             self.pipeline = None
 
     def _info(self, info):
         """The app's sound (Opus, or plain samples): decoded into a stream of
-        Plus One's, linked into the source by hand (nothing else plays it)."""
-        caps = ("audio/x-opus,rate=48000,channels=1,channel-mapping-family=0" if info.get("codec") == "opus"
-                else "audio/x-raw,format=S16LE,rate=48000,channels=1,layout=interleaved")
-        decode = "opusdec plc=true ! " if info.get("codec") == "opus" else ""
+        Plus One's, linked into the source by hand (nothing else plays it).
+        Opus goes through a jitter buffer first, as RTP: JITTER ms to put the
+        packets back in order and even out the Wi-Fi's timing; a packet still
+        missing then is concealed by the decoder (it was silence)."""
+        self.opus = info.get("codec") == "opus"
+        self.rtp_sequence = 0
+        if self.pipeline:
+            self.pipeline.get_bus().remove_signal_watch()
+        if self.opus:
+            caps = "application/x-rtp,media=audio,clock-rate=48000,encoding-name=OPUS,payload=96"
+            decode = (f"rtpjitterbuffer latency={JITTER} do-lost=true drop-on-latency=true ! rtpopusdepay "
+                      f"! opusdec plc=true ! ")
+        else:
+            caps = "audio/x-raw,format=S16LE,rate=48000,channels=1,layout=interleaved"
+            decode = ""
         if self.pipeline:
             self.pipeline.set_state(Gst.State.NULL)
             self.pipeline = None
         pipeline = Gst.parse_launch(
             f"appsrc name=src is-live=true do-timestamp=true format=time max-buffers=3 leaky-type=downstream "
             f"caps={caps} ! {decode}audioconvert ! audioresample "
-            f"! audio/x-raw,format=S16LE,rate=48000,channels=1 ! volume name=gain "
+            f"! audio/x-raw,format=S16LE,rate=48000,channels=1 "
+            f"! level name=meter interval={LEVEL_EVERY} post-messages=true ! volume name=gain "
             f"! queue max-size-time={MIC_BEHIND} max-size-buffers=0 max-size-bytes=0 leaky=downstream "
             f"! pipewiresink stream-properties=\"props,node.name={MIC_FEED},node.autoconnect=false,"
             f"media.type=Audio\"")
-        # The tablet's microphone is far too quiet as it comes: brought to a voice's level.
+        # The tablet's microphone is far too quiet as it comes: brought to a
+        # voice's level, from the meter's messages on the main loop. Nothing of
+        # Python's in the sound's own path: waiting there for the interpreter
+        # (busy with the camera, say) left the source without sound, in gaps.
         leveller = Leveller()
         gain = pipeline.get_by_name("gain")
 
-        def level(pad, probe):
-            buffer = probe.get_buffer()
-            gain.set_property("volume", leveller(array.array("h", buffer.extract_dup(0, buffer.get_size()))))
-            return Gst.PadProbeReturn.OK
-        gain.get_static_pad("sink").add_probe(Gst.PadProbeType.BUFFER, level)
+        def measured(_bus, message):
+            structure = message.get_structure()
+            if structure is None or structure.get_name() != "level":
+                return
+            rms, peak = structure.get_value("rms"), structure.get_value("peak")
+            if rms and peak:
+                gain.set_property("volume", leveller.adjust(32768 * 10 ** (rms[0] / 20),
+                                                            32768 * 10 ** (peak[0] / 20)))
+        bus = pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message::element", measured)
         self.pipeline = pipeline
         self.src = pipeline.get_by_name("src")
         pipeline.set_state(Gst.State.PLAYING)
@@ -482,9 +507,16 @@ class Microphone(Device):
                                                              "into the source"), daemon=True).start()
         GLib.idle_add(once(lambda: self.feed and self._set_state("in use")))
 
-    def _piece(self, _header, payload):
-        if self.pipeline:
-            self.src.emit("push-buffer", Gst.Buffer.new_wrapped(payload))
+    def _piece(self, header, payload):
+        if not self.pipeline:
+            return
+        if self.opus:
+            # Into RTP: the packet's number and its time in samples, for the jitter buffer.
+            sequence = header.get("frame", self.rtp_sequence)
+            self.rtp_sequence = sequence + 1
+            payload = struct.pack(">BBHII", 0x80, 96, sequence & 0xFFFF, (header.get("pts", 0) * 48 // 1000)
+                                  & 0xFFFFFFFF, RTP_SSRC) + payload
+        self.src.emit("push-buffer", Gst.Buffer.new_wrapped(payload))
 
 
 
@@ -510,7 +542,7 @@ class Leveller:
     between words (else it would bring the room's noise up)."""
     TARGET = 3300     # RMS of a voice, about -20 dBFS
     FLOOR = 120       # RMS below which it is the room, not a voice
-    MAX_GAIN = 12.0   # +21.6 dB
+    MAX_GAIN = 10.0   # +20 dB: the volume element's most
     RISE = 0.05       # of the way to the gain wanted, per piece (20 ms)
 
     def __init__(self, gain=4.0):
@@ -519,12 +551,14 @@ class Leveller:
     def __call__(self, samples):
         if not samples:
             return self.gain
-        rms = math.sqrt(sum(x * x for x in samples) / len(samples))
+        return self.adjust(math.sqrt(sum(x * x for x in samples) / len(samples)), max(max(samples), -min(samples)))
+
+    def adjust(self, rms, peak):
+        """The gain for a piece of this RMS and peak (16-bit units)."""
         if rms >= self.FLOOR:
             wanted = min(self.MAX_GAIN, self.TARGET / rms)
             self.gain = wanted if wanted < self.gain else self.gain + (wanted - self.gain) * self.RISE
-        peak = max(max(samples), -min(samples))
-        if peak:
+        if peak >= 1:
             self.gain = min(self.gain, 32000 / peak)
         return self.gain
 

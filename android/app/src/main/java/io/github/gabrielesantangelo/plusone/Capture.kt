@@ -49,6 +49,9 @@ abstract class Capture(protected val out: Out) {
     /** The PC lost a frame: the next one is a key frame, which needs no other. */
     open fun keyFrame() {}
 
+    /** What the PC got and lost of the datagrams in the last second. */
+    open fun stats(received: Int, lost: Int) {}
+
     /** Sends one encoded piece; a link that is gone ends the capture. */
     protected fun send(type: String, info: MediaCodec.BufferInfo, data: ByteArray) {
         if (!out.piece(type, info, data)) stop()
@@ -104,6 +107,30 @@ class CameraCapture(private val context: Context, out: Out, request: JSONObject)
     override fun keyFrame() {
         try {
             encoder?.setParameters(android.os.Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) })
+        } catch (e: IllegalStateException) {
+            // Stopped meanwhile.
+        }
+    }
+
+    // The bitrate now: down while the network loses packets, back up to the
+    // one asked for while it does not (WebRTC's loss-based control, simplified).
+    private var current = bitrate
+
+    override fun stats(received: Int, lost: Int) {
+        val sent = received + lost
+        if (sent < 20) return
+        val loss = lost.toFloat() / sent
+        val next = when {
+            loss > 0.10f -> current * 0.7
+            loss > 0.02f -> current * 0.9
+            loss < 0.01f -> current * 1.05
+            else -> current.toDouble()
+        }.toInt().coerceIn(MIN_BITRATE, bitrate)
+        if (abs(next - current) < current / 20) return
+        current = next
+        Log.i(TAG, "camera: ${"%.1f".format(loss * 100)}% lost, ${current / 1000} kbit/s")
+        try {
+            encoder?.setParameters(android.os.Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, current) })
         } catch (e: IllegalStateException) {
             // Stopped meanwhile.
         }
@@ -209,6 +236,7 @@ class CameraCapture(private val context: Context, out: Out, request: JSONObject)
 
     companion object {
         const val OPEN_WAIT = 5_000L  // ms
+        const val MIN_BITRATE = 250_000
     }
 }
 
@@ -320,12 +348,17 @@ class WireOut(private val wire: Wire) : Out {
  * given to the PC over TLS; the nonce is the salt and the sequence number.
  * They go where a "punch" came from: the token, from the TLS peer's address.
  */
-class DatagramOut(private val peer: java.net.InetAddress) : Out, java.io.Closeable {
+class DatagramOut(private val peer: java.net.InetAddress, audio: Boolean) : Out, java.io.Closeable {
     private val random = java.security.SecureRandom()
     private val key = ByteArray(32).also { random.nextBytes(it) }
     private val salt = ByteArray(4).also { random.nextBytes(it) }
     private val token = ByteArray(16).also { random.nextBytes(it) }
-    private val socket = java.net.DatagramSocket(0)
+    private val socket = java.net.DatagramSocket(0).apply {
+        // Wi-Fi's queues (WMM) by the IP header: the voice one for sound, the
+        // video one for the camera: a key frame's burst does not hold sound back.
+        try { trafficClass = if (audio) VOICE else VIDEO } catch (e: Exception) {}
+    }
+    private var lastSound: java.net.DatagramPacket? = null
     private val cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding")
     private val secret = javax.crypto.spec.SecretKeySpec(key, "AES")
     @Volatile private var to: java.net.InetSocketAddress? = null
@@ -373,8 +406,14 @@ class DatagramOut(private val peer: java.net.InetAddress) : Out, java.io.Closeab
                 cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, secret, javax.crypto.spec.GCMParameterSpec(128, nonce))
                 cipher.updateAAD(header)
                 val sealed = cipher.doFinal(data, part * PART, minOf(PART, data.size - part * PART))
-                socket.send(java.net.DatagramPacket(header + sealed, header.size + sealed.size, where))
+                val packet = java.net.DatagramPacket(header + sealed, header.size + sealed.size, where)
+                socket.send(packet)
                 sequence++
+                if (type == "audio") {
+                    // The one before goes again with it: one lost is no gap (RED, in a way).
+                    lastSound?.let { socket.send(it) }
+                    lastSound = packet
+                }
             }
         } catch (e: IOException) {
             return !socket.isClosed  // a datagram that could not go is a lost one, not a lost PC
@@ -388,6 +427,8 @@ class DatagramOut(private val peer: java.net.InetAddress) : Out, java.io.Closeab
     companion object {
         const val HEADER = 24
         const val PART = 1200  // bytes of a piece per datagram: under any LAN's MTU, sealed and with headers
+        const val VOICE = 0xC0  // CS6: WMM's voice queue
+        const val VIDEO = 0x88  // AF41: WMM's video queue
 
         private fun hex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }
 

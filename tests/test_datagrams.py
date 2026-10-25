@@ -33,7 +33,7 @@ def test_a_frame_in_parts_comes_whole():
     sent = app.datagrams("v", 0, frame, flags=datagrams.KEY_FRAME, pts=33)
     assert [pieces.add(d) for d in sent[:-1]] == [[]] * (len(sent) - 1)
     [(header, payload)] = pieces.add(sent[-1])
-    assert payload == frame and header == {"type": "video", "pts": 33, "key": True, "config": False}
+    assert payload == frame and header == {"type": "video", "pts": 33, "key": True, "config": False, "frame": 0}
 
 
 def test_parts_out_of_order_and_twice():
@@ -52,7 +52,7 @@ def test_what_was_not_sealed_with_the_key_is_dropped():
     header = bytearray(good)
     header[3] |= datagrams.KEY_FRAME  # the flags, changed on the way
     assert pieces.add(bytes(header)) == []
-    assert pieces.add(good) == [({"type": "audio", "pts": 0, "key": False, "config": False}, b"opus")]
+    assert pieces.add(good) == [({"type": "audio", "pts": 0, "key": False, "config": False, "frame": 0}, b"opus")]
     assert pieces.add(good) == []  # the same again: a replay
 
 
@@ -110,3 +110,12 @@ def types_tls(address):
 
 def test_nonce_is_salt_and_sequence():
     assert datagrams.nonce(b"abcd", 1) == b"abcd" + struct.pack(">Q", 1)
+
+
+def test_what_was_lost_is_counted_by_sequence():
+    pieces, app = datagrams.Pieces(KEY, SALT), App()
+    sent = [app.datagrams("a", i, bytes([i]))[0] for i in range(10)]
+    for i in (0, 1, 2, 5, 6, 9):
+        pieces.add(sent[i])
+    pieces.add(sent[1])  # again: not counted twice
+    assert pieces.received == 6 and pieces.missing() == 4

@@ -25,6 +25,7 @@ FIRST_WITHIN = 3.0   # seconds for the first datagram, else TCP after all
 SILENT_FOR = 5.0     # seconds without one: the link is gone
 KEY_AGAIN = 0.5      # seconds between two key frame requests
 WINDOW = 1024        # sequence numbers remembered against replays
+STATS_EVERY = 1.0    # seconds between reports of what came and what was lost (the app's bitrate follows)
 
 
 def nonce(salt, sequence):
@@ -42,6 +43,8 @@ class Pieces:
         self.frames = {}     # frame -> [parts], pts, flags, kind
         self.delivered = -1  # the last frame given out
         self.lost = 0        # frames that never came whole
+        self.received = 0    # datagrams that came (each once)
+        self.first = None    # the first sequence number seen
 
     def add(self, datagram):
         """The pieces this datagram completes: [(header, payload)]."""
@@ -56,6 +59,9 @@ class Pieces:
         if payload is None:
             return []
         self.seen.add(sequence)
+        self.received += 1
+        if self.first is None:
+            self.first = sequence
         if sequence > self.highest:
             self.highest = sequence
             self.seen = {s for s in self.seen if s > sequence - WINDOW}
@@ -76,8 +82,13 @@ class Pieces:
             del self.frames[f]
         del self.frames[frame]
         self.delivered = frame
-        header = {"type": KINDS[kind], "pts": pts, "key": bool(flags & KEY_FRAME), "config": bool(flags & CONFIG)}
+        header = {"type": KINDS[kind], "pts": pts, "key": bool(flags & KEY_FRAME), "config": bool(flags & CONFIG),
+                  "frame": frame}
         return [(header, b"".join(entry[0]))]
+
+    def missing(self):
+        """Datagrams sent so far that never came (by the sequence numbers)."""
+        return 0 if self.first is None else self.highest - self.first + 1 - self.received
 
 
 class Link:
@@ -95,6 +106,7 @@ class Link:
         self.asked = 0.0
         self.started = time.monotonic()
         self.closed = False
+        self.reported = (time.monotonic(), 0, 0)  # when, received, missing
         udp.settimeout(0.25)
 
     def receive_piece(self):
@@ -121,7 +133,18 @@ class Link:
             self.ready += self.pieces.add(datagram)
             if self.pieces.lost > lost:
                 self.key_frame()
+            self._report()
         return self.ready.pop(0)
+
+    def _report(self):
+        """What came and what was lost since the last report: the app's
+        encoder goes down when the network loses, up when it does not."""
+        when, received, missing = self.reported
+        now = time.monotonic()
+        if now - when >= STATS_EVERY:
+            got, lost = self.pieces.received - received, max(0, self.pieces.missing() - missing)
+            self.reported = (now, self.pieces.received, max(missing, self.pieces.missing()))
+            self.wire.send({"type": "stats", "received": got, "lost": lost})
 
     def key_frame(self):
         """Asks the app for a key frame (a frame was lost), not too often."""

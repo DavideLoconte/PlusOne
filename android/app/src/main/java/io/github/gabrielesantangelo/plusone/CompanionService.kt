@@ -251,7 +251,7 @@ class CompanionService : Service() {
         val permission = if (camera) Manifest.permission.CAMERA else Manifest.permission.RECORD_AUDIO
         if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) return refuse("permission")
         // Datagrams if the PC can take them (it falls back to its TLS link if they do not get through).
-        val out = if (request.optString("transport") == "udp") DatagramOut(socket.inetAddress) else WireOut(wire)
+        val out = if (request.optString("transport") == "udp") DatagramOut(socket.inetAddress, !camera) else WireOut(wire)
         val capture = if (camera) CameraCapture(this, out, request)
             else MicCapture(out, request, Options.noiseReduction(this))
         synchronized(captures) {
@@ -271,9 +271,11 @@ class CompanionService : Service() {
             lowLatency(true)
             socket.soTimeout = 0  // the PC holds it as long as its program uses the device
             while (true) {
-                when (wire.receive().optString("type")) {
+                val message = wire.receive()
+                when (message.optString("type")) {
                     "stop" -> break
                     "key" -> capture.keyFrame()  // a frame lost on the way
+                    "stats" -> capture.stats(message.optInt("received"), message.optInt("lost"))
                 }
             }
         } finally {
