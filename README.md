@@ -306,18 +306,18 @@ writes it the first time it opens (`Documents/wfd/wfdconfig.txt`, containing
 
 ### Settings
 
-In the window's menu, **Preferences**: *Screen* (resolution, quality, touch,
-adb), *Signing* (Sign on Tablet in Files, your signatures) and *General*.
+In the window's menu, **Preferences** (Ctrl+,), one page: *Second screen*,
+*Signing*, *Camera and microphone*, *General*, and *Advanced* folded away.
+Plus One speaks the system's language.
 
 | Setting | |
 |---|---|
-| Resolution | *Automatic* (default) reads the tablet's preferred mode from its EDID (1920×1200 on a Tab S10 FE+), or pick 1920×1200, 1680×1050, 1440×900, 1280×800 (16:10), 1920×1080, 1280×720 (16:9). |
-| Quality | Video bitrate in Mbit/s. 20 is a good default; raise it for crisper text. |
-| Touch and S Pen | Forward finger touches and the pen from the tablet. |
-| Quick Settings toggle | Turns the *Tablet* GNOME Shell extension on or off. Shown when the extension is installed (the `.deb`, or the zip for Flatpak users) and GNOME Shell knows it, which is after the next login. |
+| Picture | *Balanced* (20 Mbit/s, the default), *Sharper text* (40) or *For weak Wi-Fi* (10). |
+| Quick Settings toggle | Turns the *Tablet* GNOME Shell extension on or off (Plus One offers it once, after the first pairing). Shown when the extension is installed (the `.deb`, or the zip for Flatpak users) and GNOME Shell knows it, which is after the next login. |
 | Ready in the background | Start at login and keep running after the window closes, so the Quick Settings toggle connects at once. Costs nothing while idle. |
-| Open Second Screen from here | Uses `adb` to open the tile for you. Needs *USB debugging* or *Wireless debugging* on the tablet; off by default. |
-| Language | System, English or Italiano. |
+| Advanced → Resolution | *Automatic* (default) reads the tablet's preferred mode from its EDID (1920×1200 on a Tab S10 FE+), or pick 1920×1200, 1680×1050, 1440×900, 1280×800 (16:10), 1920×1080, 1280×720 (16:9). |
+| Advanced → Touch and S Pen | Forward finger touches and the pen from the tablet. |
+| Advanced → Open Second Screen from here | Uses `adb` to open the tile for you. Needs *USB debugging* or *Wireless debugging* on the tablet; off by default. |
 
 ### S Pen
 
@@ -328,8 +328,9 @@ get pressure and tilt. GIMP 2.10 runs through XWayland: restart it after the pen
 has appeared, then in *Edit → Input Devices* set **xwayland-tablet stylus** to
 *Screen*.
 
-Without `/dev/uhid` access the pen still works as a mouse (hover moves the
-pointer, tip clicks, side button right-clicks).
+The virtual tablet comes from the pen's helper (the `.deb` installs it;
+`sudo ./enable-pen.sh` from the sources). Without it the pen still works as a
+mouse (hover moves the pointer, tip clicks, side button right-clicks).
 
 ### Command line
 
