@@ -197,8 +197,12 @@ class MainActivity : AppCompatActivity() {
             })
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
-                addView(label(getString(R.string.ready), M.attr.textAppearanceTitleLarge, M.attr.colorOnPrimaryContainer))
-                addView(label(getString(R.string.status_ready, CompanionService.deviceName(this@MainActivity)),
+                // Not paired: what to do on the PC. Paired: what this tablet is for.
+                val paired = Paired.all(this@MainActivity).isNotEmpty()
+                addView(label(getString(if (paired) R.string.ready else R.string.not_paired_title),
+                    M.attr.textAppearanceTitleLarge, M.attr.colorOnPrimaryContainer))
+                addView(label(if (paired) getString(R.string.status_ready)
+                    else getString(R.string.status_unpaired, CompanionService.deviceName(this@MainActivity)),
                     M.attr.textAppearanceBodyMedium, M.attr.colorOnPrimaryContainer))
             }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         })

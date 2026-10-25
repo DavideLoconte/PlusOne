@@ -211,7 +211,6 @@ class SignActivity : AppCompatActivity() {
         for (arrow in listOf(previousPage, nextPage)) arrow.visibility = if (scrolling) View.GONE else View.VISIBLE
         pageLabel.setPadding(dp(if (scrolling) 12 else 2), 0, dp(if (scrolling) 12 else 2), 0)
         tools.visibility = View.VISIBLE
-        doneButton.isEnabled = true
         refresh()
     }
 
@@ -547,6 +546,8 @@ class SignActivity : AppCompatActivity() {
     private fun refresh() {
         if (!live) return
         undo.isEnabled = view.canUndo
+        // Done once something is on the PDF: with nothing, the PC got nothing, without a word.
+        doneButton.isEnabled = !view.isEmpty
         eraser.isChecked = view.eraserMode
         lassoButton.isChecked = view.selectMode
         penButton.invalidate()

@@ -15,7 +15,7 @@
     <string name="pair_message">Controlla che il PC mostri lo stesso codice: %1$s</string>
     <string name="pair">Abbina</string>
     <string name="pair_compare">Abbina solo se il PC mostra questo stesso codice, e conferma anche lì:</string>
-    <string name="status_ready">Plus One sul PC trova “%1$s” sulla rete di casa e gli manda i PDF da firmare.</string>
+    <string name="status_ready">Per il secondo schermo, tocca «Second screen» nelle impostazioni rapide. I PDF dal PC si aprono qui da soli.</string>
     <string name="heading_open">Apertura automatica</string>
     <string name="overlay_on">Un PDF mandato dal PC si apre da solo.</string>
     <string name="overlay_off">Perché un PDF mandato dal PC si apra da solo, consenti a Plus One di comparire sopra le altre app. Senza, arriva una notifica da toccare.</string>
@@ -33,7 +33,7 @@
     <string name="capturing_microphone">Il PC sta usando il microfono</string>
     <string name="capturing_both">Il PC sta usando fotocamera e microfono</string>
     <string name="capturing_for">Per %1$s</string>
-    <string name="paired_none">Sul PC, clic destro su un PDF → Firma sul tablet, e conferma qui il codice.</string>
+    <string name="paired_none">Sul PC: Plus One → Abbina un tablet.</string>
     <string name="forget">Dimentica</string>
     <string name="ink_blue_ink">Inchiostro blu</string>
     <string name="ink_black">Nero</string>
@@ -53,7 +53,7 @@
     <string name="place">Metti</string>
     <string name="heading_ready">Pronto in background</string>
     <string name="always_on">Anche dopo un riavvio: il PC può mandare un PDF in qualsiasi momento. Resta solo in ascolto; non consuma quasi batteria.</string>
-    <string name="always_off">Pronto per 10 minuti dopo che apri l\'app: aprila prima di firmare.</string>
+    <string name="always_off">Spento: il PC raggiunge questo tablet solo per 10 minuti dopo che apri Plus One, per il secondo schermo, i PDF, la fotocamera e il microfono.</string>
     <string name="my_signatures">Le mie firme</string>
     <string name="heading_signatures">Le mie firme</string>
     <string name="signatures_none">Ancora nessuna: disegnane una qui, o salvane una mentre firmi. Vanno anche sul PC, e quelle del PC arrivano qui, ogni volta che firmi.</string>
@@ -117,4 +117,6 @@
     <string name="scroll_pages">Scorri le pagine</string>
     <string name="scroll_on">Una sotto l\'altra: un dito le scorre.</string>
     <string name="scroll_off">Una alla volta: le frecce in alto le girano.</string>
+    <string name="not_paired_title">Non ancora abbinato</string>
+    <string name="status_unpaired">Sul PC apri Plus One, fai clic su «Abbina un tablet» e scegli “%1$s”.</string>
 </resources>

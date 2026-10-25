@@ -18,7 +18,7 @@
     <string name="pair_message">Check that the PC shows the same code: %1$s</string>
     <string name="pair">Pair</string>
     <string name="pair_compare">Pair only if the PC shows this same code, and confirm there too:</string>
-    <string name="status_ready">Plus One on your PC finds “%1$s” on the home network and sends it PDFs to sign.</string>
+    <string name="status_ready">For the second screen, tap “Second screen” in quick settings. PDFs from your PC open here by themselves.</string>
     <string name="heading_open">Opening by itself</string>
     <string name="overlay_on">A PDF sent by the PC opens on its own.</string>
     <string name="overlay_off">For a PDF sent by the PC to open on its own, allow Plus One to display over other apps. Without it, a notification to tap.</string>
@@ -36,7 +36,7 @@
     <string name="capturing_microphone">The PC is using the microphone</string>
     <string name="capturing_both">The PC is using the camera and the microphone</string>
     <string name="capturing_for">For %1$s</string>
-    <string name="paired_none">On the PC, right-click a PDF → Sign on Tablet, and confirm the code here.</string>
+    <string name="paired_none">On your PC: Plus One → Pair a tablet.</string>
     <string name="forget">Forget</string>
     <string name="ink_blue_ink">Blue ink</string>
     <string name="ink_black">Black</string>
@@ -56,7 +56,7 @@
     <string name="place">Place</string>
     <string name="heading_ready">Ready in the background</string>
     <string name="always_on">Also after a restart: the PC can send a PDF at any time. It only listens; it uses next to no battery.</string>
-    <string name="always_off">Ready for 10 minutes after you open the app: open it before signing.</string>
+    <string name="always_off">Off: your PC reaches this tablet only for 10 minutes after you open Plus One, for the second screen, PDFs, camera and microphone.</string>
     <string name="my_signatures">My signatures</string>
     <string name="heading_signatures">My signatures</string>
     <string name="signatures_none">None yet: draw one here, or keep one while signing. They go to the PC too, and the PC\'s come here, each time you sign.</string>
@@ -116,4 +116,6 @@
     <string name="scroll_pages">Scroll through the pages</string>
     <string name="scroll_on">One under the other: a finger scrolls through them.</string>
     <string name="scroll_off">One at a time: the arrows at the top turn them.</string>
+    <string name="not_paired_title">Not paired yet</string>
+    <string name="status_unpaired">On your PC, open Plus One, click Pair a tablet and choose “%1$s”.</string>
 </resources>
