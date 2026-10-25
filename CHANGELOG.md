@@ -32,11 +32,14 @@ Your tablet, and only it.
   control, optional noise suppression, congestion control, retransmissions,
   H.264 and Opus), GStreamer's webrtcbin on the PC (jitter buffer), the
   offer and answer over the paired TLS link, which vouches for the DTLS
-  keys; about 150 ms from the tablet's microphone to a program on the PC.
+  keys; about 160 ms from the tablet's microphone to a program on the PC.
   Front or back camera, 720p or 1080p. The app lets the PC have them only
-  once the user turns them on there (*For the PC*), with an option for
-  noise reduction, and says so in its notification while the PC uses them.
-  New dependencies: `gstreamer1.0-nice`, `gir1.2-gst-plugins-bad-1.0`.
+  once the user turns them on there (*For the PC*), and says so in its
+  notification while the PC uses them. The microphone's noise reduction,
+  in the preferences: neural on the PC (DeepFilterNet, its plugin in
+  `~/.ladspa`), light on the tablet (libwebrtc's) or off; then a compressor
+  and a limiter bring the voice to about -18 dBFS. New dependencies:
+  `gstreamer1.0-nice`, `gir1.2-gst-plugins-bad-1.0`, `swh-plugins`.
 - The app listens on a fixed port (47236), so the PC finds it over Wi-Fi
   Direct at once. Protocol version 3: update the app and Plus One together.
 

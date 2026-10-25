@@ -252,7 +252,9 @@ class CompanionService : Service() {
         if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) return refuse("permission")
         val offer = request.optString("sdp")
         if (offer.isEmpty()) return refuse("unavailable")  // a PC of before WebRTC
-        val capture = RtcCapture(this, request, Options.noiseReduction(this))
+        // The PC says whether libwebrtc takes the noise out: not when it does
+        // itself (a neural network there), nor when its user wants none.
+        val capture = RtcCapture(this, request, request.optBoolean("noise_reduction", true))
         synchronized(captures) {
             captures[capture] = kind to socket
             capturingFor = pc

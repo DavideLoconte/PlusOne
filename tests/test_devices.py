@@ -276,6 +276,61 @@ def test_no_tablet_on_the_network(monkeypatch):
     assert problems[0] == "away"
 
 
+def test_the_voice_chain_by_what_is_there(monkeypatch):
+    every = {devices.DEEP_FILTER: "ladspa-x-deep-filter-mono", devices.COMPRESSOR: "ladspa-x-sc4m",
+             devices.LIMITER: "ladspa-x-fastlookaheadlimiter"}
+    monkeypatch.setattr(devices, "ladspa", every.get)
+    chain, noise = devices.voice("neural")
+    assert noise == "neural" and "leaky=downstream ! ladspa-x-deep-filter-mono ! volume" in chain
+    assert "ladspa-x-sc4m" in chain and "ladspa-x-fastlookaheadlimiter limit=-1" in chain
+    chain, noise = devices.voice("light")
+    assert noise == "light" and "deep-filter" not in chain and "sc4m" in chain
+    # No DeepFilterNet: the tablet's noise reduction instead.
+    monkeypatch.setattr(devices, "ladspa", {devices.COMPRESSOR: "c", devices.LIMITER: "l"}.get)
+    assert devices.voice("neural")[1] == "light"
+    # No swh-plugins: only a gain, no compressor that bends samples.
+    monkeypatch.setattr(devices, "ladspa", lambda suffix: None)
+    assert devices.voice("off") == (devices.PLAIN_LEVEL, "off")
+
+
+def test_the_tablet_is_told_whether_to_take_the_noise_out(monkeypatch):
+    requests = []
+
+    class FakeFeed:
+        def __init__(self, request, *args):
+            requests.append(request)
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+    monkeypatch.setattr(devices, "Feed", FakeFeed)
+    app = FakeApp()
+    app.settings = types.SimpleNamespace(microphone_noise="light")
+    mic = devices.Microphone(app)
+    for noise, told in (("light", True), ("neural", False), ("off", False)):
+        monkeypatch.setattr(devices, "voice", lambda wanted, noise=noise: ("volume", noise))
+        mic.begin()
+        mic.end()
+    assert [r["noise_reduction"] for r in requests] == [True, False, False]
+    assert all(r["type"] == "microphone" for r in requests)
+
+
+def test_the_voice_chain_parses():
+    gi.require_version("Gst", "1.0")
+    from gi.repository import Gst
+    Gst.init(None)
+    if not (devices.ladspa(devices.COMPRESSOR) and devices.ladspa(devices.LIMITER)):
+        import pytest
+        pytest.skip("no swh-plugins here")
+    for noise in devices.NOISE:
+        chain, _noise = devices.voice(noise)
+        # As Microphone._on_pad has it: caps either side.
+        Gst.parse_bin_from_description(f"audioconvert ! audio/x-raw,format=F32LE,rate=48000,channels=1 ! {chain} "
+                                       "! audioconvert", True)
+
+
 def test_switched_on_only_with_a_tablet(monkeypatch):
     calls = []
     app = types.SimpleNamespace(settings=types.SimpleNamespace(camera=True, microphone=False),

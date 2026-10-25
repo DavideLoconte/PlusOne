@@ -170,6 +170,17 @@ _IT = {
     "On the tablet, another app is using the camera": "Sul tablet un'altra app sta usando la fotocamera",
     "On the tablet, another app is using the microphone": "Sul tablet un'altra app sta usando il microfono",
     "Camera": "Fotocamera",
+    "Camera and microphone": "Fotocamera e microfono",
+    "The tablet's microphone, as a microphone for this PC's programs (switched on in the window).":
+        "Il microfono del tablet, come microfono per i programmi di questo PC (si accende nella finestra).",
+    "Noise reduction": "Riduzione del rumore",
+    "Off": "Spenta",
+    "Light, on the tablet": "Leggera, sul tablet",
+    "Neural, on this PC": "Neurale, su questo PC",
+    "Neural takes out more of the room's noise, with about half a processor core":
+        "La neurale toglie più rumore della stanza, con circa mezzo core del processore",
+    "Neural needs DeepFilterNet's plugin in ~/.ladspa: light until then":
+        "La neurale richiede il plugin di DeepFilterNet in ~/.ladspa: fino ad allora, leggera",
     "The tablet's camera, as a webcam for this PC's programs (switched on in the window).":
         "La fotocamera del tablet, come webcam per i programmi di questo PC (si attiva dalla finestra).",
     "Front": "Frontale",

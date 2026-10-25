@@ -266,15 +266,32 @@ them in your video-call program like any other. The tablet captures only
 while a program on the PC uses one of them (a call, the Camera app), and
 stops a few seconds after it lets go; the switch off removes the device from
 the PC altogether. They go over **WebRTC**, as in a video call: Google's
-libwebrtc on the tablet (the sound's gain control and, if *Noise reduction*
-is on in the app, noise suppression; congestion control, retransmissions)
-and GStreamer's webrtcbin on the PC (the jitter buffer), encrypted
+libwebrtc on the tablet (the sound's gain control, congestion control,
+retransmissions) and GStreamer's webrtcbin on the PC (the jitter buffer), encrypted
 (DTLS-SRTP, its keys vouched for by the pairing), over your Wi-Fi or Wi-Fi
 Direct; H.264 up to 2.5 Mbit/s at 720p (5 at 1080p), Opus for the sound,
-about 150 ms from the tablet's microphone to a program on the PC. The PC
-needs `gstreamer1.0-nice` and `gir1.2-gst-plugins-bad-1.0` (the `.deb`
-brings them). **Preferences → Camera** picks the front or the back camera
-and 720p or 1080p.
+about 160 ms from the tablet's microphone to a program on the PC (measured).
+The PC needs `gstreamer1.0-nice`, `gir1.2-gst-plugins-bad-1.0` and
+`swh-plugins` (the `.deb` brings them). **Preferences → Camera and
+microphone** picks the front or the back camera, 720p or 1080p, and the
+microphone's noise reduction:
+
+- **Neural, on this PC** (the default): [DeepFilterNet](https://github.com/Rikorose/DeepFilterNet),
+  a neural network that takes the room's noise out of a voice (20 ms more,
+  about half a processor core while a program records). Its plugin is not
+  packaged; once, from its releases (MIT or Apache-2.0):
+
+  ```bash
+  mkdir -p ~/.ladspa && curl -fL -o ~/.ladspa/libdeep_filter_ladspa.so \
+      https://github.com/Rikorose/DeepFilterNet/releases/download/v0.5.6/libdeep_filter_ladspa-0.5.6-x86_64-unknown-linux-gnu.so
+  ```
+
+  Without it, *Light* instead.
+- **Light, on the tablet**: libwebrtc's noise suppression.
+- **Off**.
+
+Then, whichever: a compressor and a limiter (swh-plugins') bring the voice
+to about -18 dBFS, as calls want, without its peaks going over -1 dBFS.
 
 The webcam is a v4l2loopback device. The `.deb` sets it up; from source or
 the Flatpak, once:

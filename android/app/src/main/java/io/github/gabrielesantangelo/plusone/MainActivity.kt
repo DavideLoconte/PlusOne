@@ -154,7 +154,6 @@ class MainActivity : AppCompatActivity() {
             pcDevice(CAMERA, R.drawable.ic_camera, R.string.camera_for_pc, R.string.camera_on, R.string.camera_off),
             pcDevice(MICROPHONE, R.drawable.ic_microphone, R.string.microphone_for_pc, R.string.microphone_on,
                 R.string.microphone_off),
-            noiseReduction(),
         ))
 
         val paired = Paired.all(this)
@@ -229,20 +228,6 @@ class MainActivity : AppCompatActivity() {
             else -> off
         }
         return Row(row(iconRes, getString(title), getString(subtitle), switch)) { switch.toggle() }
-    }
-
-    /** The microphone with the room's noise taken out, or as it is. */
-    private fun noiseReduction(): Row {
-        val switch = MaterialSwitch(this).apply {
-            isChecked = Options.noiseReduction(this@MainActivity)
-            setOnCheckedChangeListener { _, on ->
-                Options.setNoiseReduction(this@MainActivity, on)
-                CompanionService.instance?.stopCaptures(MICROPHONE)  // the PC asks again, with it
-                refresh()
-            }
-        }
-        return Row(row(R.drawable.ic_noise, getString(R.string.noise_reduction),
-            getString(if (switch.isChecked) R.string.noise_on else R.string.noise_off), switch)) { switch.toggle() }
     }
 
     private fun setPcDevice(kind: String, on: Boolean) {

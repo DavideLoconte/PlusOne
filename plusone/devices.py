@@ -37,16 +37,62 @@ MIC_FEED = "plusone-mic-feed"  # the streams Plus One feeds the microphone with:
 # ns of sound that may wait before the oldest goes: what waits stays, as delay,
 # once the sound comes as fast as it is played (160 ms measured 235 end to end).
 MIC_BEHIND = 60_000_000
-# The tablet's sound, louder: libwebrtc's gain control on Android is a fixed
-# +9 dB, and a tablet's microphone a meter away leaves the voice at -27 dBFS,
-# where calls want about -18. Only a gain for now, small enough that the
-# voice's peaks stay under full scale (audiodynamic, GStreamer's "compressor",
-# bends each sample over its threshold: it distorted the loud syllables).
-MIC_GAIN = 2.0  # +6 dB
-MIC_LEVEL = "volume volume={gain}"
+NOISE = ("off", "light", "neural")
+# LADSPA plugins GStreamer finds (~/.ladspa, /usr/lib/ladspa...), by the end
+# of their elements' names. DeepFilterNet's (MIT or Apache-2.0, not packaged:
+# libdeep_filter_ladspa.so from its releases, in ~/.ladspa) takes the room's
+# noise out of a voice with a neural network, 20 ms late, about half a core
+# while a program records (measured). swh-plugins' compressor and limiter
+# (Ubuntu's package).
+DEEP_FILTER = "-deep-filter-mono"
+COMPRESSOR = "-sc4m"
+LIMITER = "-fastlookaheadlimiter"
+# The level, from about -27 dBFS (libwebrtc's gain control on Android is a
+# fixed +9 dB, the tablet a meter away) to about -18, as calls want: raised,
+# a compressor that evens out loud and soft (RMS, 3:1 over -30 dB, 10 ms in,
+# 300 ms out) and a limiter that keeps the peaks under -1 dBFS (it works on
+# two channels: the one, twice). Measured: -17 to -19 dBFS, nothing over -1.
+LEVEL = ("volume volume=3.98 "  # +12 dB
+         "! {compressor} rms-peak=0 attack-time=10 release-time=300 threshold-level=-30 ratio=3 "
+         "knee-radius=6 makeup-gain=9 "
+         "! audioconvert ! audio/x-raw,format=F32LE,channels=2 ! {limiter} limit=-1 release-time=0.1 "
+         "! audioconvert ! audio/x-raw,format=F32LE,channels=1")
+# Without swh-plugins: a gain under which the voice's peaks stay under full
+# scale (audiodynamic is no compressor: it bends each sample over its threshold).
+PLAIN_LEVEL = "volume volume=2.0"  # +6 dB
 # Software first: little work at these sizes, and decodebin's pick (NVIDIA's,
 # here) held the whole pipeline still until the tablet's first frame.
 H264_DECODERS = ("avdec_h264", "openh264dec", "vah264dec")
+
+
+def ladspa(suffix):
+    """The element of the LADSPA plugin whose element name ends so, or None."""
+    for factory in Gst.Registry.get().get_feature_list(Gst.ElementFactory):
+        name = factory.get_name()
+        if name.startswith("ladspa-") and name.endswith(suffix):
+            return name
+    return None
+
+
+def neural_available():
+    """Whether DeepFilterNet's plugin is there."""
+    Gst.init(None)  # once is enough, again is harmless
+    return ladspa(DEEP_FILTER) is not None
+
+
+def voice(noise):
+    """What the tablet's sound goes through (F32, mono, 48 kHz in and out),
+    and the noise reduction it gets: "neural" only with DeepFilterNet's
+    plugin, else the tablet's ("light")."""
+    deep_filter = ladspa(DEEP_FILTER) if noise == "neural" else None
+    if noise == "neural" and deep_filter is None:
+        noise = "light"
+    compressor, limiter = ladspa(COMPRESSOR), ladspa(LIMITER)
+    level = LEVEL.format(compressor=compressor, limiter=limiter) if compressor and limiter else PLAIN_LEVEL
+    # The network on a thread of its own: should it fall behind, the sound it
+    # cannot take goes, not the packets webrtcbin's jitter buffer hands on.
+    neural = f"queue max-size-time=100000000 max-size-buffers=0 max-size-bytes=0 leaky=downstream ! {deep_filter}"
+    return (f"{neural} ! {level}" if deep_filter else level), noise
 
 
 def h264_decoder():
@@ -570,8 +616,19 @@ class Microphone(Device):
 
     # -- the tablet's sound into the source ---------------------------------------
     def begin(self):
-        self.feed = Feed({"type": "microphone"}, self.where, self._receiver, self._ready, self._problem)
+        self.chain, self.noise = voice(self.app.settings.microphone_noise)
+        log(f"microphone: noise reduction {self.noise}")
+        # The tablet's libwebrtc takes the noise out only for "light": twice
+        # (it and DeepFilterNet) took the voice's edges too.
+        request = {"type": "microphone", "noise_reduction": self.noise == "light"}
+        self.feed = Feed(request, self.where, self._receiver, self._ready, self._problem)
         self.feed.start()
+
+    def renew(self):
+        """Its noise reduction changed: a session in progress is made again with it."""
+        if self.feed:
+            self.end()
+            self.begin()
 
     def end(self):
         self.stop_feed()
@@ -587,11 +644,10 @@ class Microphone(Device):
         # A name of its own: linked by name, and the last session's stream
         # may still be there for a moment (or a second one of this session's).
         name = f"{MIC_FEED}-{next(self._streams)}"
-        # Decoded and made louder (MIC_LEVEL): the tablet's libwebrtc has
-        # already taken the noise out, if asked.
+        # Decoded, the noise taken out if neural, the level set (voice()).
         self.rtc.link(receiver.pipeline, pad,
                       f"rtpopusdepay ! opusdec plc=true ! audioconvert ! audioresample "
-                      f"! audio/x-raw,format=F32LE,rate=48000,channels=1 ! {MIC_LEVEL.format(gain=MIC_GAIN)} "
+                      f"! audio/x-raw,format=F32LE,rate=48000,channels=1 ! {self.chain} "
                       f"! audioconvert dithering=none ! audio/x-raw,format=S16LE,rate=48000,channels=1 "
                       f"! queue max-size-time={MIC_BEHIND} max-size-buffers=0 max-size-bytes=0 leaky=downstream "
                       # As it comes, not by the pipeline's clock (not PipeWire's: the sink

@@ -12,6 +12,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from . import __version__, companion, i18n, log, once, pen  # noqa: E402
 from .app import APP_ID, IN_FLATPAK, set_shell_extension, shell_extension_state  # noqa: E402
+from .devices import neural_available  # noqa: E402
 from .engine import State  # noqa: E402
 from .i18n import _  # noqa: E402
 from .rtsp import MODES  # noqa: E402
@@ -21,6 +22,7 @@ TABLET_ICON = "plusone-tablet-symbolic"  # icons/
 WEBSITE = "https://github.com/GabrieleSantangelo/PlusOne"
 QUALITY_LIST = ["720p", "1080p"]
 FACING_LIST = ["front", "back"]
+NOISE_LIST = ["off", "light", "neural"]  # devices.NOISE
 
 
 def device_status(kind, state):
@@ -517,7 +519,7 @@ class PreferencesDialog(Adw.PreferencesDialog):
         signing.add(group)
         self.add(signing)
 
-        devices = Adw.PreferencesPage(title=_("Camera"), icon_name="camera-web-symbolic")
+        devices = Adw.PreferencesPage(title=_("Camera and microphone"), icon_name="camera-web-symbolic")
         group = Adw.PreferencesGroup(description=_("The tablet's camera, as a webcam for this PC's programs "
                                                    "(switched on in the window)."))
         self.facing_row = Adw.ComboRow(title=_("Camera"), model=Gtk.StringList.new([_("Front"), _("Back")]),
@@ -530,6 +532,19 @@ class PreferencesDialog(Adw.PreferencesDialog):
         for row in (self.facing_row, self.quality_row):
             row.connect("notify::selected", self._camera_options)
             group.add(row)
+        devices.add(group)
+        group = Adw.PreferencesGroup(description=_("The tablet's microphone, as a microphone for this PC's "
+                                                   "programs (switched on in the window)."))
+        neural = neural_available()
+        self.noise_row = Adw.ComboRow(
+            title=_("Noise reduction"),
+            model=Gtk.StringList.new([_("Off"), _("Light, on the tablet"), _("Neural, on this PC")]),
+            selected=NOISE_LIST.index(s.microphone_noise) if s.microphone_noise in NOISE_LIST else 2,
+            subtitle=_("Neural takes out more of the room's noise, with about half a processor core")
+            if neural else _("Neural needs DeepFilterNet's plugin in ~/.ladspa: light until then"))
+        self.noise_row.connect("notify::selected", lambda row, _p: app.set_microphone_noise(
+            NOISE_LIST[row.get_selected()]))
+        group.add(self.noise_row)
         devices.add(group)
         self.add(devices)
 

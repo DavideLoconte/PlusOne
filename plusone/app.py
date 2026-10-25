@@ -401,6 +401,11 @@ class PlusOneApp(Adw.Application):
         if changed:
             self.devices.restart_camera()  # the device's picture size with it
 
+    def set_microphone_noise(self, noise):
+        self.settings.microphone_noise = noise
+        save_settings(self.settings)
+        self.devices.microphone.renew()
+
     def devices_changed(self):
         for listener in list(self.listeners):
             listener()
