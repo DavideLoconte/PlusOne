@@ -21,8 +21,16 @@ Your tablet, and only it.
   to is the only one", which trusted a name anyone can copy. Plus One's app
   must run on the tablet for Second Screen too.
 - **A new window**: the tablet in use, its state and two buttons (*Use as
-  second screen*, *Sign a PDF…*); everything else in the menu: preferences
-  (Screen, Signing, General), My signatures, Paired tablets, Log, About.
+  second screen*, *Sign a PDF…*); everything else in the menu: preferences,
+  My signatures, Paired tablets, Log, About. It says what is happening and
+  what to do next, with the button that helps (an error offers *Try
+  again*, *Open preferences*, *Show log*), and who uses the camera and
+  microphone ("In use by Firefox"). Ctrl+, Ctrl+W, Ctrl+Q.
+- **Preferences on one page**, in words: the picture *Balanced*, *Sharper
+  text* or *For weak Wi-Fi* instead of Mbit/s; resolution, touch and adb
+  under *Advanced*. Plus One speaks the system's language (no setting).
+  After the first pairing it offers the *Tablet* Quick Settings button
+  once; it is turned on only if *Add* is pressed.
 - **The tablet's camera and microphone for the PC**: a webcam (*Plus One
   tablet camera*, a v4l2loopback device that every program sees) and a
   microphone (*Tablet microphone*, a PipeWire source), each with its own
