@@ -112,6 +112,8 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Not the unsigned app (the sign job's input, not for users)
+        run: rm -f dist/app-release-unsigned.apk
       - name: Release notes from CHANGELOG.md
         run: |
           version="${GITHUB_REF_NAME#v}"
