@@ -136,6 +136,8 @@ _IT = {
     "Opening the desktop on {name}…": "Apro il desktop su {name}…",
     "Second screen through": "Secondo schermo tramite",
     "Tablet speakers": "Casse del tablet",
+    "Needs PipeWire's pactl and pw-link, and python3-cryptography":
+        "Servono pactl e pw-link di PipeWire, e python3-cryptography",
     "As a sound output for this PC's programs": "Come uscita audio per i programmi di questo PC",
     "On: choose “Tablet speakers” as the output in the Sound settings":
         "Attive: scegli «Tablet speakers» come uscita nelle impostazioni Audio",

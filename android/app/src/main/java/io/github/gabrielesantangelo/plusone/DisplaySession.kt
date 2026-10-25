@@ -13,9 +13,6 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
-import javax.crypto.Cipher
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
 
 /**
  * The PC's desktop on this screen. The PC sends each encoded frame (H.264)
@@ -45,10 +42,7 @@ class DisplayStopReceiver : android.content.BroadcastReceiver() {
 
 class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pcPort: Int) {
     val socket = DatagramSocket(0).apply { receiveBufferSize = 4 shl 20 }
-    private val key = SecretKeySpec(key, "AES")
-    private val opener = Cipher.getInstance("AES/GCM/NoPadding")
-    private val sealer = Cipher.getInstance("AES/GCM/NoPadding")
-    private var sent = 0L
+    private val sealed = Sealed(key)
     @Volatile private var running = true
     // Packets to the PC go out in order from this thread (input comes on
     // the main one, where Android allows no network).
@@ -191,7 +185,7 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
                 break
             }
             if (packet.address != pc) continue
-            val body = open(buffer, packet.length) ?: continue  // not sealed with this session's key
+            val body = sealed.open(buffer, packet.length) ?: continue  // not sealed with this session's key
             pcPort = packet.port  // replies go where the PC sends from
             val b = ByteBuffer.wrap(body).order(ByteOrder.BIG_ENDIAN)
             when (b.get()) {
@@ -310,25 +304,13 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
         send(b.array())
     }
 
-    private fun open(packet: ByteArray, length: Int): ByteArray? {
-        if (length < NONCE + TAG + 1 || packet[3] != FROM_PC) return null
-        return try {
-            opener.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG * 8, packet, 0, NONCE))
-            opener.doFinal(packet, NONCE, length - NONCE)
-        } catch (e: Exception) {
-            null
-        }
-    }
-
     /** body to the PC, sealed, from the outbox's thread. */
     fun send(body: ByteArray) {
         try {
             outbox.execute {
-                val nonce = ByteBuffer.allocate(NONCE).putInt(FROM_APP.toInt()).putLong(sent++).array()
                 try {
-                    sealer.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG * 8, nonce))
-                    val sealed = nonce + sealer.doFinal(body)
-                    socket.send(DatagramPacket(sealed, sealed.size, pc, pcPort))
+                    val packet = sealed.seal(body)
+                    socket.send(DatagramPacket(packet, packet.size, pc, pcPort))
                 } catch (e: Exception) {
                     if (running) Log.w(CompanionService.TAG, "display: cannot send: $e")
                 }
@@ -345,10 +327,6 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
         const val PONG: Byte = 4
         const val STATS: Byte = 5
         const val INPUT: Byte = 6
-        const val FROM_PC: Byte = 1
-        const val FROM_APP: Byte = 2
-        const val NONCE = 12
-        const val TAG = 16
         const val MAX_WIDTH = 3840
         const val MAX_HEIGHT = 2400
         const val KEYFRAME_AGAIN = 250_000_000L  // ns

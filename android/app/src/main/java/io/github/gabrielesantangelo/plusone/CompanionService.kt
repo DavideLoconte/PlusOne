@@ -481,26 +481,31 @@ class CompanionService : Service() {
 
     @Volatile private var displaying: String? = null  // the PC whose desktop is shown
 
-    /** The PC's sound on the speakers (RtcPlayback), while one of its
-     * programs plays and the user lets it (Plus One → For the PC). */
+    /** The PC's sound on the speakers (PcmPlayback), while one of its
+     * programs plays and the user lets it (Plus One → For the PC). The
+     * request's "sdp" is the session's key and the PC's port (JSON). */
     private fun playback(socket: SSLSocket, wire: Wire, request: JSONObject, pc: String) {
         if (!Options.speakers(this)) {
             wire.send(JSONObject().put("type", "refused").put("reason", "off"))
             return
         }
-        val playback = RtcPlayback(this) { runCatching { socket.close() } }
-        val entry = Capture("speakers", socket, pc)
-        val answer = try {
-            playback.answer(request.optString("sdp"))
+        val playback = try {
+            val offer = JSONObject(request.optString("sdp"))
+            val key = offer.optString("key").chunked(2).mapNotNull { it.toIntOrNull(16)?.toByte() }.toByteArray()
+            val port = offer.optInt("port")
+            require(key.size == 32 && port in 1..65535 && offer.optInt("channels") == PcmPlayback.CHANNELS &&
+                offer.optInt("rate") in 8000..96000 && offer.optInt("frames") in 48..480) { "bad speakers request" }
+            PcmPlayback(key, socket.inetAddress, port, offer.optInt("rate"), offer.optInt("frames"))
         } catch (e: Exception) {
             Log.w(TAG, "speakers not available: $e")
-            playback.stop()
             wire.send(JSONObject().put("type", "refused").put("reason", "unavailable"))
             return
         }
+        val entry = Capture("speakers", socket, pc)
         synchronized(captures) { speakerSessions[entry] = playback }
         try {
-            wire.send(JSONObject().put("type", "answer").put("sdp", answer))
+            playback.start()
+            wire.send(JSONObject().put("type", "answer").put("sdp", JSONObject().put("port", playback.socket.localPort).toString()))
             showCaptures()
             lowLatency(true)
             socket.soTimeout = RtcCapture.SILENT_PC
@@ -513,7 +518,7 @@ class CompanionService : Service() {
         }
     }
 
-    private val speakerSessions = mutableMapOf<Capture, RtcPlayback>()  // under captures
+    private val speakerSessions = mutableMapOf<Capture, PcmPlayback>()  // under captures
 
     /** What the notification says, when only that changed. */
     private fun showCaptures() =

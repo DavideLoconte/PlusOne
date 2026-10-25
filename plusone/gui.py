@@ -42,6 +42,7 @@ def device_status(kind, state, users=()):
     camera = kind == "camera"
     if kind == "speakers":
         return {
+            "setup": _("Needs PipeWire's pactl and pw-link, and python3-cryptography"),
             "off": _("As a sound output for this PC's programs"),
             "ready": _("On: choose “Tablet speakers” as the output in the Sound settings"),
             "in use": _("Playing {programs}").format(programs=", ".join(users)) if users else _("Playing"),

@@ -155,39 +155,6 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
     }
 }
 
-/**
- * The PC's sound on this tablet's speakers (plusone/rtc.py: Sender): the PC
- * offers to send, this answers to receive, and libwebrtc plays what comes,
- * in stereo, as media (the tablet's media volume): its jitter buffer, its
- * concealment of what is lost, and the drift between the two devices'
- * clocks, which a plain stream would let grow into gaps or delay.
- */
-class RtcPlayback(private val context: Context, private val onFailure: () -> Unit) {
-    private var pc: PeerConnection? = null
-
-    fun answer(offer: String): String {
-        val factory = Rtc.factory(context)
-        val gathered = CompletableFuture<Unit>()
-        val connection = Rtc.connection(factory, "speakers", gathered) {
-            if (it == PeerConnection.PeerConnectionState.FAILED) onFailure()
-        }
-        pc = connection
-        Rtc.await { connection.setRemoteDescription(it, SessionDescription(SessionDescription.Type.OFFER, offer)) }
-        val made = Rtc.createAnswer(connection)
-        // libwebrtc decodes Opus in stereo only when the answer asks for it.
-        val stereo = made.description.lines().joinToString("\r\n") { line ->
-            if (line.startsWith("a=fmtp:111 ") && "stereo=1" !in line) "$line;stereo=1;sprop-stereo=1" else line
-        }
-        Rtc.await { connection.setLocalDescription(it, SessionDescription(SessionDescription.Type.ANSWER, stereo)) }
-        return Rtc.gatheredAnswer(connection, gathered, "speakers")
-    }
-
-    fun stop() {
-        pc?.dispose()
-        pc = null
-    }
-}
-
 /** libwebrtc, set up once for the process. */
 object Rtc {
     val egl: EglBase by lazy { EglBase.create() }
@@ -330,12 +297,6 @@ object Rtc {
             .setAudioRecordErrorCallback(recordErrors)
             .setUseHardwareNoiseSuppressor(false)
             .setUseHardwareAcousticEchoCanceler(false)
-            // The PC's sound (RtcPlayback): stereo, as media, not as a call's voice.
-            .setUseStereoOutput(true)
-            .setAudioAttributes(android.media.AudioAttributes.Builder()
-                .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
-                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
-                .build())
             .createAudioDeviceModule()
         val made = PeerConnectionFactory.builder()
             .setAudioDeviceModule(audio)

@@ -7,6 +7,7 @@ it when the program does.
 """
 import ctypes
 import functools
+import importlib.util
 import glob
 import itertools
 import json
@@ -177,6 +178,8 @@ class Feed:
             if not self._wanted.is_set():
                 return None  # stopped while it connected: stop() had no socket to close
             receiver = self.receiver()
+            if hasattr(receiver, "peer"):
+                receiver.peer = sock.getpeername()[0]  # where pcm.PcmSender sends: the paired app's address
             wire.send(dict(self.request, sdp=receiver.offer()))
             reply = wire.receive()
             if reply.get("type") == "refused":
@@ -184,7 +187,7 @@ class Feed:
             if reply.get("type") != "answer":
                 raise ValueError(f"the app answered {reply.get('type')!r}")
             receiver.answer(str(reply.get("sdp", "")))
-            log(f"{kind}: {'to' if kind == 'speakers' else 'from'} the tablet, over WebRTC")
+            log(f"{kind}: to the tablet, as it is" if kind == "speakers" else f"{kind}: from the tablet, over WebRTC")
             self.on_ready()
             self._hold(kind, wire, receiver)
             return None
@@ -585,6 +588,7 @@ class AudioDevice(Device):
 
     NAME = CLASS = DESCRIPTION = None
     CHANNELS = ("1", "mono")
+    NEEDS = "webrtc"  # what else it needs: WebRTC for GStreamer, or python3-cryptography
 
     def __init__(self, app, kind):
         super().__init__(app, kind)
@@ -596,9 +600,13 @@ class AudioDevice(Device):
     def enable(self):
         if self.module:
             return
-        self.rtc = webrtc()
-        if self.rtc is None:
-            self._set_state("webrtc")
+        if self.NEEDS == "webrtc":
+            self.rtc = webrtc()
+            if self.rtc is None:
+                self._set_state("webrtc")
+                return
+        elif importlib.util.find_spec("cryptography") is None:
+            self._set_state("setup")
             return
         if not all(shutil.which(tool) for tool in ("pactl", "pw-link", "pw-dump")):
             self._set_state("setup")
@@ -809,11 +817,12 @@ def make_default_sink(name):
 
 class Speakers(AudioDevice):
     """The tablet's speakers: a virtual PipeWire sink ("Tablet speakers"),
-    which Plus One captures and sends to the tablet (rtc.Sender) while a
-    program plays into it, and nothing otherwise."""
+    which Plus One captures and sends to the tablet as it is (pcm.PcmSender)
+    while a program plays into it, and nothing otherwise."""
 
     NAME, CLASS, DESCRIPTION = SPEAKERS_NAME, "Audio/Sink", "Tablet speakers (Plus One)"
     CHANNELS = ("2", "front-left,front-right")
+    NEEDS = "cryptography"
 
     def __init__(self, app):
         super().__init__(app, "speakers")
@@ -832,10 +841,11 @@ class Speakers(AudioDevice):
         self.stop_feed()
 
     def _sender(self):
-        # What plays into the sink, from its monitor, 10 ms at a time.
-        return self.rtc.Sender(f"pipewiresrc target-object={SPEAKERS_NAME} do-timestamp=true "
-                               f"stream-properties=\"props,stream.capture.sink=true,node.latency=480/48000,"
-                               f"node.name=plusone-speakers-feed\"")
+        from .pcm import PcmSender
+        # What plays into the sink, from its monitor, 5 ms at a time.
+        return PcmSender(f"pipewiresrc target-object={SPEAKERS_NAME} do-timestamp=true "
+                         f"stream-properties=\"props,stream.capture.sink=true,node.latency=240/48000,"
+                         f"node.name=plusone-speakers-feed\"")
 
 
 def pw_objects(text):
