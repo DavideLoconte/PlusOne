@@ -22,8 +22,11 @@ TWCC = "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-0
 CAPS = {
     # opus/48000/2 whatever the channels (RFC 7587): libwebrtc rejects the
     # medium otherwise, and gathers no candidates for it.
+    # In-band FEC: a lost packet rebuilt from the next one (libwebrtc adds it
+    # as losses are reported), before concealment has to guess.
     "audio": ("application/x-rtp,media=audio,encoding-name=OPUS,payload=111,clock-rate=48000,"
-              f"encoding-params=(string)2,rtcp-fb-transport-cc=(boolean)true,extmap-3=(string){TWCC}"),
+              "encoding-params=(string)2,useinbandfec=(string)1,"
+              f"rtcp-fb-transport-cc=(boolean)true,extmap-3=(string){TWCC}"),
     # H.264, which the tablet encodes in hardware; no orientation extension,
     # so libwebrtc turns the frames upright itself.
     "video": ("application/x-rtp,media=video,encoding-name=H264,payload=102,clock-rate=90000,"

@@ -301,7 +301,7 @@ def test_the_voice_chain_by_what_is_there(monkeypatch):
              devices.LIMITER: "ladspa-x-fastlookaheadlimiter"}
     monkeypatch.setattr(devices, "ladspa", every.get)
     chain, noise = devices.voice("neural")
-    assert noise == "neural" and "leaky=downstream ! ladspa-x-deep-filter-mono ! volume" in chain
+    assert noise == "neural" and "leaky=downstream ! ladspa-x-deep-filter-mono min-processing-threshold" in chain
     assert "ladspa-x-sc4m" in chain and "ladspa-x-fastlookaheadlimiter limit=-1" in chain
     chain, noise = devices.voice("light")
     assert noise == "light" and "deep-filter" not in chain and "sc4m" in chain
@@ -379,18 +379,22 @@ def test_switched_on_only_with_a_tablet(monkeypatch):
 
 
 def test_a_dropped_session_shows_black_not_the_last_picture(monkeypatch):
-    later = []
-    monkeypatch.setattr(devices.GLib, "idle_add", lambda call: later.append(call))
+    # Black is written whenever the tablet's picture has not come for a moment.
+    import time as clock
     camera = devices.Camera(FakeApp())
-    camera.feed = object()
-    camera.producer = object()
-    camera.black, camera.live = "black pad", "live pad"
-    chosen = []
-    camera.selector = types.SimpleNamespace(set_property=lambda name, value: chosen.append(value))
-    camera._problem("away")
-    for call in later:
-        call()
-    assert chosen == ["black pad"]
+    pushed = []
+    camera.frames = [types.SimpleNamespace(emit=lambda signal, buffer: pushed.append(buffer))]
+    camera._black_frame = bytes((16, 128)) * 4
+    camera._live_at = clock.monotonic()  # a frame just came: no black over it
+    camera._black()
+    assert pushed == []
+    camera._live_at = clock.monotonic() - 2 * devices.LIVE_GAP  # the session dropped
+    camera._black()
+    assert len(pushed) == 1 and pushed[0].get_size() == 8
+    camera._live_at = clock.monotonic()
+    camera.end()  # the program let go: black at the next tick
+    camera._black()
+    assert len(pushed) == 2
 
 
 def test_a_stale_microphone_is_removed(monkeypatch):

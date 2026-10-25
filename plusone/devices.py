@@ -33,6 +33,7 @@ REFUSED_RETRY = 10  # seconds, after the app said no (the user may change their 
 IN_USE_AFTER = 0.2  # seconds a program holds the device before the tablet is asked
 IDLE_AFTER = 3      # seconds without one before the tablet stops
 SILENT_FOR = 5      # seconds of a session without a packet before it is made again
+LIVE_GAP = 0.5      # seconds without the tablet's picture before the webcam shows black
 KEEPALIVE = 5       # seconds between the PC's pings while it holds a session (Rtc.kt: SILENT_PC)
 MIC_FEED = "plusone-mic-feed"  # the streams Plus One feeds the microphone with: MIC_FEED-<n>
 # ns of sound that may wait before the oldest goes: what waits stays, as delay,
@@ -94,7 +95,11 @@ def voice(noise):
     level = LEVEL.format(compressor=compressor, limiter=limiter) if compressor and limiter else PLAIN_LEVEL
     # The network on a thread of its own: should it fall behind, the sound it
     # cannot take goes, not the packets webrtcbin's jitter buffer hands on.
-    neural = f"queue max-size-time=100000000 max-size-buffers=0 max-size-bytes=0 leaky=downstream ! {deep_filter}"
+    # The network's own thresholds (libDF's defaults; the plugin's let every
+    # stage run on every frame): silence and clean speech cost less.
+    neural = (f"queue max-size-time=100000000 max-size-buffers=0 max-size-bytes=0 leaky=downstream "
+              f"! {deep_filter} min-processing-threshold=-10 max-erb-processing-threshold=30 "
+              f"max-df-processing-threshold=20")
     return (f"{neural} ! {level}" if deep_filter else level), noise
 
 
@@ -397,15 +402,20 @@ class Camera(Device):
     switch is on (programs list it only then), black while no program uses
     it, the tablet's camera while one does.
 
-    Two pipelines: the writer only ever sees frames of one format, so the
-    device is never asked to change (v4l2loopback refuses while a program
-    reads: "busy"); the producer picks black or the tablet's picture, and is
-    made again should it break."""
+    The writer only ever sees frames of one format, so the device is never
+    asked to change (v4l2loopback refuses while a program reads: "busy"):
+    the tablet's picture is decoded to it, black is one frame made once,
+    written again by a timer when no picture comes: 30 times a second while
+    a program has the device open, once a second otherwise (a full-rate
+    black generator cost 6-12% of a core, idle)."""
 
     def __init__(self, app):
         super().__init__(app, "camera")
         self.writers, self.opened = [], []
-        self.producer = None
+        self.frames = []
+        self._timer = None
+        self._fast = None  # the timer's pace: a program reading, or not
+        self._live_at = 0.0  # monotonic time of the tablet's last frame
         self.restart_when_idle = False  # Devices.restart_camera
 
     def enable(self):
@@ -428,6 +438,8 @@ class Camera(Device):
         width, height, _bitrate = self.size = QUALITIES.get(self.app.settings.camera_quality, QUALITIES["720p"])
         self.out = (f"video/x-raw,format=YUY2,width={width},height={height},framerate={FPS}/1,"
                     f"pixel-aspect-ratio=1/1,interlace-mode=progressive,colorimetry=bt601,chroma-site=jpeg")
+        # Black in YUY2: luma 16, chroma 128 (limited range, as bt601 says).
+        self._black_frame = bytes((16, 128)) * (width * height)
         try:
             for path in paths:
                 writer = Gst.parse_launch(f"appsrc name=frames is-live=true do-timestamp=true format=time "
@@ -445,7 +457,8 @@ class Camera(Device):
                 writer.get_state(2 * Gst.SECOND)
                 opened.started()
             self.frames = [writer.get_by_name("frames") for writer in self.writers]
-            self._produce()
+            self._black()  # at once: a device with nothing written is not listed
+            self._pace(False)
         except (GLib.Error, OSError, RuntimeError) as e:
             log("camera: not on:", getattr(e, "message", None) or str(e))
             self.disable()
@@ -455,52 +468,44 @@ class Camera(Device):
         log("camera: on, as", ", ".join(paths))
         self._opened(None)  # a program that had it open already
 
-    def _produce(self):
-        """Black, or the tablet's picture once it decodes: into the writer."""
-        width, height, _bitrate = self.size  # the writers' (enable()), whatever the setting says now
-        self._produced = time.monotonic()
-        raw = f"video/x-raw,format=I420,width={width},height={height},framerate={FPS}/1,pixel-aspect-ratio=1/1"
-        self.raw = raw
-        producer = Gst.parse_launch(
-            f"input-selector name=selector ! videoconvert ! {self.out} "
-            f"! appsink name=sink emit-signals=true sync=false max-buffers=2 drop=true "
-            f"videotestsrc is-live=true pattern=black ! {raw} ! selector.sink_0 "
-            f"appsrc name=src is-live=true do-timestamp=true format=time caps={raw} "
-            f"! queue leaky=downstream max-size-buffers=2 ! selector.sink_1")
-        self.src = producer.get_by_name("src")
-        self.selector = producer.get_by_name("selector")
-        self.black, self.live = self.selector.get_static_pad("sink_0"), self.selector.get_static_pad("sink_1")
-        self.selector.set_property("active-pad", self.black)
-        # The tablet's picture shows once it is decoded, not before (black until then).
-        self.live.add_probe(Gst.PadProbeType.BUFFER, self._decoded)
-        producer.get_by_name("sink").connect("new-sample", self._frame)
-        bus = producer.get_bus()
-        bus.add_signal_watch()
-        bus.connect("message::error", self._error)
-        self.producer = producer
-        producer.set_state(Gst.State.PLAYING)
-
-    def _frame(self, sink):
-        buffer = sink.emit("pull-sample").get_buffer()
+    def _write(self, buffer):
         for frames in self.frames:
             frames.emit("push-buffer", buffer)
-        return Gst.FlowReturn.OK
+
+    def _black(self):
+        """Black, when the tablet's picture is not coming (its timer)."""
+        if self.frames and time.monotonic() - self._live_at > LIVE_GAP:
+            self._write(Gst.Buffer.new_wrapped(self._black_frame))
+        return True
+
+    def _pace(self, fast):
+        if fast == self._fast:
+            return
+        self._fast = fast
+        if self._timer:
+            GLib.source_remove(self._timer)
+        self._timer = GLib.timeout_add(1000 // FPS if fast else 1000, self._black)
 
     def disable(self):
         self.stop_feed()
+        if self._timer:
+            GLib.source_remove(self._timer)
+        self._timer = self._fast = None
         for opened in self.opened:
             opened.close()
-        for pipeline in [self.producer] + self.writers:
-            if pipeline:
-                pipeline.get_bus().remove_signal_watch()
-                pipeline.set_state(Gst.State.NULL)
-        self.producer, self.writers, self.opened = None, [], []
+        for writer in self.writers:
+            writer.get_bus().remove_signal_watch()
+            writer.set_state(Gst.State.NULL)
+        self.writers, self.opened, self.frames = [], [], []
         self._in_use = False
         self.restart_when_idle = False
         self._set_state("off")
 
     def _opened(self, _count):
-        self._used(any(opened.count > opened.baseline for opened in self.opened))
+        reading = any(opened.count > opened.baseline for opened in self.opened)
+        if self.frames:
+            self._pace(reading)
+        self._used(reading)
 
     def begin(self):
         settings = self.app.settings
@@ -512,55 +517,39 @@ class Camera(Device):
 
     def end(self):
         self.stop_feed()
-        if self.producer:
-            self.selector.set_property("active-pad", self.black)
+        self._live_at = 0.0  # black at the next tick, not half a second later
         if self.restart_when_idle:
             GLib.idle_add(once(self.app.devices.restart_camera))  # its new size, now
 
     def _receiver(self):
-        """The tablet's video, decoded and made the device's size, into the producer."""
+        """The tablet's video, decoded at the device's size and format, into the writers."""
         return self.rtc.Receiver("video", self._on_pad)
 
     def _on_pad(self, receiver, pad):
         # Nothing before a key frame, a new one asked for (PLI) after a loss,
-        # and no frame the decoder knows to be broken.
+        # and no frame the decoder knows to be broken. videorate only drops
+        # (the tablet sending more than 30): holding each frame until the
+        # next, to repeat it should none come, was a frame (33 ms) late.
         decoder = f"{self.decoder} output-corrupt=false" if self.decoder == "avdec_h264" else self.decoder
         chain = self.rtc.link(receiver.pipeline, pad, f"rtph264depay wait-for-keyframe=true request-keyframe=true "
-                                             f"! h264parse ! {decoder} ! videoconvert "
-                                        f"! videoscale add-borders=true ! videorate ! {self.raw} "
-                                        f"! appsink name=decoded emit-signals=true sync=false max-buffers=2 drop=true")
+                                                      f"! h264parse ! {decoder} ! videoconvert "
+                                                      f"! videoscale add-borders=true ! videorate drop-only=true "
+                                                      f"! {self.out} ! appsink name=decoded emit-signals=true "
+                                                      f"sync=false max-buffers=2 drop=true")
         chain.get_by_name("decoded").connect("new-sample", self._decoded_frame)
 
     def _decoded_frame(self, sink):
-        self.src.emit("push-buffer", sink.emit("pull-sample").get_buffer())
+        # The writer's own time on it (do-timestamp), not the session's.
+        buffer = sink.emit("pull-sample").get_buffer().copy()
+        buffer.pts = buffer.dts = Gst.CLOCK_TIME_NONE
+        self._live_at = time.monotonic()
+        if self.feed:
+            self._write(buffer)
         return Gst.FlowReturn.OK
-
-    def _problem(self, reason):
-        super()._problem(reason)
-        # The session dropped: black, not the last picture frozen, until the tablet's comes again.
-        GLib.idle_add(once(self._black))
-
-    def _black(self):
-        if self.producer:
-            self.selector.set_property("active-pad", self.black)
-
-    def _decoded(self, _pad, _info):
-        if self.feed and self.selector.get_property("active-pad") != self.live:
-            self.selector.set_property("active-pad", self.live)
-        return Gst.PadProbeReturn.OK
 
     def _error(self, bus, message):
         error, _debug = message.parse_error()
         log("camera:", error.message)
-        if self.producer and bus is self.producer.get_bus():
-            # The tablet's picture broke it: made again, black until the next key frame
-            # (not at once again and again, should it keep breaking).
-            bus.remove_signal_watch()
-            self.producer.set_state(Gst.State.NULL)
-            self.producer = None
-            wait = max(0, 2 - (time.monotonic() - self._produced))
-            GLib.timeout_add(int(wait * 1000), once(lambda: self.writers and self.producer is None
-                                                    and self._produce()))
 
 
 class Microphone(Device):
@@ -706,7 +695,7 @@ class Microphone(Device):
         name = f"{MIC_FEED}-{next(self._streams)}"
         # Decoded, the noise taken out if neural, the level set (voice()).
         self.rtc.link(receiver.pipeline, pad,
-                      f"rtpopusdepay ! opusdec plc=true ! audioconvert ! audioresample "
+                      f"rtpopusdepay ! opusdec plc=true use-inband-fec=true ! audioconvert ! audioresample "
                       f"! audio/x-raw,format=F32LE,rate=48000,channels=1 ! {self.chain} "
                       f"! audioconvert dithering=none ! audio/x-raw,format=S16LE,rate=48000,channels=1 "
                       f"! queue max-size-time={MIC_BEHIND} max-size-buffers=0 max-size-bytes=0 leaky=downstream "
