@@ -22,6 +22,12 @@ VBV_FRAMES = 4             # a keyframe may be this many average frames
 MIN_KEYFRAME_GAP = 1.0     # seconds between keyframes forced on request
 
 ENCODERS = {
+    # Intel's low-power encoder (VDENC), the frame turned into NV12 on the
+    # GPU too: first, for the battery. Measured at 1920x1200@60: 3.8 ms to the
+    # encoder's output and 3.5% of a core, against NVENC's 4.7 ms, 7% and the
+    # NVIDIA GPU woken (about 8 W more).
+    "va-lp": ("vah264lpenc", "rate-control=cbr bitrate={bitrate} key-int-max={gop} b-frames=0 "
+              "ref-frames=1 target-usage=7 aud=false", "NV12"),
     "nvenc": ("nvh264enc", "preset=low-latency-hq zerolatency=true bframes=0 rc-mode=cbr "
               "bitrate={bitrate} gop-size={gop} aud=false", "BGRA"),
     "va": ("vah264enc", "rate-control=cbr bitrate={bitrate} key-int-max={gop} b-frames=0 "
@@ -34,6 +40,10 @@ ENCODERS = {
 # Mutter hands out BGRA as readily as BGRx; asking for it makes the colour
 # conversion a no-op for NVENC (it cost ~2.3 ms of CPU per 1920x1200 frame).
 CAPTURE_FORMAT = "BGRA"
+# How each encoder gets its raw format: VA's on the GPU (vapostproc; on the
+# CPU it was +30% of a core), the others' by videoconvert.
+VA_CONVERT = "vapostproc ! video/x-raw(memory:VAMemory),format=NV12"
+CONVERT = {"va-lp": VA_CONVERT, "va": VA_CONVERT}
 # Mutter gives the virtual monitor the stream's max-framerate as its refresh
 # rate. At 60 Hz it skips frames that come a little early (a window drawing
 # at 60 fps reached the encoder at about 47), but asking for 120 is worse:
@@ -126,9 +136,10 @@ class Streamer:
                      f"max-framerate={fps}/1")
         element, options, raw_format = ENCODERS[encoder]
         enc = f"{element} name=enc " + options.format(bitrate=bitrate, gop=fps * KEYFRAME_SECONDS)
+        convert = CONVERT.get(encoder, f"videoconvert n-threads=4 ! video/x-raw,format={raw_format}")
         self.pipeline = Gst.parse_launch(
             f"{video} ! queue max-size-buffers=1 leaky=downstream ! "
-            f"videoconvert n-threads=4 ! video/x-raw,format={raw_format} ! "
+            f"{convert} ! "
             f"{enc} ! video/x-h264,profile=high ! h264parse config-interval=-1 ! "
             f"queue max-size-buffers=2 ! mpegtsmux alignment=-1 ! "
             f"appsink name=out emit-signals=true sync=false async=false buffer-list=true max-buffers=0")
