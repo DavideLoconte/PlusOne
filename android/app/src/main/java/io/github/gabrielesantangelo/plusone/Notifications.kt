@@ -61,8 +61,10 @@ object Notifications {
             .setContentText(context.getString(R.string.pair_message, code.chunked(3).joinToString(" ")))
             .setContentIntent(PendingIntent.getActivity(context, pairingId(code), open,
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+            // Not from the lock screen: whoever holds the tablet, locked, does not pair it.
             .addAction(Notification.Action.Builder(null, context.getString(R.string.pair),
-                action(PairingReceiver.ACTION_ACCEPT)).build())
+                action(PairingReceiver.ACTION_ACCEPT)).setAuthenticationRequired(true).build())
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
             .addAction(Notification.Action.Builder(null, context.getString(R.string.cancel),
                 action(PairingReceiver.ACTION_REJECT)).build())
             .setAutoCancel(true)

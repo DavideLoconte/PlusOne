@@ -44,6 +44,9 @@ object Ink {
     fun rgb(r: Double, g: Double, b: Double) =
         Color.rgb((r * 255).toInt(), (g * 255).toInt(), (b * 255).toInt())
 
+    /** value to the nearest 1/per, as JSON writes it: short. */
+    fun round(value: Float, per: Int): Double = Math.round(value.toDouble() * per) / per.toDouble()
+
     fun colorJson(color: Int) =
         JSONArray(listOf(Color.red(color) / 255.0, Color.green(color) / 255.0, Color.blue(color) / 255.0))
 
@@ -103,21 +106,27 @@ class Stroke(val points: FloatArray, val width: Float = Ink.WIDTH, val color: In
     }
 
     override fun transformed(m: android.graphics.Matrix): Mark {
+        // One call for all the points (one per point was a JNI call each).
+        val xy = FloatArray(points.size / 3 * 2)
+        for (i in 0 until points.size / 3) {
+            xy[2 * i] = points[3 * i]; xy[2 * i + 1] = points[3 * i + 1]
+        }
+        m.mapPoints(xy)
         val moved = points.copyOf()
-        val xy = FloatArray(2)
-        for (i in points.indices step 3) {
-            xy[0] = points[i]; xy[1] = points[i + 1]
-            m.mapPoints(xy)
-            moved[i] = xy[0]; moved[i + 1] = xy[1]
+        for (i in 0 until points.size / 3) {
+            moved[3 * i] = xy[2 * i]; moved[3 * i + 1] = xy[2 * i + 1]
         }
         return Stroke(moved, width * scaleOf(m), color)
     }
 
+    // Hundredths of a point, thousandths of pressure: not 0.10000000149011612.
     override fun toJson(): JSONObject = JSONObject()
         .put("type", "stroke")
-        .put("width", width.toDouble())
+        .put("width", Ink.round(width, 100))
         .put("color", Ink.colorJson(color))
-        .put("points", JSONArray().also { a -> points.forEach { a.put(it.toDouble()) } })
+        .put("points", JSONArray().also { a ->
+            points.forEachIndexed { i, v -> a.put(Ink.round(v, if (i % 3 == 2) 1000 else 100)) }
+        })
 }
 
 /** Text from its baseline's left end, as pdf.py's Text; turned by angle
@@ -188,16 +197,27 @@ class Signature(val width: Float, val strokes: List<FloatArray>,
         }
     }
 
-    fun toJson(): JSONObject = JSONObject().put("id", id).put("width", width.toDouble()).put("strokes", JSONArray().also { list ->
+    fun toJson(): JSONObject = JSONObject().put("id", id).put("width", Ink.round(width, 100)).put("strokes", JSONArray().also { list ->
         for (s in strokes) list.put(JSONArray().also { pts ->
-            for (i in s.indices step 3) pts.put(JSONArray(listOf(s[i].toDouble(), s[i + 1].toDouble(), s[i + 2].toDouble())))
+            // Normalized to a width of 1: five decimals are thousandths of a millimetre.
+            for (i in s.indices step 3) pts.put(JSONArray(listOf(Ink.round(s[i], 100_000), Ink.round(s[i + 1], 100_000),
+                Ink.round(s[i + 2], 1000))))
         })
     })
 
     companion object {
         /** ink.py normalize(). */
-        fun of(marks: List<Stroke>): Signature? {
-            if (marks.isEmpty()) return null
+        fun of(all: List<Stroke>): Signature? {
+            if (all.isEmpty()) return null
+            // At most MAX_POINTS samples, as fromJson() takes them back (else
+            // "saved", and lost at the next load): every n-th, ends kept.
+            val total = all.sumOf { it.points.size / 3 }
+            val step = (total + MAX_POINTS - 1) / MAX_POINTS
+            val marks = if (step <= 1) all else all.map { stroke ->
+                val n = stroke.points.size / 3
+                val keep = (0 until n).filter { it % step == 0 || it == n - 1 }
+                Stroke(FloatArray(keep.size * 3) { stroke.points[keep[it / 3] * 3 + it % 3] }, stroke.width, stroke.color)
+            }
             val x0 = marks.minOf { it.bounds.left + it.width }
             val y0 = marks.minOf { it.bounds.top + it.width }
             val width = (marks.maxOf { it.bounds.right - it.width } - x0).takeIf { it > 0f } ?: 1f
@@ -226,11 +246,15 @@ class Signature(val width: Float, val strokes: List<FloatArray>,
                 FloatArray(pts.length() * 3) { k ->
                     val point = pts.getJSONArray(k / 3)
                     require(point.length() == 3)
-                    point.getDouble(k % 3).toFloat().also { require(it.isFinite()) }
+                    // Normalized: x within the width (1), y not metres away,
+                    // pressure 0 to 1. A PC's 1e37 would be infinity once placed.
+                    point.getDouble(k % 3).toFloat().also {
+                        require(it.isFinite() && if (k % 3 == 2) it in 0f..1f else it in -MAX_COORD..MAX_COORD)
+                    }
                 }
             }
             val width = json.optDouble("width", 1.0).toFloat()
-            if (id == null || strokes.isEmpty() || !(width > 0f && width.isFinite())) null
+            if (id == null || strokes.isEmpty() || !(width > 0f && width <= 10_000f)) null
             else Signature(width, strokes, id)
         } catch (e: org.json.JSONException) {
             null
@@ -239,6 +263,7 @@ class Signature(val width: Float, val strokes: List<FloatArray>,
         }
 
         const val MAX_POINTS = 20_000  // samples: a long signature has a few thousand
+        const val MAX_COORD = 100f     // normalized coordinates: 100 times its width at most
         const val MAX_TALL = 1f        // a placed signature at most as tall as its full width
     }
 }

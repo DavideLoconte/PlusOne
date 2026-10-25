@@ -135,3 +135,13 @@ fun Context.group(rows: List<Row>) = LinearLayout(this).apply {
 }
 
 data class Row(val view: View, val onClick: ((View) -> Unit)? = null)
+
+
+/** Whether one of the app's screens is in front: then it may open another
+ * (the pairing question, CaptureActivity) without "display over other apps". */
+object Front {
+    private val count = java.util.concurrent.atomic.AtomicInteger()
+    val shown get() = count.get() > 0
+    fun started() = count.incrementAndGet()
+    fun stopped() = count.decrementAndGet()
+}

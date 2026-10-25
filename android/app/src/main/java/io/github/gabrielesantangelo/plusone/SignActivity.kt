@@ -814,6 +814,16 @@ class SignActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
+    override fun onStart() {
+        super.onStart()
+        Front.started()
+    }
+
+    override fun onStop() {
+        Front.stopped()
+        super.onStop()
+    }
+
     override fun onResume() {
         super.onResume()
         signatureChanged()  // saved, removed, or merged from a PC meanwhile

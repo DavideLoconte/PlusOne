@@ -34,7 +34,8 @@ import java.util.concurrent.TimeUnit
  * link, which vouches for the DTLS fingerprints in them; the media go
  * straight between the two (ICE, host addresses: the same network).
  */
-class RtcCapture(private val context: Context, private val request: JSONObject, private val noiseReduction: Boolean) {
+class RtcCapture(private val context: Context, private val request: JSONObject, private val noiseReduction: Boolean,
+                 private val onFailure: () -> Unit) {
     private val camera = request.optString("type") == "camera"
     private var pc: PeerConnection? = null
     private var capturer: CameraVideoCapturer? = null
@@ -131,15 +132,24 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
         val front = request.optString("facing") != "back"
         val name = enumerator.deviceNames.firstOrNull { enumerator.isFrontFacing(it) == front }
             ?: enumerator.deviceNames.first()
-        val capturer = enumerator.createCapturer(name, null)
-        val source = factory.createVideoSource(false)
+        // The camera taken by another app, or gone: the session ends, the PC
+        // asks again (an empty stream would look like a frozen one).
+        val events = object : CameraVideoCapturer.CameraEventsHandler {
+            override fun onCameraError(error: String) { Log.w(TAG, "camera: $error"); onFailure() }
+            override fun onCameraDisconnected() { Log.w(TAG, "camera: disconnected"); onFailure() }
+            override fun onCameraFreezed(error: String) { Log.w(TAG, "camera: $error") }
+            override fun onCameraOpening(name: String) {}
+            override fun onFirstFrameAvailable() {}
+            override fun onCameraClosed() {}
+        }
+        // Each one kept as soon as it is made: stop() disposes of what there is.
+        val capturer = enumerator.createCapturer(name, events).also { this.capturer = it }
+        val source = factory.createVideoSource(false).also { this.videoSource = it }
         val helper = SurfaceTextureHelper.create("plusone-camera", Rtc.egl.eglBaseContext)
+            ?.also { this.helper = it } ?: throw IllegalStateException("no EGL for the camera")
         capturer.initialize(helper, context, source.capturerObserver)
         capturer.startCapture(request.optInt("width", 1280).coerceIn(320, 1920),
             request.optInt("height", 720).coerceIn(240, 1080), request.optInt("fps", 30).coerceIn(10, 30))
-        this.capturer = capturer
-        this.videoSource = source
-        this.helper = helper
         return factory.createVideoTrack("camera", source)
     }
 
@@ -148,6 +158,7 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
         if (files != null && java.io.File(files, Rtc.RECORD_FLAG).exists()) {
             Rtc.recording = Rtc.Recording(java.io.File(files, Rtc.RECORD_FILE))
         }
+        Rtc.recordFailed.add(onFailure)  // the microphone failing (the process's one recorder)
         // libwebrtc's own processing: its gain control and, if asked, its
         // noise suppression. No echo cancelling: the tablet plays nothing back.
         val constraints = MediaConstraints().apply {
@@ -162,6 +173,7 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
     }
 
     fun stop() {
+        Rtc.recordFailed.remove(onFailure)
         if (!camera) Rtc.recording?.let { Rtc.recording = null; it.close() }
         try { capturer?.stopCapture() } catch (e: InterruptedException) {}
         capturer?.dispose()
@@ -214,6 +226,20 @@ object Rtc {
      * RECORD_FILE: each piece's wall-clock time (ms), its size, its samples. */
     @Volatile var recording: Recording? = null
 
+    /** The microphone's sessions, told when Android's recorder fails. */
+    val recordFailed: MutableSet<() -> Unit> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    private val recordErrors = object : JavaAudioDeviceModule.AudioRecordErrorCallback {
+        override fun onWebRtcAudioRecordInitError(message: String) = failed(message)
+        override fun onWebRtcAudioRecordStartError(code: JavaAudioDeviceModule.AudioRecordStartErrorCode, message: String) =
+            failed(message)
+        override fun onWebRtcAudioRecordError(message: String) = failed(message)
+        private fun failed(message: String) {
+            Log.w(RtcCapture.TAG, "microphone: $message")
+            recordFailed.forEach { it() }
+        }
+    }
+
     class Recording(file: java.io.File) {
         private val out = java.io.DataOutputStream(java.io.BufferedOutputStream(java.io.FileOutputStream(file)))
 
@@ -252,6 +278,7 @@ object Rtc {
         val audio = JavaAudioDeviceModule.builder(context.applicationContext)
             .setAudioSource(source)
             .setSamplesReadyCallback { samples -> recording?.write(samples) }
+            .setAudioRecordErrorCallback(recordErrors)
             .setUseHardwareNoiseSuppressor(false)
             .setUseHardwareAcousticEchoCanceler(false)
             .createAudioDeviceModule()

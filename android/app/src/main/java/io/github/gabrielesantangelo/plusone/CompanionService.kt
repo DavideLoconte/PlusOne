@@ -20,7 +20,9 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import javax.net.ssl.SSLServerSocket
 import javax.net.ssl.SSLSocket
 
@@ -44,8 +46,16 @@ class CompanionService : Service() {
         super.onCreate()
         instance = this
         Notifications.channels(this)
-        startForeground(Notifications.SERVICE_ID, Notifications.ready(this),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        try {
+            startForeground(Notifications.SERVICE_ID, Notifications.ready(this),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        } catch (e: Exception) {
+            // Restarted from the background (START_STICKY) where Android does
+            // not allow it: the next time the app opens starts it again.
+            Log.w(TAG, "foreground service not allowed now: $e")
+            stopSelf()
+            return
+        }
         // PDFs of jobs this process no longer has (it was ended meanwhile).
         File(cacheDir, "jobs").listFiles()?.forEach { if (it.nameWithoutExtension !in Jobs.ids) it.delete() }
         Jobs.listen(queueChanged)
@@ -88,7 +98,7 @@ class CompanionService : Service() {
         handler.removeCallbacksAndMessages(null)
         synchronized(this) {
             stopped = true
-            registration?.let { (getSystemService(NSD_SERVICE) as NsdManager).unregisterService(it) }
+            registration?.let { runCatching { (getSystemService(NSD_SERVICE) as NsdManager).unregisterService(it) } }
             registration = null
             server?.close()
         }
@@ -97,16 +107,23 @@ class CompanionService : Service() {
     }
 
     private fun serve() {
-        val socket = try {
-            val factory = Identity.sslContext().serverSocketFactory
-            // A port the PC knows: over Wi-Fi Direct it checks who the
-            // tablet is before mDNS has said where the app listens.
-            (try { factory.createServerSocket(PORT) } catch (e: java.net.BindException) {
-                factory.createServerSocket(0)
-            }) as SSLServerSocket
-        } catch (e: Exception) {
-            Log.e(TAG, "cannot listen", e)
-            return
+        // Not listening is not ready: tried again (the keystore's first key
+        // may fail once) instead of a "Ready" nobody can reach.
+        var socket: SSLServerSocket? = null
+        while (socket == null) {
+            if (stopped) return
+            socket = try {
+                val factory = Identity.sslContext().serverSocketFactory
+                // A port the PC knows: over Wi-Fi Direct it checks who the
+                // tablet is before mDNS has said where the app listens.
+                (try { factory.createServerSocket(PORT) } catch (e: java.net.BindException) {
+                    factory.createServerSocket(0)
+                }) as SSLServerSocket
+            } catch (e: Exception) {
+                Log.e(TAG, "cannot listen, again in a while", e)
+                Thread.sleep(LISTEN_RETRY)
+                null
+            }
         }
         socket.needClientAuth = true
         socket.enabledProtocols = arrayOf("TLSv1.3")
@@ -114,16 +131,35 @@ class CompanionService : Service() {
             // Stopped while the first key was being made: nothing to leave behind.
             if (stopped) return socket.close()
             server = socket
-            advertise(socket.localPort)
+            try {
+                advertise(socket.localPort)
+            } catch (e: Exception) {
+                Log.e(TAG, "not on the network by mDNS (the PC still finds it at its port): $e")
+            }
         }
         while (!socket.isClosed) {
-            val client = try { socket.accept() as SSLSocket } catch (e: Exception) { break }
+            val client = try {
+                socket.accept() as SSLSocket
+            } catch (e: Exception) {
+                if (socket.isClosed) break
+                Log.w(TAG, "accept: $e")  // out of fds a moment, say: not the end of listening
+                Thread.sleep(200)
+                continue
+            }
             // Small messages go at once: the microphone's are 100 bytes every 20 ms,
             // which Nagle's algorithm would hold back for the PC's delayed ACKs.
             try { client.tcpNoDelay = true } catch (e: Exception) {}
+            // Connections not through TLS yet, few at a time: strangers that
+            // never finish their handshake cannot take every thread from a paired PC.
+            if (handshaking.incrementAndGet() > MAX_HANDSHAKING) {
+                handshaking.decrementAndGet()
+                client.close()
+                continue
+            }
             try {
                 connections.execute { handle(client) }
             } catch (e: RejectedExecutionException) {
+                handshaking.decrementAndGet()
                 client.close()
             }
         }
@@ -131,11 +167,12 @@ class CompanionService : Service() {
 
     private fun advertise(port: Int) {
         val info = NsdServiceInfo().apply {
-            serviceName = deviceName(this@CompanionService)
+            serviceName = deviceName(this@CompanionService).take(63)  // a DNS label's most
             serviceType = SERVICE_TYPE
             setPort(port)
             setAttribute("id", Identity.fingerprint(Identity.certificate.encoded).take(16))
-            setAttribute("name", deviceName(this@CompanionService))
+            // A TXT entry, key and value, is 255 bytes at most.
+            setAttribute("name", deviceName(this@CompanionService).take(80))
         }
         val listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(info: NsdServiceInfo) {
@@ -143,6 +180,7 @@ class CompanionService : Service() {
             }
             override fun onRegistrationFailed(info: NsdServiceInfo, error: Int) {
                 Log.e(TAG, "mDNS registration failed: $error")
+                synchronized(this@CompanionService) { if (registration === this) registration = null }
             }
             override fun onServiceUnregistered(info: NsdServiceInfo) {}
             override fun onUnregistrationFailed(info: NsdServiceInfo, error: Int) {}
@@ -158,6 +196,8 @@ class CompanionService : Service() {
         lastUse = System.currentTimeMillis()
         var link: Wire? = null
         var stranger = false  // counted in unpaired: not (yet) a paired PC
+        var shaking = true  // counted in handshaking
+        var fingerprint: String? = null
         try {
             socket.use {
                 // Nothing waits long for a peer that is not even paired: the
@@ -167,8 +207,10 @@ class CompanionService : Service() {
                 val guard = Wire.WATCHDOG.schedule({ socket.close() }, HANDSHAKE_DEADLINE, TimeUnit.MILLISECONDS)
                 socket.soTimeout = HANDSHAKE_TIMEOUT
                 socket.startHandshake()
+                handshaking.decrementAndGet()
+                shaking = false
                 val pc = socket.session.peerCertificates[0].encoded
-                val fingerprint = Identity.fingerprint(pc)
+                fingerprint = Identity.fingerprint(pc)
                 val known = Paired.contains(this, fingerprint)
                 if (!known) {
                     stranger = true
@@ -192,6 +234,9 @@ class CompanionService : Service() {
                     Paired.add(this, fingerprint, pcName)
                 }
                 guard.cancel(false)
+                // Its links, closed the moment the user forgets it (disconnect()).
+                links.computeIfAbsent(fingerprint) { ConcurrentHashMap.newKeySet() }.add(socket)
+                if (!Paired.contains(this, fingerprint)) return  // forgotten just now
                 if (stranger) {
                     unpaired.decrementAndGet()
                     stranger = false
@@ -229,17 +274,29 @@ class CompanionService : Service() {
             // stack, and an uncaught Error on a pool thread ends the process.
             Log.i(TAG, "connection ended: $e")
         } finally {
+            if (shaking) handshaking.decrementAndGet()
             if (stranger) unpaired.decrementAndGet()
+            fingerprint?.let { links[it]?.remove(socket) }
             link?.let { Jobs.detach(it) }  // its jobs wait for the PC to come back
             busy.decrementAndGet()
             lastUse = System.currentTimeMillis()
         }
     }
 
-    // The camera's and the microphone's captures, each with its connection.
-    private val captures = mutableMapOf<RtcCapture, Pair<String, SSLSocket>>()
-    @Volatile private var elevating: CompletableFuture<Boolean>? = null
-    @Volatile private var capturingFor = ""
+    // Connections still in their TLS handshake, and each paired PC's open links.
+    private val handshaking = AtomicInteger()
+    private val links = ConcurrentHashMap<String, MutableSet<SSLSocket>>()
+
+    /** The user forgot this PC: what it has open ends now (a capture in
+     * progress, a PDF being signed), not when it happens to hang up. */
+    fun disconnect(fingerprint: String) {
+        links.remove(fingerprint)?.forEach { runCatching { it.close() } }
+    }
+
+    // The camera's and the microphone's captures: what, its connection, for which PC.
+    private class Capture(val kind: String, val socket: SSLSocket, val pc: String)
+    private val captures = mutableMapOf<RtcCapture, Capture>()
+    private var elevating: CompletableFuture<Boolean>? = null  // under captures
 
     /** A program on the PC uses the camera or the microphone: sent over
      * WebRTC (RtcCapture) to the PC that offered on this connection, until it
@@ -253,14 +310,15 @@ class CompanionService : Service() {
         val offer = request.optString("sdp")
         if (offer.isEmpty()) return refuse("unavailable")  // a PC of before WebRTC
         // The PC says whether libwebrtc takes the noise out: not when it does
-        // itself (a neural network there), nor when its user wants none.
-        val capture = RtcCapture(this, request, request.optBoolean("noise_reduction", true))
-        synchronized(captures) {
-            captures[capture] = kind to socket
-            capturingFor = pc
+        // itself (a neural network there), nor when its user wants none. A
+        // camera or microphone that fails ends the session (the PC tries
+        // again), not an empty stream.
+        val capture = RtcCapture(this, request, request.optBoolean("noise_reduction", true)) {
+            runCatching { socket.close() }
         }
+        synchronized(captures) { captures[capture] = Capture(kind, socket, pc) }
         try {
-            if (!allowedTypes(kind) && !foreground()) return refuse("background")
+            if (!allowedTypes(kind) && !foreground(kind)) return refuse("background")
             val answer = try {
                 capture.answer(offer)
             } catch (e: Exception) {
@@ -294,17 +352,25 @@ class CompanionService : Service() {
      * started again, while the app is in front: for a moment a see-through
      * activity is (CaptureActivity, which may open over other apps). Once:
      * the types stay while the service runs and the user lets the PC have them. */
-    private fun foreground(): Boolean {
-        val done = CompletableFuture<Boolean>()
-        elevating = done
-        startActivity(Intent(this, CaptureActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION))
-        return try {
+    private fun foreground(kind: String): Boolean {
+        // CaptureActivity can open only over other apps (or the app's own
+        // screen), and not over the lock screen: else no use trying.
+        val locked = getSystemService(android.app.KeyguardManager::class.java).isKeyguardLocked
+        if (locked || !(Settings.canDrawOverlays(this) || Front.shown)) return false
+        // Camera and microphone asked at once: one activity, one wait.
+        val done = synchronized(captures) {
+            elevating?.takeIf { !it.isDone } ?: CompletableFuture<Boolean>().also {
+                elevating = it
+                startActivity(Intent(this, CaptureActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION))
+            }
+        }
+        try {
             done.get(ELEVATE_WAIT, TimeUnit.MILLISECONDS)
         } catch (e: Exception) {
             Log.w(TAG, "could not come to the front for the camera or microphone: $e")
-            false
         }
+        return allowedTypes(kind)
     }
 
     /** While the app is in front (CaptureActivity, MainActivity): the service
@@ -316,24 +382,28 @@ class CompanionService : Service() {
             if (on && checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) wanted = wanted or typeOf(kind)
         }
         if (wanted != types) {
+            val before = types
             types = wanted
-            showForeground()
+            if (!showForeground()) types = before  // what the service really has
         }
-        elevating?.complete(true)
+        synchronized(captures) { elevating?.complete(true) }
     }
 
-    /** The foreground service with its types, and its notification as the captures are now. */
-    private fun showForeground() {
-        try {
-            startForeground(Notifications.SERVICE_ID, notification(), types)
-        } catch (e: Exception) {
-            Log.w(TAG, "foreground service: $e")
-        }
+    /** The foreground service with its types, and its notification as the
+     * captures are now: whether Android took it. */
+    private fun showForeground(): Boolean = try {
+        startForeground(Notifications.SERVICE_ID, notification(), types)
+        true
+    } catch (e: Exception) {
+        Log.w(TAG, "foreground service: $e")
+        false
     }
 
     private fun notification(): android.app.Notification {
-        val kinds = synchronized(captures) { captures.values.map { it.first }.toSet() }
-        return if (kinds.isEmpty()) Notifications.ready(this) else Notifications.capturing(this, kinds, capturingFor)
+        val now = synchronized(captures) { captures.values.toList() }
+        val kinds = now.map { it.kind }.toSet()
+        val pcs = now.map { it.pc }.distinct().joinToString(", ")
+        return if (kinds.isEmpty()) Notifications.ready(this) else Notifications.capturing(this, kinds, pcs)
     }
 
     // Wi-Fi without power saving while the PC uses the camera or the microphone:
@@ -360,7 +430,7 @@ class CompanionService : Service() {
     /** The user took the device back from the PC (MainActivity): its captures
      * end, and the service lets go of it. */
     fun stopCaptures(kind: String) {
-        val sockets = synchronized(captures) { captures.filter { it.value.first == kind }.map { it.value.second } }
+        val sockets = synchronized(captures) { captures.values.filter { it.kind == kind }.map { it.socket } }
         sockets.forEach { try { it.close() } catch (e: Exception) {} }
         if (allowedTypes(kind)) {
             types = types and typeOf(kind).inv()
@@ -391,7 +461,8 @@ class CompanionService : Service() {
             answer.set(type)
             if (type != "pair-ok") Pairing.answer(code, false)
         }.apply { start() }
-        val accepted = Pairing.ask(this, pcName, code) ?: return false  // another question is up
+        val from = address(socket.inetAddress)
+        val accepted = Pairing.ask(this, pcName, code, from) ?: return false  // another question is up, or too soon
         wire.send(JSONObject().put("type", if (accepted) "pair-ok" else "pair-no"))
         listening.join(PAIRING_TIMEOUT.toLong())
         return accepted && answer.get() == "pair-ok"
@@ -416,10 +487,22 @@ class CompanionService : Service() {
         val file = jobFile(job)
         require(file != null && size in 1..Wire.MAX_PAYLOAD && job !in Jobs.ids) { "bad job" }
         // Room for it: a PC, even a paired one, does not get to fill the tablet.
-        require(Jobs.waiting().size < MAX_JOBS && Jobs.bytes() + size <= MAX_JOB_BYTES &&
-            file.parentFile!!.usableSpace > size + FREE_SPACE) { "no room for another PDF" }
+        // Taken before the upload, not checked then written: uploads at once
+        // count each other too.
+        val reserved = incoming.addAndGet(size)
+        val slots = arriving.incrementAndGet()
         try {
+            require(Jobs.waiting().size + slots <= MAX_JOBS && Jobs.bytes() + reserved <= MAX_JOB_BYTES &&
+                file.parentFile!!.usableSpace > reserved + FREE_SPACE) { "no room for another PDF" }
             file.outputStream().use { wire.readPayload(size, it) }
+        } catch (e: Throwable) {
+            file.delete()
+            throw e
+        } finally {
+            incoming.addAndGet(-size)
+            arriving.decrementAndGet()
+        }
+        try {
             // Signatures added or removed on the PC since the last job.
             message.optJSONObject("signatures")?.let { Signatures.merge(this, it) }
             val title = message.optString("title", file.name).take(200)
@@ -442,17 +525,21 @@ class CompanionService : Service() {
      * false if the link is gone (the PC asks again). The job stays until
      * the PC says it got it. */
     private fun answer(wire: Wire, job: String, result: JSONObject?): Boolean = try {
-        val message = JSONObject().put("job", job).put("signatures", Signatures.toJson(this))
-        if (result != null) {
-            wire.send(message.put("type", "signed").put("marks", result))
-        } else {
-            wire.send(message.put("type", "cancelled"))
-        }
+        val message = JSONObject().put("job", job)
+        if (result != null) message.put("type", "signed").put("marks", result) else message.put("type", "cancelled")
+        // The saved signatures too, for the PC to merge, unless that would
+        // make the answer more than the PC takes (companion.py: 16 MB).
+        val withSignatures = JSONObject(message.toString()).put("signatures", Signatures.toJson(this))
+        wire.send(if (withSignatures.toString().length < MAX_ANSWER) withSignatures else message)
         true
     } catch (e: Exception) {
         Log.w(TAG, "could not answer job $job yet: $e")
         false
     }
+
+    // An upload's bytes and slot, from before it starts until it is a job.
+    private val incoming = AtomicLong()
+    private val arriving = AtomicInteger()
 
     companion object {
         const val TAG = "PlusOne"
@@ -462,6 +549,9 @@ class CompanionService : Service() {
         const val ELEVATE_WAIT = 5_000L        // ms for CaptureActivity to bring the app in front
         const val MAX_CONNECTIONS = 32
         const val MAX_UNPAIRED = 4             // connections of peers not yet known, at a time
+        const val MAX_HANDSHAKING = 8          // connections still in their TLS handshake, at a time
+        const val LISTEN_RETRY = 30_000L       // ms before trying to listen again
+        const val MAX_ANSWER = 15 * 1024 * 1024  // characters of an answer, under the PC's 16 MB
         const val HANDSHAKE_DEADLINE = 20_000L // ms for an unknown peer's whole handshake
         const val MAX_JOBS = 50                // PDFs waiting at once
         const val MAX_JOB_BYTES = 1024L * 1024 * 1024

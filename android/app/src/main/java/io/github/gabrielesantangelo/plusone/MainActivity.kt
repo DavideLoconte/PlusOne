@@ -65,6 +65,16 @@ class MainActivity : AppCompatActivity() {
         startActivity(SignActivity.open(this, job.id, chosen = true))
     }
 
+    override fun onStart() {
+        super.onStart()
+        Front.started()
+    }
+
+    override fun onStop() {
+        Front.stopped()
+        super.onStop()
+    }
+
     override fun onResume() {
         super.onResume()
         CompanionService.start(this)  // ready now (for a while, if not always)
@@ -274,6 +284,7 @@ class MainActivity : AppCompatActivity() {
             .setMessage(R.string.forget_detail)
             .setPositiveButton(R.string.forget) { _, _ ->
                 Paired.forget(this, fingerprint)
+                CompanionService.instance?.disconnect(fingerprint)  // and what it has open, now
                 refresh()
             }
             .setNegativeButton(R.string.cancel, null)

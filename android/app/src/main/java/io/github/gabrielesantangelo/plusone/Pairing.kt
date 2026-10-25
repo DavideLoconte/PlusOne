@@ -19,8 +19,9 @@ import java.util.concurrent.TimeUnit
 import com.google.android.material.R as M
 
 /** Asking the user whether to pair with a PC, showing the code both screens
- * show: one question at a time, and none for a little while after one was
- * not accepted, so nobody on the network can keep the screen covered. */
+ * show: one question at a time, and none for a while after one was not
+ * accepted, longer each time from the same address, so nobody on the
+ * network can keep the screen covered (or wait for a mistaken tap). */
 object Pairing {
     private class Request(val code: String, val pc: String) {
         val answered = CountDownLatch(1)
@@ -30,26 +31,40 @@ object Pairing {
 
     @Volatile private var current: Request? = null
     private var quietUntil = 0L  // under this
+    private val strikes = HashMap<String, Pair<Int, Long>>()  // address -> (questions not accepted, quiet until)
     private val main = Handler(Looper.getMainLooper())
 
     /** Blocks the calling (connection) thread until the user answers, two
      * minutes at most: whether they accepted; null when no question may be
-     * asked now (another is up, or one was just turned down). */
-    fun ask(context: Context, pc: String, code: String): Boolean? {
+     * asked now (another is up, or one from there was just not accepted). */
+    fun ask(context: Context, pc: String, code: String, from: String): Boolean? {
         val request = Request(code, pc)
         synchronized(this) {
-            if (current != null || SystemClock.elapsedRealtime() < quietUntil) return null
+            val now = SystemClock.elapsedRealtime()
+            if (current != null || now < quietUntil || now < (strikes[from]?.second ?: 0L)) return null
             current = request
         }
         val open = Intent(context, PairActivity::class.java)
             .putExtra(PairActivity.EXTRA_CODE, code)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        if (Settings.canDrawOverlays(context)) context.startActivity(open)
+        // Over whatever is on screen with "display over other apps"; over the
+        // app's own screen without it.
+        if (Settings.canDrawOverlays(context) || Front.shown) context.startActivity(open)
         Notifications.pairing(context, pc, code, open)
         val accepted = request.answered.await(2, TimeUnit.MINUTES) && request.accepted
         synchronized(this) {
             current = null
-            if (!accepted) quietUntil = SystemClock.elapsedRealtime() + QUIET
+            val now = SystemClock.elapsedRealtime()
+            if (accepted) {
+                strikes.remove(from)
+            } else {
+                quietUntil = now + QUIET
+                // 10 s, a minute, 10 minutes, then 10 minutes each time.
+                val count = (strikes[from]?.first ?: 0) + 1
+                val quiet = QUIET * listOf(1L, 6L, 60L)[minOf(count, 3) - 1]
+                strikes[from] = count to now + quiet
+                if (strikes.size > 256) strikes.keys.take(128).forEach { strikes.remove(it) }
+            }
         }
         Notifications.cancelPairing(context, code)
         main.post { request.close?.invoke() }
@@ -85,10 +100,16 @@ class PairActivity : AppCompatActivity() {
         val code = intent.getStringExtra(EXTRA_CODE) ?: return finish()
         val pc = Pairing.pending(code) ?: return finish()
         Pairing.onClose(code) { if (!isFinishing) finish() }  // answered elsewhere, or refused on the PC
+        // Over between pending() and onClose(): its close would never come.
+        if (Pairing.pending(code) == null) return finish()
         fun answer(accept: Boolean) {
             Pairing.answer(code, accept)
             finish()
         }
+        // Back is no: the PC is told at once, not left waiting two minutes.
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() = answer(false)
+        })
         setContentView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
