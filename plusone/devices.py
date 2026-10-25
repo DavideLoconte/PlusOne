@@ -29,6 +29,7 @@ RETRY = 3          # seconds between attempts to reach the tablet while wanted
 REFUSED_RETRY = 10  # seconds, after the app said no (the user may change their mind there)
 IN_USE_AFTER = 0.2  # seconds a program holds the device before the tablet is asked
 IDLE_AFTER = 3      # seconds without one before the tablet stops
+SILENT_FOR = 5      # seconds of a session without a packet before it is made again
 MIC_FEED = "plusone-mic-feed"  # the stream Plus One feeds the microphone with
 # ns of sound that may wait before the oldest goes: what waits stays, as delay,
 # once the sound comes as fast as it is played (160 ms measured 235 end to end).
@@ -113,14 +114,19 @@ class Feed:
                 self.on_ready()
                 # Held while wanted, the link up and the media flowing: the
                 # app hangs up by closing it, Plus One by closing it too.
-                said = (0, 0, 0)
+                said, heard, last = (0, 0, 0), 0, time.monotonic()
                 while self._wanted.is_set() and not receiver.failed():
                     if wire.readable(1.0):
                         wire.receive()
-                    losses = receiver.losses()
-                    if losses != said:
-                        log(f"{kind}: lost %d packets, asked again for %d, asked for %d key frames" % losses)
-                        said = losses
+                    received, *losses = receiver.losses()
+                    if received > heard:
+                        heard, last = received, time.monotonic()
+                    elif time.monotonic() - last > SILENT_FOR:
+                        # Connected, and yet nothing comes: made again.
+                        raise TimeoutError(f"nothing from the tablet for {SILENT_FOR} s")
+                    if tuple(losses) != said:
+                        said = tuple(losses)
+                        log(f"{kind}: {received} packets, lost %d, asked again for %d, asked for %d key frames" % said)
             except companion.Refused as e:
                 log(f"{kind}: the tablet said no ({e})")
                 self.on_problem(str(e))

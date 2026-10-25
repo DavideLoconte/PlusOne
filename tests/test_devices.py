@@ -137,6 +137,10 @@ class FakeReceiver:
     def failed(self):
         return False
 
+    def losses(self):
+        self.received = getattr(self, "received", 0) + 50
+        return self.received, 0, 0, 0
+
     def close(self):
         self.closed = True
 
