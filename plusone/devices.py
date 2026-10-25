@@ -358,7 +358,7 @@ class Device:
 
     def _settle(self, in_use):
         self._timer = None
-        if in_use == self._in_use or self.state in ("off", "setup", "webrtc", "decoder"):
+        if in_use == self._in_use or self.state in ("off", "setup", "reload", "webrtc", "decoder"):
             return
         self._in_use = in_use
         if in_use:
@@ -418,7 +418,9 @@ class Camera(Device):
             self._set_state("webrtc")
             return
         if not paths:
-            self._set_state("setup")
+            # Loaded already (another program's settings, before Plus One's
+            # options were there): reloading it is what is missing.
+            self._set_state("reload" if os.path.isdir("/sys/module/v4l2loopback") else "setup")
             return
         if self.decoder is None:
             self._set_state("decoder")

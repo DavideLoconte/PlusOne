@@ -150,6 +150,9 @@ _IT = {
     "Needs the v4l2loopback module: see the README": "Serve il modulo v4l2loopback: vedi il README",
     "Needs PipeWire's pactl and pw-link": "Servono pactl e pw-link di PipeWire",
     "Needs an H.264 decoder: gstreamer1.0-libav": "Serve un decodificatore H.264: gstreamer1.0-libav",
+    "The webcam module is loaded with other settings: sudo modprobe -r v4l2loopback && sudo modprobe v4l2loopback":
+        "Il modulo della webcam è caricato con altre impostazioni: sudo modprobe -r v4l2loopback && "
+        "sudo modprobe v4l2loopback",
     "Needs WebRTC for GStreamer: gstreamer1.0-nice and gir1.2-gst-plugins-bad-1.0":
         "Serve WebRTC per GStreamer: gstreamer1.0-nice e gir1.2-gst-plugins-bad-1.0",
     "As a webcam for this PC's programs": "Come webcam per i programmi di questo PC",

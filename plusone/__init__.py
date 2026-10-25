@@ -1,6 +1,7 @@
 """Use a Samsung Galaxy Tab's built-in Second Screen app as a Linux monitor."""
 import json
 import os
+import tempfile
 import time
 
 __version__ = "0.5.0"
@@ -29,8 +30,8 @@ def write_private(path, data):
     directory = os.path.dirname(path)
     os.makedirs(directory, mode=0o700, exist_ok=True)
     os.chmod(directory, 0o700)
-    tmp = f"{path}.{os.getpid()}.part"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # A name of its own (0600): two threads saving the same file shared one.
+    fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".", suffix=".part", dir=directory)
     try:
         with os.fdopen(fd, "w") as f:
             json.dump(data, f)

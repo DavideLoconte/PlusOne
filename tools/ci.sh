@@ -17,4 +17,6 @@ GDK_BACKEND=wayland WAYLAND_DISPLAY=wayland-ci PLUSONE_GUI_TESTS=1 \
     python3 -m pytest -q -p no:cacheprovider tests
 kill $weston
 packaging/build-deb.sh
-lintian --fail-on error dist/*.deb
+# This version's package only: ./dist may keep older ones.
+version="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' plusone/__init__.py)"
+lintian --fail-on error "dist/plus-one_${version}_all.deb"

@@ -18,6 +18,10 @@ finish-args:
   - --talk-name=org.gnome.Mutter.DisplayConfig
   - --talk-name=org.gnome.NetworkDisplays  # to warn when it holds the Wi-Fi Direct device
   - --system-talk-name=org.freedesktop.NetworkManager
+  # Finding the tablets' app (mDNS): without it nothing can be paired.
+  - --system-talk-name=org.freedesktop.Avahi
+  # The tablet's microphone: a PipeWire source made with pactl.
+  - --socket=pulseaudio
   # Map the pen onto the tablet's monitor in the host's GNOME settings (dconf).
   - --filesystem=xdg-run/dconf
   - --filesystem=~/.config/dconf:ro
@@ -148,3 +152,8 @@ modules:
           - dist
           - .flatpak-builder
           - flatpak-build
+          - flatpak-repo
+          - android
+          - tests
+          - tools
+          - docs

@@ -32,6 +32,9 @@ def device_status(kind, state):
                 else _("Needs PipeWire's pactl and pw-link"))
     if state == "webrtc":
         return _("Needs WebRTC for GStreamer: gstreamer1.0-nice and gir1.2-gst-plugins-bad-1.0")
+    if state == "reload":
+        return _("The webcam module is loaded with other settings: sudo modprobe -r v4l2loopback && "
+                 "sudo modprobe v4l2loopback")
     if state == "decoder":
         return _("Needs an H.264 decoder: gstreamer1.0-libav")
     camera = kind == "camera"

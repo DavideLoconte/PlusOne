@@ -132,10 +132,14 @@ sudo ./enable-pen.sh       # optional: S Pen pressure and tilt (then log in agai
 Dependencies on Ubuntu:
 
 ```bash
-sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gstreamer-1.0 gir1.2-nm-1.0 \
+sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gstreamer-1.0 gir1.2-nm-1.0 \
+    gir1.2-poppler-0.18 python3-pypdf openssl avahi-daemon \
     gstreamer1.0-pipewire gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-    gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-vaapi gstreamer1.0-x
+    gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-vaapi gstreamer1.0-x \
+    gstreamer1.0-libav gstreamer1.0-nice gir1.2-gst-plugins-bad-1.0 swh-plugins pulseaudio-utils pipewire-bin
 ```
+
+(The `.deb`'s list, in `packaging/build-deb.sh`, is the reference.)
 
 ## Usage
 
@@ -283,7 +287,9 @@ microphone's noise reduction:
 
   ```bash
   mkdir -p ~/.ladspa && curl -fL -o ~/.ladspa/libdeep_filter_ladspa.so \
-      https://github.com/Rikorose/DeepFilterNet/releases/download/v0.5.6/libdeep_filter_ladspa-0.5.6-x86_64-unknown-linux-gnu.so
+      https://github.com/Rikorose/DeepFilterNet/releases/download/v0.5.6/libdeep_filter_ladspa-0.5.6-x86_64-unknown-linux-gnu.so \
+      && echo "2ca3205c2911d389604a826a240e745597d50252b5cab81c8248252b335e2236  $HOME/.ladspa/libdeep_filter_ladspa.so" \
+      | sha256sum -c
   ```
 
   Without it, *Light* instead.

@@ -1,8 +1,14 @@
 #!/bin/sh
 set -e
 if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
-    # Without the rule /dev/uhid goes back to root's alone.
+    # Without the rule /dev/uhid goes back to root's alone: udev keeps the
+    # group and mode a rule set, so they are put back by hand too.
     udevadm control --reload 2>/dev/null || true
     udevadm trigger --action=change --subsystem-match=misc --sysname-match=uhid 2>/dev/null || true
+    if [ -e /dev/uhid ]; then
+        chgrp root /dev/uhid 2>/dev/null || true
+        chmod 600 /dev/uhid 2>/dev/null || true
+        setfacl -b /dev/uhid 2>/dev/null || true
+    fi
 fi
 exit 0
