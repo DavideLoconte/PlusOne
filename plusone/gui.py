@@ -25,7 +25,7 @@ FACING_LIST = ["front", "back"]
 NOISE_LIST = ["off", "light", "neural"]  # devices.NOISE
 
 
-def device_status(kind, state):
+def device_status(kind, state, users=()):
     """What the window says under the camera's or the microphone's switch."""
     if state == "setup":
         return (_("Needs the v4l2loopback module: see the README") if kind == "camera"
@@ -42,7 +42,8 @@ def device_status(kind, state):
         "off": _("As a webcam for this PC's programs") if camera else _("As a microphone for this PC's programs"),
         "ready": _("On: the tablet turns its camera on while a program uses it") if camera
         else _("On: the tablet turns its microphone on while a program uses it"),
-        "in use": _("In use"),
+        # Which program: any on this PC may use it while the switch is on.
+        "in use": _("In use by {programs}").format(programs=", ".join(users)) if users else _("In use"),
         "away": _("A program uses the camera, but the tablet is not reachable") if camera
         else _("A program uses the microphone, but the tablet is not reachable"),
         "tablet-off": _("Not allowed on the tablet: Plus One → For the PC"),
@@ -193,7 +194,8 @@ class Window(Adw.ApplicationWindow):
         for kind, row in self.device_rows.items():
             with row.handler_block(row.handler):
                 row.set_active(getattr(self.app.settings, kind))
-            row.set_subtitle(device_status(kind, getattr(self.app.devices, kind).state))
+            device = getattr(self.app.devices, kind)
+            row.set_subtitle(device_status(kind, device.state, device.users))
         state = self.controller.state
         text = self._status(tablet)
         self.status_label.set_label(text)

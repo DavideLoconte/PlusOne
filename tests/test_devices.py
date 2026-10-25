@@ -39,8 +39,10 @@ def test_level_meters_do_not_record():
     objects = [node(1, **{"node.name": devices.MIC_NAME}), node(2, **{"node.name": "plusone-mic-feed-1"}),
                node(3, **{"node.name": "GNOME Settings", "media.name": "Peak detect", "stream.monitor": True}),
                node(4, **{"node.name": "Google Chrome input"}), link(2, 1), link(1, 3)]
-    assert devices.recorders(objects) == 0  # Plus One's own stream in, a level meter out
-    assert devices.recorders(objects + [link(1, 4)]) == 1
+    assert devices.recorders(objects) == []  # Plus One's own stream in, a level meter out
+    chrome = node(5, **{"node.name": "Chrome input", "application.name": "Google Chrome"})
+    assert devices.recorders(objects + [link(1, 4)]) == ["Google Chrome input"]
+    assert devices.recorders(objects + [chrome, link(1, 5)]) == ["Google Chrome"]
 
 
 def test_opening_a_device_is_counted(tmp_path):
@@ -409,3 +411,18 @@ def test_a_stale_microphone_is_removed(monkeypatch):
     assert ran[-1] == ["pactl", "unload-module", "536870913"]
 
 
+
+
+def test_who_has_the_webcam_open_by_name(tmp_path):
+    import subprocess
+    import sys
+    path = tmp_path / "video9"
+    path.write_bytes(b"")
+    with open(path):  # this process's own: not counted
+        assert devices.holder_names([str(path)]) == []
+        other = subprocess.Popen([sys.executable, "-c", f"import time; f = open({str(path)!r}); time.sleep(30)"])
+        try:
+            assert spin(lambda: devices.holder_names([str(path)]) != [], timeout=10)
+            assert devices.holder_names([str(path)])[0].startswith("python")
+        finally:
+            other.kill()

@@ -310,6 +310,22 @@ def holders(path):
     return count
 
 
+def holder_names(paths):
+    """The names of the other processes that have one of paths open (as far
+    as /proc shows): who uses the webcam, for the window."""
+    names = set()
+    for fds in glob.glob("/proc/[0-9]*/fd"):
+        if fds == f"/proc/{os.getpid()}/fd":
+            continue
+        try:
+            if any(os.readlink(os.path.join(fds, fd)) in paths for fd in os.listdir(fds)):
+                with open(os.path.join(os.path.dirname(fds), "comm")) as f:
+                    names.add(f.read().strip())
+        except OSError:
+            pass  # gone, or not ours to look at
+    return sorted(names)
+
+
 def camera_devices():
     """/dev/videoN of Plus One's v4l2loopback devices (data/plus-one-camera-options.conf):
     the one for programs that read cameras themselves, and the one for PipeWire."""
@@ -336,12 +352,18 @@ class Device:
         self.kind = kind
         self.state = "off"
         self.feed = None
+        self.users = []  # the programs using it, by name, for the window
         self._in_use = False
         self._timer = None
 
     def _set_state(self, state):
         if state != self.state:
             self.state = state
+            self.app.devices_changed()
+
+    def _users(self, names):
+        if names != self.users:
+            self.users = names
             self.app.devices_changed()
 
     def where(self):
@@ -505,6 +527,7 @@ class Camera(Device):
         reading = any(opened.count > opened.baseline for opened in self.opened)
         if self.frames:
             self._pace(reading)
+        self._users(holder_names([opened.path for opened in self.opened]) if reading else [])
         self._used(reading)
 
     def begin(self):
@@ -657,12 +680,13 @@ class Microphone(Device):
     def _dumped(self, dump, result, asked):
         try:
             _ok, out, _err = dump.communicate_utf8_finish(result)
-            count = recorders(json.loads(out))
+            names = recorders(json.loads(out))
         except (GLib.Error, ValueError, TypeError, AttributeError) as e:
             log("microphone: who records, not known:", repr(e))
-            count = len(self.links)  # as if each were a program's
+            names = ["?"] * len(self.links)  # as if each were a program's
         if asked == (self.watch, self._asked):
-            self._used(count > 0)
+            self._users(sorted(set(n for n in names if n != "?")))
+            self._used(bool(names))
 
     def _come_back(self):
         self.app.devices.apply()
@@ -727,18 +751,20 @@ def link_feed(name, wait=5):
 
 
 def recorders(objects):
-    """How many streams record from the microphone's source, in pw-dump's
-    objects: links from it, to streams other than level meters'."""
+    """The programs whose streams record from the microphone's source, in
+    pw-dump's objects (links from it, to streams other than level meters'),
+    by name; one entry per stream."""
     nodes = {o.get("id"): (o.get("info") or {}).get("props") or {}
              for o in objects if o.get("type") == "PipeWire:Interface:Node"}
     source = {id for id, props in nodes.items() if props.get("node.name") == MIC_NAME}
-    count = 0
+    found = []
     for o in objects:
         info = o.get("info") or {}
         if o.get("type") == "PipeWire:Interface:Link" and info.get("output-node-id") in source:
-            meter = nodes.get(info.get("input-node-id"), {}).get("stream.monitor")
-            count += meter not in (True, "true", "1")
-    return count
+            props = nodes.get(info.get("input-node-id"), {})
+            if props.get("stream.monitor") not in (True, "true", "1"):
+                found.append(str(props.get("application.name") or props.get("node.name") or "?"))
+    return found
 
 
 class LinkParser:

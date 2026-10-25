@@ -269,7 +269,9 @@ tablet camera* and a microphone called *Tablet microphone (Plus One)*: pick
 them in your video-call program like any other. The tablet captures only
 while a program on the PC uses one of them (a call, the Camera app), and
 stops a few seconds after it lets go; the switch off removes the device from
-the PC altogether. They go over **WebRTC**, as in a video call: Google's
+the PC altogether. While a switch is on, any program on this PC can use
+it, as with a webcam plugged in: the window says which program does, and
+the tablet says so in its notification. They go over **WebRTC**, as in a video call: Google's
 libwebrtc on the tablet (the sound's gain control, congestion control,
 retransmissions) and GStreamer's webrtcbin on the PC (the jitter buffer), encrypted
 (DTLS-SRTP, its keys vouched for by the pairing), over your Wi-Fi or Wi-Fi
