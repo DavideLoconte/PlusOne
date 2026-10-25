@@ -54,33 +54,53 @@ jobs:
 
   apk:
     runs-on: ubuntu-24.04
-    # The signing key lives in this environment's secrets, which GitHub
-    # hands only to jobs run for a v* tag (its deployment rule).
-    environment: release
-    env:
-      # The release key (tools/android-docker.sh): base64 of the PKCS#12 file.
-      ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
-      PLUSONE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+    # Built without the key: Gradle, its plugins and the SDK's downloads
+    # never run where the signing key is.
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           persist-credentials: false
-      - name: Companion app, signed (skipped without the key in the secrets)
-        if: env.ANDROID_KEYSTORE != ''
-        run: |
-          mkdir -p "$RUNNER_TEMP/keys"
-          echo "$ANDROID_KEYSTORE" | base64 -d > "$RUNNER_TEMP/keys/release.p12"
-          PLUSONE_KEYSTORE="$RUNNER_TEMP/keys/release.p12" tools/android-docker.sh assembleRelease
-          mkdir -p dist
-          cp android/app/build/outputs/apk/release/app-release.apk "dist/plus-one-companion_${GITHUB_REF_NAME}.apk"
+      - name: Companion app, unsigned
+        run: tools/android-docker.sh assembleRelease
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
-        if: env.ANDROID_KEYSTORE != ''
+        with:
+          name: apk-unsigned
+          path: android/app/build/outputs/apk/release/app-release-unsigned.apk
+
+  sign:
+    # Only once the tests passed (deb) and the app built; the key lives in
+    # this environment's secrets, which GitHub hands only to jobs run for a
+    # v* tag (its deployment rule), and only to the step that signs.
+    needs: [deb, apk]
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: apk-unsigned
+          path: unsigned
+      - name: Sign (skipped without the key in the secrets)
+        env:
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}  # base64 of the PKCS#12 file
+          PLUSONE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE" ]; then echo "no key: no APK in the release"; exit 0; fi
+          mkdir -p "$RUNNER_TEMP/keys" dist
+          echo "$ANDROID_KEYSTORE" | base64 -d > "$RUNNER_TEMP/keys/release.p12"
+          PLUSONE_KEYSTORE="$RUNNER_TEMP/keys/release.p12" tools/android-sign.sh \
+              unsigned/app-release-unsigned.apk "dist/plus-one-companion_${GITHUB_REF_NAME}.apk"
+          rm -f "$RUNNER_TEMP/keys/release.p12"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: apk
           path: dist/*.apk
+          if-no-files-found: ignore
 
   publish:
-    needs: [deb, flatpak, apk]
+    needs: [deb, flatpak, sign]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
