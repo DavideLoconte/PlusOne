@@ -61,6 +61,37 @@ def test_opening_a_device_is_counted(tmp_path):
         opened.close()
 
 
+def test_a_program_with_it_open_before_is_counted(tmp_path, monkeypatch):
+    path = tmp_path / "video9"
+    path.write_bytes(b"")
+    before = open(path)  # a program's, before Plus One watched
+    monkeypatch.setattr(devices, "holders", lambda p: 1 if p == str(path) else 0)
+    counts = []
+    opened = devices.Opened(str(path), counts.append)
+    try:
+        ours = open(path)  # Plus One's writer
+        assert spin(lambda: counts and counts[-1] == 1)
+        opened.started()
+        assert (opened.baseline, opened.count) == (1, 2)
+        before.close()
+        assert spin(lambda: counts[-1] == 1)
+        # Its closing seen; the next program's opening shows.
+        after = open(path)
+        assert spin(lambda: counts[-1] == 2)
+        after.close()
+        ours.close()
+        assert spin(lambda: counts[-1] == 1)  # never below Plus One's own
+    finally:
+        opened.close()
+
+
+def test_holders_are_other_processes(tmp_path):
+    path = tmp_path / "video9"
+    path.write_bytes(b"")
+    with open(path):
+        assert devices.holders(str(path)) == 0  # this process's own: not counted
+
+
 class FakeApp:
     def __init__(self):
         self.changes = 0

@@ -16,6 +16,7 @@ import org.webrtc.MediaStream
 import org.webrtc.MediaStreamTrack
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
+import org.webrtc.RtpParameters
 import org.webrtc.RtpReceiver
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
@@ -82,6 +83,12 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
         tracks = listOf(track)
         val sender = connection.addTrack(track, listOf("plusone"))
         sender.parameters = sender.parameters.apply {
+            if (camera) {
+                // The PC's device has one size: with fewer bits the picture gets
+                // coarser or slower, never smaller. Each change of size was a key
+                // frame, a burst the network was short of, and broken frames.
+                degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
+            }
             encodings.forEach {
                 if (camera) {
                     // Up to the bitrate the PC asked for; congestion control goes lower.
@@ -100,6 +107,13 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
         }, MediaConstraints())
         val local = answer.get(WAIT, TimeUnit.MILLISECONDS)
         await { connection.setLocalDescription(it, local) }
+        if (camera) {
+            // From libwebrtc's first guess (300 kbit/s) the first seconds were a
+            // poor picture; from half the most, congestion control finds the
+            // network's in a moment, either way.
+            val most = request.optInt("bitrate", 2_500_000)
+            if (!connection.setBitrate(null, most / 2, most)) Log.w(TAG, "camera: no starting bitrate")
+        }
         // The candidates in the answer: all of them, or those found by then
         // (the host ones come at once; some interface may never say it is done).
         try {

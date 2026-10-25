@@ -161,10 +161,11 @@ class Feed:
 class Opened:
     """How many times a device file is open now, by anyone, from inotify's
     open and close events; on_change(count) on the main loop. baseline: how
-    many of those are Plus One's own."""
+    many of those are Plus One's own (started())."""
     IN_CLOSE_WRITE, IN_CLOSE_NOWRITE, IN_OPEN = 0x08, 0x10, 0x20
 
     def __init__(self, path, on_change):
+        self.path = path
         self.on_change = on_change
         self.count = self.baseline = 0
         libc = ctypes.CDLL(None, use_errno=True)
@@ -179,6 +180,16 @@ class Opened:
         """The events waiting, counted now."""
         self._read(None, None)
 
+    def started(self):
+        """Plus One opened it: what is open now is Plus One's, and the
+        programs' that had it open before the watch began (a Plus One
+        restarted during a call), which inotify did not see open: counted
+        now, or their closing would take the count below Plus One's own,
+        and the next program's opening would not show."""
+        self.drain()
+        self.baseline = self.count
+        self.count += holders(self.path)
+
     def _read(self, _channel, _condition):
         try:
             data = os.read(self.fd, 4096)
@@ -191,13 +202,28 @@ class Opened:
             if mask & self.IN_OPEN:
                 self.count += 1
             elif mask & (self.IN_CLOSE_WRITE | self.IN_CLOSE_NOWRITE):
-                self.count = max(0, self.count - 1)
+                # Never below Plus One's own: one open before the watch, not
+                # seen in /proc (another user's), closed.
+                self.count = max(self.baseline, self.count - 1)
         self.on_change(self.count)
         return True
 
     def close(self):
         GLib.source_remove(self.source)
         os.close(self.fd)
+
+
+def holders(path):
+    """How many other processes have path open, as far as /proc shows."""
+    count = 0
+    for fds in glob.glob("/proc/[0-9]*/fd"):
+        if fds == f"/proc/{os.getpid()}/fd":
+            continue
+        try:
+            count += any(os.readlink(os.path.join(fds, fd)) == path for fd in os.listdir(fds))
+        except OSError:
+            pass  # gone, or not ours to look at
+    return count
 
 
 def camera_devices():
@@ -318,14 +344,14 @@ class Camera(Device):
             opened = Opened(path, self._opened)
             writer.set_state(Gst.State.PLAYING)
             writer.get_state(2 * Gst.SECOND)
-            opened.drain()
-            opened.baseline = opened.count
+            opened.started()
             self.writers.append(writer)
             self.opened.append(opened)
         self.frames = [writer.get_by_name("frames") for writer in self.writers]
         self._produce()
         self._set_state("ready")
         log("camera: on, as", ", ".join(paths))
+        self._opened(None)  # a program that had it open already
 
     def _produce(self):
         """Black, or the tablet's picture once it decodes: into the writer."""
