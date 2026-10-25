@@ -24,6 +24,7 @@ import time
 from gi.repository import Gio, GLib
 
 from . import log
+from .display import virtual_monitor_edid
 
 UHID_PATH = "/dev/uhid"
 UHID_DESTROY, UHID_CREATE2, UHID_INPUT2 = 1, 11, 12
@@ -248,6 +249,28 @@ class PointerPen:
             if self.buttons & mask:
                 self.injector.pointer_button(button, False)
         self.buttons = 0
+
+
+def for_monitor(injector, size):
+    """The S Pen for the tablet's virtual monitor: a pen tablet (pressure,
+    tilt) mapped onto it, else the pointer through injector (the monitor's
+    remote desktop session, size its pixels). A pen tablet is the whole
+    desktop's until mapped: not mapped, the tablet's pen would point and
+    click on the PC's own screens, so then the pointer, kept in the stream."""
+    if uhid_available():
+        mapped = False
+        try:
+            edid = virtual_monitor_edid()
+            mapped = bool(edid) and map_to_monitor(edid)
+        except Exception as e:  # noqa: BLE001 - the pointer pen then
+            log("pen: not mapped to the monitor:", repr(e))
+        if mapped:
+            device = tablet_pen()
+            if device is not None:
+                return device
+        else:
+            log("pen: the tablet's monitor not known to map it onto: the pointer instead")
+    return PointerPen(injector, size)
 
 
 def map_to_monitor(edid):

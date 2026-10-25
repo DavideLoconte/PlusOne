@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from gi.repository import Gio, GLib
 
 from . import log, media, once, pen, tablet
-from .display import VirtualMonitor, virtual_monitor_edid
+from .display import VirtualMonitor
 from .p2p import P2PLink, local_addresses
 from .rtsp import MODES, WfdSession
 from .tablets import Tablets
@@ -319,26 +319,9 @@ class Controller:
 
     def _make_pen(self):
         # Called on the UIBC thread once the tablet says it has a pen.
-        if pen.uhid_available():
-            # A uhid tablet is the whole desktop's until mapped onto the
-            # virtual monitor: not mapped, the tablet's pen would point and
-            # click on the PC's own screens. Then the pointer pen instead,
-            # which stays in the stream.
-            mapped = False
-            try:
-                edid = virtual_monitor_edid()
-                mapped = bool(edid) and pen.map_to_monitor(edid)
-            except Exception as e:  # noqa: BLE001 - the pointer pen then
-                log("pen: not mapped to the monitor:", repr(e))
-            if mapped:
-                device = pen.tablet_pen()
-                if device is not None:
-                    return device
-            else:
-                log("pen: the tablet's monitor not known to map it onto: the pointer instead")
         if self.mode is None:
             raise RuntimeError("no mode yet")
-        return pen.PointerPen(self.monitor, self.mode[:2])
+        return pen.for_monitor(self.monitor, self.mode[:2])
 
     def _on_play(self, session):
         # The session settled the mode in M3/M4 (from the EDID in auto mode).

@@ -159,7 +159,7 @@ def test_the_pen_is_never_the_whole_desktop_s(monkeypatch):
     # Not mapped onto the virtual monitor, a uhid tablet would point and
     # click on the PC's own screens: the pointer pen, kept in the stream.
     monkeypatch.setattr(engine.pen, "uhid_available", lambda: True)
-    monkeypatch.setattr(engine, "virtual_monitor_edid", lambda: None)
+    monkeypatch.setattr(engine.pen, "virtual_monitor_edid", lambda: None)
     made = []
     monkeypatch.setattr(engine.pen, "UhidPen", lambda: made.append("uhid"))
     controller = Controller(Settings(), tablets=FakeTablets())

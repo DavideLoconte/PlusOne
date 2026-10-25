@@ -28,6 +28,7 @@ class DisplayActivity : Activity(), SurfaceHolder.Callback {
         val view = SurfaceView(this)
         view.holder.addCallback(this)
         setContentView(view)
+        DisplayInput(view) { session }
         window.insetsController?.apply {
             hide(WindowInsets.Type.systemBars())
             systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE

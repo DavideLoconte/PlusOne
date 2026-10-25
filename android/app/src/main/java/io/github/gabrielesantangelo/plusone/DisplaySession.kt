@@ -12,6 +12,7 @@ import java.net.InetAddress
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.Executors
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -28,7 +29,8 @@ import javax.crypto.spec.SecretKeySpec
  * Bodies from the PC, after a kind byte:
  *   VIDEO  flags (1: keyframe) | frame u32 | index u16 | count u16 | captured i64 | H.264
  *   PONG   our ping's time i64 | the PC's time i64
- * and to the PC: KEYFRAME, PING (now i64), STATS (see stats()).
+ * and to the PC: KEYFRAME, PING (now i64), STATS (see stats()), INPUT
+ * (DisplayInput).
  * Times are each side's monotonic clock in nanoseconds; PING and PONG tell
  * the offset between them, so the delay from the PC's capture to the frame
  * decoded here is measured, not guessed. (Not to the glass: MediaCodec's
@@ -41,6 +43,9 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
     private val sealer = Cipher.getInstance("AES/GCM/NoPadding")
     private var sent = 0L
     @Volatile private var running = true
+    // Packets to the PC go out in order from this thread (input comes on
+    // the main one, where Android allows no network).
+    private val outbox = Executors.newSingleThreadExecutor()
 
     // MediaCodec in asynchronous mode: its callbacks on this thread, the
     // input buffers it frees queued for the receiving thread.
@@ -82,6 +87,7 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
 
     fun stop() {
         running = false
+        outbox.shutdownNow()
         socket.close()
         detach()
         callbacks.quitSafely()
@@ -288,15 +294,21 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
         }
     }
 
-    @Synchronized
-    private fun send(body: ByteArray) {
-        val nonce = ByteBuffer.allocate(NONCE).putInt(FROM_APP.toInt()).putLong(sent++).array()
+    /** body to the PC, sealed, from the outbox's thread. */
+    fun send(body: ByteArray) {
         try {
-            sealer.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG * 8, nonce))
-            val sealed = nonce + sealer.doFinal(body)
-            socket.send(DatagramPacket(sealed, sealed.size, pc, pcPort))
-        } catch (e: Exception) {
-            if (running) Log.w(CompanionService.TAG, "display: cannot send: $e")
+            outbox.execute {
+                val nonce = ByteBuffer.allocate(NONCE).putInt(FROM_APP.toInt()).putLong(sent++).array()
+                try {
+                    sealer.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG * 8, nonce))
+                    val sealed = nonce + sealer.doFinal(body)
+                    socket.send(DatagramPacket(sealed, sealed.size, pc, pcPort))
+                } catch (e: Exception) {
+                    if (running) Log.w(CompanionService.TAG, "display: cannot send: $e")
+                }
+            }
+        } catch (e: java.util.concurrent.RejectedExecutionException) {
+            // stopped
         }
     }
 
@@ -306,6 +318,7 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
         const val PING: Byte = 3
         const val PONG: Byte = 4
         const val STATS: Byte = 5
+        const val INPUT: Byte = 6
         const val FROM_PC: Byte = 1
         const val FROM_APP: Byte = 2
         const val NONCE = 12

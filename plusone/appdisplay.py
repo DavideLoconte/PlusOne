@@ -19,11 +19,11 @@ import gi
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 gi.require_version("Gst", "1.0")
-from gi.repository import Gst  # noqa: E402
+from gi.repository import GLib, Gst  # noqa: E402
 
-from . import companion, log, media  # noqa: E402
+from . import companion, log, media, pen  # noqa: E402
 
-VIDEO, KEYFRAME, PING, PONG, STATS = 1, 2, 3, 4, 5
+VIDEO, KEYFRAME, PING, PONG, STATS, INPUT = 1, 2, 3, 4, 5, 6
 FROM_PC, FROM_APP = 1, 2
 NONCE = struct.Struct("!IQ")         # direction, count
 VIDEO_HEADER = struct.Struct("!BBIHHq")  # kind, flags, frame, index, count, captured
@@ -31,6 +31,143 @@ VIDEO_HEADER = struct.Struct("!BBIHHq")  # kind, flags, frame, index, count, cap
 PAYLOAD = 1472 - VIDEO_HEADER.size - NONCE.size - 16
 MIN_KEYFRAME_GAP = 0.25  # seconds; the app asks again until one comes
 STATS_FORMAT = struct.Struct("!BII6H")
+FINGER = struct.Struct("!BHH")  # id, x, y (0..65535 of the screen)
+PEN_SAMPLE = 9                  # the S Pen's report after its ID (DisplayInput.kt)
+TOUCH_MAX = 65535
+MAX_FINGERS = 10
+INPUT_SILENCE = 0.4  # seconds: the app repeats what touches every 0.1 s; quiet this long, all is lifted
+# Two fingers tapped together are the right button: a first finger waits
+# this long for a second before it goes down on the desktop; both lifted
+# within TAP_TIME, having moved less than TAP_MOVE of the screen, click.
+SECOND_FINGER = 0.08  # seconds
+TAP_TIME = 0.3
+TAP_MOVE = 0.02
+
+
+class Input:
+    """Fingers and the pen from the app, onto the virtual monitor: each
+    packet says what touches the screen now (DisplayInput.kt), so a finger
+    is put down, moved or lifted from the difference with the one before."""
+
+    def __init__(self, monitor, size, make_pen, clock=time.monotonic):
+        self.monitor, self.size, self.make_pen, self.clock = monitor, size, make_pen, clock
+        self.down = {}       # finger id -> (x, y) in the monitor's pixels
+        self.pen = None
+        self.pen_last = None  # the last report, while the pen is in range
+        self.heard = clock()
+        # Fingers not on the desktop yet, while it may be a two-finger tap:
+        # (since, [states]), replayed as touches once it is not.
+        self.waiting = None
+
+    def packet(self, body):
+        """body: an INPUT packet; False if it is not a well-formed one."""
+        try:
+            count, at = body[1], 2
+            if count > MAX_FINGERS:
+                return False
+            fingers = {}
+            for _ in range(count):
+                finger, x, y = FINGER.unpack_from(body, at)
+                fingers[finger] = (x / TOUCH_MAX * self.size[0], y / TOUCH_MAX * self.size[1])
+                at += FINGER.size
+            samples = body[at]
+            at += 1
+            if len(body) != at + samples * PEN_SAMPLE:
+                return False
+        except (IndexError, struct.error):
+            return False
+        self.heard = self.clock()
+        self._touch(fingers)
+        for i in range(samples):
+            self._pen(bytes([pen.REPORT_ID]) + body[at + i * PEN_SAMPLE:at + (i + 1) * PEN_SAMPLE])
+        return True
+
+    def _touch(self, fingers):
+        """Fingers as they are now: on the desktop, unless they may be a
+        two-finger tap (the right button)."""
+        if self.waiting is None:
+            if self.down or not fingers:
+                self._fingers(fingers)
+                return
+            self.waiting = (self.clock(), [])
+        self.waiting[1].append(fingers)
+        self._decide()
+
+    def _decide(self):
+        since, states = self.waiting
+        elapsed = self.clock() - since
+        two = any(len(state) >= 2 for state in states)
+        if not two:
+            # One finger: down at once if it went (a tap), or once the
+            # second has not come.
+            if not states[-1] or elapsed >= SECOND_FINGER:
+                self._replay()
+            return
+        first = {}
+        for state in states:
+            for finger, where in state.items():
+                first.setdefault(finger, where)
+        moved = max(abs(x - first[f][0]) / self.size[0] + abs(y - first[f][1]) / self.size[1]
+                    for state in states for f, (x, y) in state.items())
+        if not states[-1] and elapsed < TAP_TIME and moved < TAP_MOVE:
+            self.waiting = None
+            x, y = next(iter(first.values()))
+            self.monitor.pointer_move(x, y)
+            self.monitor.pointer_button(pen.BTN_RIGHT, True)
+            self.monitor.pointer_button(pen.BTN_RIGHT, False)
+        elif moved >= TAP_MOVE or elapsed >= TAP_TIME or len(states[-1]) > 2 or not states[-1]:
+            self._replay()  # a pinch, two fingers resting, three: touches
+
+    def _replay(self):
+        states, self.waiting = self.waiting[1], None
+        for state in states:
+            self._fingers(state)
+
+    def _fingers(self, fingers):
+        for finger in [f for f in self.down if f not in fingers]:
+            self.monitor.touch_up(finger)
+            del self.down[finger]
+        for finger, where in fingers.items():
+            if finger not in self.down:
+                self.monitor.touch_down(finger, *where)
+            elif where != self.down[finger]:
+                self.monitor.touch_motion(finger, *where)
+            self.down[finger] = where
+
+    def _pen(self, report):
+        if self.pen is None:
+            try:
+                self.pen = self.make_pen()
+            except Exception as e:  # noqa: BLE001 - no pen, the fingers still work
+                log("app display: no pen:", repr(e))
+                self.pen = False
+        if self.pen:
+            self.pen.report(report)
+        self.pen_last = report if report[1] & pen.IN_RANGE else None
+
+    def check(self):
+        """Every few ms: a first finger waited long enough for a second; and
+        nothing heard for a while, whatever touches is lifted (the app's last
+        packets were lost, or it is gone)."""
+        if self.waiting is not None:
+            self._decide()
+        if self.clock() - self.heard < INPUT_SILENCE:
+            return
+        if self.waiting is not None:
+            self.waiting = None  # never on the desktop: nothing to lift
+        if self.down:
+            self._fingers({})
+        if self.pen_last is not None:
+            self._pen(self.pen_last[:1] + b"\x00" + self.pen_last[2:])
+
+    def close(self):
+        self.waiting = None
+        self._fingers({})
+        if self.pen_last is not None:
+            self._pen(self.pen_last[:1] + b"\x00" + self.pen_last[2:])
+        if self.pen:
+            self.pen.close()
+        self.pen = None
 
 
 class Channel:
@@ -85,9 +222,11 @@ class Channel:
 class AppStreamer:
     """The virtual monitor (or a test pattern), encoded, to the app."""
 
-    def __init__(self, source, channel, width, height, fps, bitrate, encoder, on_stats=None):
+    def __init__(self, source, channel, width, height, fps, bitrate, encoder, on_stats=None, input=None):
+        """input: an Input for the fingers and the pen, or None."""
         self.channel = channel
         self.on_stats = on_stats or (lambda stats: None)
+        self.input = input
         if source == "test":
             video = (f"videotestsrc is-live=true pattern=ball ! "
                      f"video/x-raw,format={media.CAPTURE_FORMAT},width={width},height={height},"
@@ -129,11 +268,13 @@ class AppStreamer:
 
     def stop(self):
         self._running = False
+        self._feedback.join(timeout=2)
+        if self.input:
+            self.input.close()
         self.pipeline.set_state(Gst.State.NULL)
         self._sink.disconnect(self._handler)
         self.keyframes.remove()
         self._in_pad.remove_probe(self._in_probe)
-        self._feedback.join(timeout=2)
 
     def _frame_in(self, pad, info):
         # pipewiresrc and a live test source stamp buffers with the running
@@ -166,11 +307,16 @@ class AppStreamer:
 
     def _listen(self):
         while self._running:
-            body = self.channel.receive(0.5)
+            body = self.channel.receive(0.02)  # Input.check(): a first finger waits 80 ms at most
+            if self.input:
+                self.input.check()
             if not body:
                 continue
             kind = body[0]
-            if kind == KEYFRAME:
+            if kind == INPUT:
+                if self.input and not self.input.packet(body):
+                    log("app display: a malformed input packet")
+            elif kind == KEYFRAME:
                 log("app display: the app asks for a keyframe")
                 self.force_keyframe()
             elif kind == PING and len(body) == 9:
@@ -201,7 +347,8 @@ def describe(stats):
 
 
 def main(argv=None):
-    """A test pattern to the paired tablet's app, its delay measured."""
+    """The desktop (or a test pattern) to the paired tablet's app, with its
+    fingers and pen, its delay measured."""
     ap = argparse.ArgumentParser(prog="python3 -m plusone.appdisplay")
     ap.add_argument("address", help="the tablet's address on the network")
     ap.add_argument("--port", type=int, default=companion.APP_PORT)
@@ -210,6 +357,7 @@ def main(argv=None):
     ap.add_argument("--bitrate", type=int, default=20000, help="kbit/s")
     ap.add_argument("--encoder", default="auto")
     ap.add_argument("--seconds", type=int, default=20)
+    ap.add_argument("--test", action="store_true", help="a test pattern instead of a virtual monitor")
     args = ap.parse_args(argv)
     Gst.init(None)
     paired = companion.Paired().all()
@@ -228,16 +376,40 @@ def main(argv=None):
         log(f"app display: the tablet is {reply['width']}x{reply['height']} at {reply['refresh']:.0f} Hz")
         width, height = ((int(reply["width"]), int(reply["height"])) if args.size == "native"
                          else map(int, args.size.split("x")))
-        streamer = AppStreamer("test", channel, width, height, args.fps, args.bitrate,
-                               media.pick_encoder(args.encoder),
-                               on_stats=lambda stats: log("app display:", describe(stats)))
-        streamer.start()
-        end = time.monotonic() + args.seconds
-        while time.monotonic() < end:
-            time.sleep(5)
+        encoder = media.pick_encoder(args.encoder)
+        on_stats = lambda stats: log("app display:", describe(stats))  # noqa: E731
+        streamers = []
+        loop = GLib.MainLoop()
+
+        def ping():
             wire.send({"type": "ping"})
-        wire.send({"type": "stop"})
-        streamer.stop()
+            return True
+
+        if args.test:
+            streamers.append(AppStreamer("test", channel, width, height, args.fps, args.bitrate, encoder, on_stats))
+            streamers[0].start()
+        else:
+            from .display import VirtualMonitor
+            monitor = None
+
+            def ready(node):
+                touch = Input(monitor, (width, height), lambda: pen.for_monitor(monitor, (width, height)))
+                streamers.append(AppStreamer(node, channel, width, height, args.fps, args.bitrate, encoder,
+                                             on_stats, input=touch))
+                streamers[0].start()
+
+            monitor = VirtualMonitor(on_ready=ready)
+            monitor.start()
+        GLib.timeout_add_seconds(5, ping)
+        GLib.timeout_add_seconds(args.seconds, loop.quit)
+        try:
+            loop.run()
+        finally:
+            wire.send({"type": "stop"})
+            for streamer in streamers:
+                streamer.stop()
+            if not args.test:
+                monitor.stop()
     finally:
         channel.close()
         sock.close()

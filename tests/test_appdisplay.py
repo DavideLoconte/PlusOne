@@ -64,3 +64,97 @@ def test_only_the_apps_fresh_packets_are_taken():
     finally:
         channel.close()
         app.close()
+
+
+class FakeMonitor:
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, name):
+        return lambda *args: self.calls.append((name, *args))
+
+
+def fingers(*points):
+    """An INPUT packet with these fingers (id, x, y in 0..1) and no pen."""
+    body = bytes([appdisplay.INPUT, len(points)])
+    for finger, x, y in points:
+        body += appdisplay.FINGER.pack(finger, int(x * appdisplay.TOUCH_MAX), int(y * appdisplay.TOUCH_MAX))
+    return body + b"\x00"
+
+
+class Clock:
+    def __init__(self):
+        self.now = 100.0
+
+    def __call__(self):
+        return self.now
+
+
+def touch_input():
+    clock, monitor = Clock(), FakeMonitor()
+    return appdisplay.Input(monitor, (1000, 1000), lambda: None, clock=clock), monitor, clock
+
+
+def test_a_tap_is_not_held_back():
+    touch, monitor, clock = touch_input()
+    assert touch.packet(fingers((0, 0.5, 0.5)))
+    assert monitor.calls == []  # a second finger may come
+    clock.now += 0.03
+    touch.packet(fingers())
+    assert [c[0] for c in monitor.calls] == ["touch_down", "touch_up"]
+
+
+def test_a_finger_alone_goes_down_once_no_second_came():
+    touch, monitor, clock = touch_input()
+    touch.packet(fingers((0, 0.5, 0.5)))
+    clock.now += 0.04
+    touch.packet(fingers((0, 0.52, 0.5)))
+    assert monitor.calls == []
+    clock.now += 0.05
+    touch.check()
+    assert [c[0] for c in monitor.calls] == ["touch_down", "touch_motion"]  # nothing of it lost
+    touch.packet(fingers((0, 0.6, 0.5)))
+    assert monitor.calls[-1][0] == "touch_motion"
+
+
+def test_two_fingers_tapped_are_the_right_button():
+    touch, monitor, clock = touch_input()
+    touch.packet(fingers((0, 0.3, 0.4)))
+    clock.now += 0.03
+    touch.packet(fingers((0, 0.3, 0.4), (1, 0.35, 0.4)))
+    clock.now += 0.1
+    touch.check()
+    touch.packet(fingers((1, 0.35, 0.4)))
+    clock.now += 0.05
+    touch.packet(fingers())
+    assert monitor.calls == [("pointer_move", pytest.approx(300, abs=0.1), pytest.approx(400, abs=0.1)),
+                             ("pointer_button", appdisplay.pen.BTN_RIGHT, True),
+                             ("pointer_button", appdisplay.pen.BTN_RIGHT, False)]
+
+
+def test_a_pinch_is_touches():
+    touch, monitor, clock = touch_input()
+    touch.packet(fingers((0, 0.3, 0.4)))
+    clock.now += 0.03
+    touch.packet(fingers((0, 0.3, 0.4), (1, 0.4, 0.4)))
+    clock.now += 0.03
+    touch.packet(fingers((0, 0.25, 0.4), (1, 0.45, 0.4)))
+    assert [c[0] for c in monitor.calls] == ["touch_down", "touch_down", "touch_motion", "touch_motion"]
+
+
+def test_two_fingers_resting_are_touches():
+    touch, monitor, clock = touch_input()
+    touch.packet(fingers((0, 0.3, 0.4), (1, 0.4, 0.4)))
+    clock.now += appdisplay.TAP_TIME + 0.01
+    touch.check()
+    assert [c[0] for c in monitor.calls] == ["touch_down", "touch_down"]
+
+
+def test_silence_lifts_what_touches():
+    touch, monitor, clock = touch_input()
+    touch.packet(fingers((0, 0.5, 0.5)))
+    clock.now += 0.1
+    touch.check()
+    clock.now += appdisplay.INPUT_SILENCE
+    touch.check()
+    assert [c[0] for c in monitor.calls] == ["touch_down", "touch_up"]
