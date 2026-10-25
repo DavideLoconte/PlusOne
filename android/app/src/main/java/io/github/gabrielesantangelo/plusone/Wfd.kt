@@ -9,8 +9,8 @@ import android.util.Log
  * Second Screen's low-latency mode: it reads Documents/wfd/wfdconfig.txt
  * (README, "tablet low-latency mode"), which the user had to make by hand.
  * Made once here, through MediaStore (no permission needed for a file the
- * app creates). Should one exist already (the user's), Android names ours
- * "wfdconfig (1).txt", which Second Screen ignores: no harm either way.
+ * app creates). Should one exist already (the user's, which the app cannot
+ * see), Android names ours "wfdconfig (1).txt": then it is removed again.
  */
 object Wfd {
     private const val DONE = "wfdconfig"
@@ -27,7 +27,13 @@ object Wfd {
             val resolver = context.contentResolver
             val uri = resolver.insert(MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values)
                 ?: return
-            resolver.openOutputStream(uri)?.use { it.write("sink_latency_mode low\n".toByteArray()) }
+            val name = resolver.query(uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)
+                ?.use { if (it.moveToFirst()) it.getString(0) else null }
+            if (name != "wfdconfig.txt") {
+                resolver.delete(uri, null, null)  // the user's is there already: theirs stays alone
+            } else {
+                resolver.openOutputStream(uri)?.use { it.write("sink_latency_mode low\n".toByteArray()) }
+            }
             prefs.edit().putBoolean(DONE, true).apply()
             Log.i(CompanionService.TAG, "Second Screen's low-latency mode set (Documents/wfd/wfdconfig.txt)")
         } catch (e: Exception) {

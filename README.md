@@ -299,17 +299,10 @@ v4l2loopback-dkms` first.
 
 ### Recommended once: tablet low-latency mode
 
-Second Screen reads a configuration file. Creating it cuts its internal
-buffering (measured roughly 90 → 50 ms together with the other tweaks):
-
-1. On the tablet, open *My Files* → *Internal storage* → *Documents*.
-2. Create a folder `wfd` and in it a text file `wfdconfig.txt` containing:
-
-   ```
-   sink_latency_mode low
-   ```
-
-If the tablet is connected over adb (see below) Plus One writes this file for you.
+Second Screen reads a configuration file, which cuts its internal buffering
+(measured roughly 90 → 50 ms together with the other tweaks). Plus One's app
+writes it the first time it opens (`Documents/wfd/wfdconfig.txt`, containing
+`sink_latency_mode low`); nothing to do by hand.
 
 ### Settings
 
