@@ -35,6 +35,9 @@ class Nearby:
     def addresses(self, app_id):
         return [(a, p) for i, a, p, _n in self.found if i == app_id]
 
+    def refresh(self):
+        pass
+
 
 def make(monkeypatch, tmp_path, tablets=()):
     monkeypatch.setattr(gui, "shell_extension_state", lambda callback: None)

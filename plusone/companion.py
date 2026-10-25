@@ -102,7 +102,7 @@ class Paired:
         self.path = os.path.join(directory or CONFIG, "paired.json")
 
     def entries(self):
-        """{fingerprint: {"name": ..., maybe "wifi_direct": ...}}."""
+        """{fingerprint: {"name": ..., maybe "wifi_direct": ..., "app_at": "ip:port"}}."""
         try:
             with open(self.path) as f:
                 data = json.load(f)
@@ -114,7 +114,7 @@ class Paired:
                 entry = {"name": entry}  # 0.5 kept the name only
             if isinstance(entry, dict) and isinstance(entry.get("name"), str):
                 entries[fp] = {key: value for key, value in entry.items()
-                               if key == "name" or (key == "wifi_direct" and isinstance(value, str))}
+                               if key == "name" or (key in ("wifi_direct", "app_at") and isinstance(value, str))}
         return entries
 
     def all(self):
@@ -127,7 +127,8 @@ class Paired:
         write_private(self.path, data)
 
     def learn(self, fp, **fields):
-        """What was found out about a paired tablet (wifi_direct=its address)."""
+        """What was found out about a paired tablet (wifi_direct=its Wi-Fi Direct
+        address, app_at=where its app was last on the network)."""
         data = self.entries()
         if fp in data and any(data[fp].get(key) != value for key, value in fields.items()):
             data[fp].update(fields)

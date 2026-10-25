@@ -161,7 +161,7 @@ class Signing:
         network, or None. Every address it is announced at: someone may
         announce it too, and only the real one proves it (TLS)."""
         tablet = self.app.tablets.active()
-        where = self.app.tablets.addresses(tablet) if tablet else []
+        where = self.app.tablets.targets(tablet) if tablet else []
         return (where, tablet.name, tablet.app_id) if where else None
 
     def _locate_app(self, app_id):

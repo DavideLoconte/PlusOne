@@ -98,7 +98,8 @@ class FakeApp:
     def __init__(self):
         self.changes = 0
         tablet = types.SimpleNamespace(app_id="a1b2" + "0" * 12)
-        self.tablets = types.SimpleNamespace(active=lambda: tablet, addresses=lambda t: [("10.0.0.2", 47236)])
+        self.tablets = types.SimpleNamespace(active=lambda: tablet, addresses=lambda t: [("10.0.0.2", 47236)],
+                                             targets=lambda t: [("10.0.0.2", 47236)])
 
     def devices_changed(self):
         self.changes += 1

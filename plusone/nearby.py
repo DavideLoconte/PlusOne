@@ -12,7 +12,7 @@ import binascii
 
 from gi.repository import Gio, GLib
 
-from . import log
+from . import log, once
 
 AVAHI = "org.freedesktop.Avahi"
 SERVER = AVAHI + ".Server"
@@ -25,6 +25,10 @@ UNSPEC = -1  # any interface, any protocol
 INET = 0     # Avahi's IPv4: the app is reached at an IPv4 address
 TABLET = 2  # Quick Share device type: 1 phone, 2 tablet, 3 laptop
 RECHECK = 60  # seconds
+# A resolve of the app's that failed (the tablet asleep answers late) is
+# tried again after these, not only at the next RECHECK: once it took a
+# minute to find a tablet that was there.
+RETRIES = (2, 5, 15)  # seconds
 RESOLVE_TIMEOUT = 10000  # ms; Avahi gives up after 5 s
 
 
@@ -65,6 +69,7 @@ class Nearby:
         # on each change, as the signing threads read it.
         self.companions = {}
         self._browsers = []
+        self._failed = {}  # an app's service -> resolves failed in a row
         self._subscription = self._watch = self._timer = None
 
     def present(self):
@@ -180,6 +185,10 @@ class Nearby:
         if key not in self.services:
             return
         if key[3] == COMPANION:
+            failed = 0 if reply is not None else self._failed.get(key, 0) + 1
+            self._failed[key] = failed
+            if 0 < failed <= len(RETRIES):
+                GLib.timeout_add_seconds(RETRIES[failed - 1], once(self._retry, key))
             self._companion(key, reply, txt)
             # The app runs on a tablet: that is a tablet on the network too.
             self._update(key, self.companions[key][2] if key in self.companions else None)
@@ -212,6 +221,17 @@ class Nearby:
             log("nearby:", f"tablet on the network ({', '.join(after[1]) or 'unnamed'})"
                 if after[0] else "no tablet on the network")
             self.on_change()
+
+    def _retry(self, key):
+        if self.bus is not None and key in self.services:
+            self._resolve(key)
+
+    def refresh(self):
+        """Asked where the apps are now (the user wants a tablet)."""
+        if self.bus is not None:
+            for key in list(self.services):
+                if key[3] == COMPANION:
+                    self._resolve(key)
 
     def _recheck(self):
         for key in list(self.services):

@@ -70,7 +70,25 @@ class Tablets:
 
     def addresses(self, tablet):
         """Where its app is announced on the network: [(address, port)]."""
-        return self.nearby.addresses(tablet.app_id) if self.nearby else []
+        found = self.nearby.addresses(tablet.app_id) if self.nearby else []
+        if found:
+            at = "%s:%d" % found[0]
+            if self.paired.entries().get(tablet.fingerprint, {}).get("app_at") != at:
+                self.paired.learn(tablet.fingerprint, app_at=at)
+        return found
+
+    def targets(self, tablet):
+        """Where to reach its app: where it is announced, else where it was
+        last (mDNS can miss a tablet asleep for a while; its address seldom
+        changes, and the TLS link proves it is the tablet either way)."""
+        found = self.addresses(tablet)
+        if found:
+            return found
+        if self.nearby:
+            self.nearby.refresh()
+        at = self.paired.entries().get(tablet.fingerprint, {}).get("app_at", "")
+        host, _colon, port = at.rpartition(":")
+        return [(host, int(port))] if host and port.isdigit() and 0 < int(port) < 65536 else []
 
     # -- Second Screen (engine.Controller) ----------------------------------------
     def match(self):

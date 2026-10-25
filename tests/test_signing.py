@@ -35,6 +35,9 @@ class FakeNearby:
     def addresses(self, app_id):
         return [(a[0], a[1]) for a in [self.app_on] if a and a[3] == app_id]
 
+    def refresh(self):
+        pass
+
 
 class FakePaired:
     def __init__(self, entries):

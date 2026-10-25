@@ -158,7 +158,7 @@ class Controller:
         if tablet is None:
             self._set_state(State.ERROR, "Pair a tablet first")
             return
-        targets = self.tablets.addresses(tablet)
+        targets = self.tablets.targets(tablet)
         if targets and s.display_via == "auto" and not s.test_pattern and not s.peer:
             self._start_app(tablet, targets)
         else:

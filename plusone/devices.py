@@ -373,7 +373,7 @@ class Device:
     def where(self):
         """The tablet in use's addresses and app id: from the feed's thread."""
         tablet = self.app.tablets.active()
-        return (self.app.tablets.addresses(tablet), tablet.app_id) if tablet else None
+        return (self.app.tablets.targets(tablet), tablet.app_id) if tablet else None
 
     def _problem(self, reason):
         """The tablet could not give it: "away", or the app's reason as "tablet-<reason>"."""

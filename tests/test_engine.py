@@ -17,6 +17,8 @@ class FakeTablets:
     def addresses(self, tablet):
         return self.app_at
 
+    targets = addresses
+
     def screen_seen(self, screen):
         self.screen = screen
 

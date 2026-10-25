@@ -18,7 +18,7 @@ from .i18n import _  # noqa: E402
 from .rtsp import MODES  # noqa: E402
 
 MODE_LIST = sorted(((w, h, f) for (w, h, f) in MODES if f == 60), key=lambda m: -m[0] * m[1])
-TABLET_ICON = "plusone-tablet-symbolic"  # icons/
+TABLET_ICON = "tablet-symbolic"  # the system's (Adwaita, Yaru): drawn in the theme's colours
 WEBSITE = "https://github.com/GabrieleSantangelo/PlusOne"
 QUALITY_LIST = ["720p", "1080p"]
 # The second screen's picture, by what it is for: (label, kbit/s).

@@ -23,6 +23,9 @@ class Nearby:
     def addresses(self, app_id):
         return [(a, p) for a, p, i in self.found if i == app_id]
 
+    def refresh(self):
+        pass
+
 
 def test_the_tablet_in_use(paired):
     saved = []
@@ -87,3 +90,20 @@ def test_why_second_screen_is_refused(monkeypatch, paired, error, template):
 def test_no_tablet_no_second_screen(tmp_path):
     tablets = Tablets(Settings(), paired=companion.Paired(str(tmp_path)))
     assert tablets.verify("192.168.49.1") == ("Pair a tablet first", {})
+
+
+def test_where_the_app_was_last_is_tried_when_it_is_not_announced(paired):
+    nearby = Nearby([("10.0.0.7", 47236, KITCHEN[:16])])
+    tablets = Tablets(Settings(), paired=paired, nearby=nearby)
+    kitchen = tablets.active()
+    assert tablets.targets(kitchen) == [("10.0.0.7", 47236)]
+    assert paired.entries()[KITCHEN]["app_at"] == "10.0.0.7:47236"  # remembered
+    nearby.found = []  # asleep: mDNS does not answer
+    refreshed = []
+    nearby.refresh = lambda: refreshed.append(1)
+    assert tablets.addresses(kitchen) == []  # not said to be there
+    assert tablets.targets(kitchen) == [("10.0.0.7", 47236)] and refreshed == [1]  # but tried there
+    office = next(t for t in tablets.all() if t.fingerprint == OFFICE)
+    assert tablets.targets(office) == []  # never seen: nowhere to try
+    paired.learn(OFFICE, app_at="nonsense:99999")
+    assert tablets.targets(office) == []
