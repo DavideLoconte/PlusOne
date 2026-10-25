@@ -253,7 +253,7 @@ class CompanionService : Service() {
             capturingFor = pc
         }
         try {
-            if (!foreground()) return refuse("background")
+            if (!allowedTypes(kind) && !foreground()) return refuse("background")
             val info = try {
                 capture.start()
             } catch (e: Exception) {
@@ -261,18 +261,29 @@ class CompanionService : Service() {
                 return refuse("unavailable")
             }
             wire.send(info)
+            showCaptures()
             socket.soTimeout = 0  // the PC holds it as long as its program uses the device
             while (wire.receive().optString("type") != "stop") continue
         } finally {
             capture.stop()
             synchronized(captures) { captures.remove(capture) }
-            showForeground()
+            showCaptures()
         }
     }
 
+    // The foreground service's types now: camera and microphone stay once
+    // they were taken in front, so the PC's next use needs no CaptureActivity.
+    @Volatile private var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+
+    private fun allowedTypes(kind: String) = types and typeOf(kind) != 0
+
+    private fun typeOf(kind: String) = if (kind == "camera") ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+        else ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+
     /** Camera and microphone are only for a foreground service started, or
      * started again, while the app is in front: for a moment a see-through
-     * activity is (CaptureActivity, which may open over other apps). */
+     * activity is (CaptureActivity, which may open over other apps). Once:
+     * the types stay while the service runs and the user lets the PC have them. */
     private fun foreground(): Boolean {
         val done = CompletableFuture<Boolean>()
         elevating = done
@@ -286,31 +297,48 @@ class CompanionService : Service() {
         }
     }
 
-    /** From CaptureActivity, while it is in front. */
+    /** While the app is in front (CaptureActivity, MainActivity): the service
+     * takes the camera and the microphone the user lets the PC have. */
     fun elevate() {
-        showForeground()
+        var wanted = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+        for ((kind, on) in listOf("camera" to Options.camera(this), "microphone" to Options.microphone(this))) {
+            val permission = if (kind == "camera") Manifest.permission.CAMERA else Manifest.permission.RECORD_AUDIO
+            if (on && checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) wanted = wanted or typeOf(kind)
+        }
+        if (wanted != types) {
+            types = wanted
+            showForeground()
+        }
         elevating?.complete(true)
     }
 
-    /** The foreground service's types and notification, as the captures are now. */
+    /** The foreground service with its types, and its notification as the captures are now. */
     private fun showForeground() {
-        val kinds = synchronized(captures) { captures.values.map { it.first }.toSet() }
-        var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-        if ("camera" in kinds) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
-        if ("microphone" in kinds) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
         try {
-            startForeground(Notifications.SERVICE_ID,
-                if (kinds.isEmpty()) Notifications.ready(this) else Notifications.capturing(this, kinds, capturingFor),
-                types)
+            startForeground(Notifications.SERVICE_ID, notification(), types)
         } catch (e: Exception) {
             Log.w(TAG, "foreground service: $e")
         }
     }
 
-    /** The user took the device back from the PC (MainActivity): its captures end. */
+    private fun notification(): android.app.Notification {
+        val kinds = synchronized(captures) { captures.values.map { it.first }.toSet() }
+        return if (kinds.isEmpty()) Notifications.ready(this) else Notifications.capturing(this, kinds, capturingFor)
+    }
+
+    /** What the notification says, when only that changed. */
+    private fun showCaptures() =
+        getSystemService(android.app.NotificationManager::class.java).notify(Notifications.SERVICE_ID, notification())
+
+    /** The user took the device back from the PC (MainActivity): its captures
+     * end, and the service lets go of it. */
     fun stopCaptures(kind: String) {
         val sockets = synchronized(captures) { captures.filter { it.value.first == kind }.map { it.value.second } }
         sockets.forEach { try { it.close() } catch (e: Exception) {} }
+        if (allowedTypes(kind)) {
+            types = types and typeOf(kind).inv()
+            showForeground()
+        }
     }
 
     /** Numeric comparison: the app commits to its random number, learns the

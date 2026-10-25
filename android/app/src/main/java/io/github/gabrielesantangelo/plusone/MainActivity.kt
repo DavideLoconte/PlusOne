@@ -68,6 +68,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         CompanionService.start(this)  // ready now (for a while, if not always)
+        CompanionService.instance?.elevate()  // in front: camera and microphone for the PC, if let
         Jobs.listen(queueChanged)
         refresh()
     }
@@ -229,8 +230,11 @@ class MainActivity : AppCompatActivity() {
         return Row(row(iconRes, getString(title), getString(subtitle), switch)) { switch.toggle() }
     }
 
-    private fun setPcDevice(kind: String, on: Boolean) =
+    private fun setPcDevice(kind: String, on: Boolean) {
         if (kind == CAMERA) Options.setCamera(this, on) else Options.setMicrophone(this, on)
+        // In front now: the service takes it at once, so the PC's first use is quick too.
+        if (on) CompanionService.instance?.elevate()
+    }
 
     /** Whether Android's question was asked already (after a "no", it is not asked again). */
     private fun asked(kind: String) = getSharedPreferences("asked", MODE_PRIVATE).getBoolean(kind, false)
