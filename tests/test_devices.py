@@ -218,14 +218,3 @@ def test_a_stale_microphone_is_removed(monkeypatch):
     assert ran[-1] == ["pactl", "unload-module", "536870913"]
 
 
-def test_the_microphone_is_brought_to_a_voice():
-    import array
-    level = devices.Leveller()
-    room = array.array("h", [50, -50] * 480)
-    assert level(room) == 4.0  # quiet: the gain is left alone
-    voice = array.array("h", [600, -600] * 480)
-    gains = [level(voice) for _ in range(200)]
-    assert gains[0] < gains[-1] and abs(gains[-1] - devices.Leveller.TARGET / 600) < 0.1
-    shout = array.array("h", [20000, -20000] * 480)
-    assert level(shout) * 20000 <= 32000  # at once, and no clipping
-    assert level(array.array("h")) == level.gain

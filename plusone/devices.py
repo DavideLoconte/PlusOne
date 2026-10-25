@@ -5,10 +5,8 @@ the window. Nothing goes over the network until a program on the PC uses one:
 then the tablet in use is asked for it over WebRTC (rtc.py), and lets go of
 it when the program does.
 """
-import array
 import ctypes
 import glob
-import math
 import os
 import shutil
 import struct
@@ -32,7 +30,6 @@ REFUSED_RETRY = 10  # seconds, after the app said no (the user may change their 
 IN_USE_AFTER = 0.2  # seconds a program holds the device before the tablet is asked
 IDLE_AFTER = 3      # seconds without one before the tablet stops
 MIC_FEED = "plusone-mic-feed"  # the stream Plus One feeds the microphone with
-LEVEL_EVERY = 20_000_000        # ns: how often the microphone's level is measured
 # ns of sound that may wait before the oldest goes: what waits stays, as delay,
 # once the sound comes as fast as it is played (160 ms measured 235 end to end).
 MIC_BEHIND = 60_000_000
@@ -495,37 +492,24 @@ class Microphone(Device):
         the source by hand (nothing else plays it). webrtcbin's jitter buffer
         puts the packets back in order and evens out the Wi-Fi's timing; one
         still missing the decoder conceals."""
-        receiver = self.rtc.Receiver("audio", self._on_pad)
-        receiver.watch_bus().connect("message::element", self._measured)
-        self.leveller = Leveller()
-        return receiver
+        return self.rtc.Receiver("audio", self._on_pad)
 
     def _on_pad(self, pipeline, pad):
-        chain = self.rtc.link(pipeline, pad,
-                              f"rtpopusdepay ! opusdec plc=true ! audioconvert ! audioresample "
-                         f"! audio/x-raw,format=S16LE,rate=48000,channels=1 "
-                         f"! level name=meter interval={LEVEL_EVERY} post-messages=true ! volume name=gain "
-                         f"! queue max-size-time={MIC_BEHIND} max-size-buffers=0 max-size-bytes=0 leaky=downstream "
-                         # As it comes, not by the pipeline's clock (not PipeWire's: the sink
-                         # came after webrtcbin started); by it, 20 ms packets against PipeWire's
-                         # 21.3 ms reads left it with nothing every 320 ms.
-                         f"! pipewiresink sync=false stream-properties=\"props,node.name={MIC_FEED},"
-                         f"node.autoconnect=false,media.type=Audio\"")
-        self.gain = chain.get_by_name("gain")
+        # Decoded, and into the source as it is: the tablet's libwebrtc has
+        # already set its level and taken the noise out.
+        self.rtc.link(pipeline, pad,
+                      f"rtpopusdepay ! opusdec plc=true ! audioconvert ! audioresample "
+                      f"! audio/x-raw,format=S16LE,rate=48000,channels=1 "
+                      f"! queue max-size-time={MIC_BEHIND} max-size-buffers=0 max-size-bytes=0 leaky=downstream "
+                      # As it comes, not by the pipeline's clock (not PipeWire's: the sink
+                      # came after webrtcbin started). PipeWire is asked to read 10 ms at
+                      # a time: each 20 ms packet lasts it two reads. At its usual 21.3 ms
+                      # a packet was always 64 samples short, and the source went silent.
+                      f"! pipewiresink sync=false stream-properties=\"props,node.name={MIC_FEED},"
+                      f"node.autoconnect=false,media.type=Audio,node.latency=480/48000\"")
         # Its ports show once sound flows: waited for on another thread.
         threading.Thread(target=lambda: link_feed() or log("microphone: could not link Plus One's stream "
                                                              "into the source"), daemon=True).start()
-
-    def _measured(self, _bus, message):
-        """The level, on the main loop: the gain follows (nothing of Python's
-        in the sound's own path, where waiting for the interpreter left gaps)."""
-        structure = message.get_structure()
-        if structure is None or structure.get_name() != "level" or getattr(self, "gain", None) is None:
-            return
-        rms, peak = structure.get_value("rms"), structure.get_value("peak")
-        if rms and peak:
-            self.gain.set_property("volume", self.leveller.adjust(32768 * 10 ** (rms[0] / 20),
-                                                                  32768 * 10 ** (peak[0] / 20)))
 
     def _ready(self):
         GLib.idle_add(once(lambda: self.feed and self._set_state("in use")))
@@ -538,40 +522,12 @@ def link_feed(wait=5):
     while time.monotonic() < deadline:
         outputs = subprocess.run(["pw-link", "--output"], capture_output=True, text=True).stdout.split()
         inputs = subprocess.run(["pw-link", "--input"], capture_output=True, text=True).stdout.split()
-        feed = [p for p in outputs if p.startswith(MIC_FEED + ":")]
+        feed = [p for p in outputs if p.startswith(MIC_FEED + ":output")]
         source = [p for p in inputs if p.startswith(MIC_NAME + ":")]
         if feed and source:
             return subprocess.run(["pw-link", feed[0], source[0]], capture_output=True).returncode == 0
         time.sleep(0.05)
     return False
-
-
-class Leveller:
-    """A microphone's level kept at a voice's: the gain for each piece of
-    16-bit samples, rising slowly while someone speaks, falling at once for
-    anything louder, never making a piece clip, and left alone in the quiet
-    between words (else it would bring the room's noise up)."""
-    TARGET = 3300     # RMS of a voice, about -20 dBFS
-    FLOOR = 120       # RMS below which it is the room, not a voice
-    MAX_GAIN = 10.0   # +20 dB: the volume element's most
-    RISE = 0.05       # of the way to the gain wanted, per piece (20 ms)
-
-    def __init__(self, gain=4.0):
-        self.gain = gain
-
-    def __call__(self, samples):
-        if not samples:
-            return self.gain
-        return self.adjust(math.sqrt(sum(x * x for x in samples) / len(samples)), max(max(samples), -min(samples)))
-
-    def adjust(self, rms, peak):
-        """The gain for a piece of this RMS and peak (16-bit units)."""
-        if rms >= self.FLOOR:
-            wanted = min(self.MAX_GAIN, self.TARGET / rms)
-            self.gain = wanted if wanted < self.gain else self.gain + (wanted - self.gain) * self.RISE
-        if peak >= 1:
-            self.gain = min(self.gain, 32000 / peak)
-        return self.gain
 
 
 class LinkParser:

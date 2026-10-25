@@ -130,6 +130,10 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
     }
 
     private fun microphoneTrack(factory: PeerConnectionFactory): MediaStreamTrack {
+        val files = context.getExternalFilesDir(null)
+        if (files != null && java.io.File(files, Rtc.RECORD_FLAG).exists()) {
+            Rtc.recording = Rtc.Recording(java.io.File(files, Rtc.RECORD_FILE))
+        }
         // libwebrtc's own processing: its gain control and, if asked, its
         // noise suppression. No echo cancelling: the tablet plays nothing back.
         val constraints = MediaConstraints().apply {
@@ -144,6 +148,7 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
     }
 
     fun stop() {
+        if (!camera) Rtc.recording?.let { Rtc.recording = null; it.close() }
         try { capturer?.stopCapture() } catch (e: InterruptedException) {}
         capturer?.dispose()
         pc?.dispose()  // its senders and tracks with it
@@ -184,6 +189,28 @@ object Rtc {
     val egl: EglBase by lazy { EglBase.create() }
     private var factory: PeerConnectionFactory? = null
 
+    /** For measuring (adb only): with the file RECORD_FLAG in the app's files,
+     * what the microphone captures, before libwebrtc's processing, goes to
+     * RECORD_FILE: each piece's wall-clock time (ms), its size, its samples. */
+    @Volatile var recording: Recording? = null
+
+    class Recording(file: java.io.File) {
+        private val out = java.io.DataOutputStream(java.io.BufferedOutputStream(java.io.FileOutputStream(file)))
+
+        @Synchronized
+        fun write(samples: JavaAudioDeviceModule.AudioSamples) {
+            out.writeLong(System.currentTimeMillis())
+            out.writeInt(samples.data.size)
+            out.write(samples.data)
+        }
+
+        @Synchronized
+        fun close() = out.close()
+    }
+
+    const val RECORD_FLAG = "record-microphone"
+    const val RECORD_FILE = "microphone.raw"
+
     /** The factory, one for the process (noise reduction is each audio source's). */
     @Synchronized
     fun factory(context: Context): PeerConnectionFactory {
@@ -194,6 +221,7 @@ object Rtc {
         // far too quiet on a Galaxy Tab. Noise suppression is libwebrtc's own.
         val audio = JavaAudioDeviceModule.builder(context.applicationContext)
             .setAudioSource(android.media.MediaRecorder.AudioSource.MIC)
+            .setSamplesReadyCallback { samples -> recording?.write(samples) }
             .setUseHardwareNoiseSuppressor(false)
             .setUseHardwareAcousticEchoCanceler(false)
             .createAudioDeviceModule()
