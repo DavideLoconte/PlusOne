@@ -18,6 +18,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import java.io.File
 import com.google.android.material.R as M
+import io.github.gabrielesantangelo.plusone.link.Paired
 
 /**
  * What the app is doing and what it may do: the PDFs waiting to be signed,

@@ -22,13 +22,13 @@ from .trust import MAX_NAME, Paired, commitment, fingerprint, identity, pairing_
 from .wire import MAX_HEADER, UNPAIRED_HEADER, Wire
 
 PROTOCOL = 3
-APP_PORT = 47236             # the app's (CompanionService.kt PORT), unless it was taken
+APP_PORT = 47236             # the app's (LinkServer.kt PORT), unless it was taken
 CONNECT_TIMEOUT = 5          # seconds
 PAIRING_TIMEOUT = 120        # seconds for the user to compare the codes
 IO_TIMEOUT = 30              # seconds for a message to go through
 LINK_TIMEOUT = 20            # seconds a link waits for the tablet to acknowledge what it sent
 HANDSHAKE_FOR = 20           # seconds for TLS, hello and pairing messages (not the user's answer)
-KEEPALIVE = 5                # seconds between a session's pings (the app lets go of a silent PC: Rtc.kt SILENT_PC)
+KEEPALIVE = 5                # seconds between a session's pings (the app lets go of a silent PC: LinkServer.kt SILENT_PC)
 
 
 class Incompatible(Exception):

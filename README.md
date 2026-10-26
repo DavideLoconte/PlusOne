@@ -442,7 +442,8 @@ plusone/          the services and the app: app.py (background app, D-Bus, notif
                   updates.py (both sides up to date)
 data/gnome-shell/ the Quick Settings extension
 data/nautilus/    the Files context-menu entry
-android/          the companion app for the tablet (Kotlin)
+android/          the companion app for the tablet (Kotlin): link/ (listening, mDNS, pairing, the PCs' links)
+                  under CompanionService and its services, the *Handler.kt
 tests/            unit and protocol tests (a scripted fake tablet, no hardware needed)
 packaging/        build-deb.sh and maintainer scripts
 tools/            CI scripts; tools/re/ has the reverse-engineering helpers (the Second Screen ones, and its measurements, are in the history up to 0.8)

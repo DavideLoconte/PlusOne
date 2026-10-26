@@ -1,4 +1,4 @@
-package io.github.gabrielesantangelo.plusone
+package io.github.gabrielesantangelo.plusone.link
 
 import java.nio.ByteBuffer
 import javax.crypto.Cipher

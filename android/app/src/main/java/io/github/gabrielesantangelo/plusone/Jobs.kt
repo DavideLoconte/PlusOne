@@ -113,7 +113,7 @@ object Jobs {
     }
 
     /** Jobs whose PC has not been back for so long that it gave up
-     * (companion.py RESUME_FOR): taken off the queue, and returned. */
+     * (sign_jobs.py RESUME_FOR): taken off the queue, and returned. */
     fun expire(after: Long = EXPIRE): List<Job> {
         val now = System.currentTimeMillis()
         val gone = jobs.values.filter { it.lostAt > 0 && now - it.lostAt > after }

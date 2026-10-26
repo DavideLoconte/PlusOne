@@ -1,4 +1,4 @@
-package io.github.gabrielesantangelo.plusone
+package io.github.gabrielesantangelo.plusone.link
 
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -51,7 +51,7 @@ object Identity {
     /** A TLS context presenting our certificate and accepting any peer's:
      * no CA vouches for either side, so the peer's certificate is checked
      * after the handshake, against the paired list or by the user
-     * comparing the pairing code (CompanionService.handle). */
+     * comparing the pairing code (LinkServer.handle). */
     @android.annotation.SuppressLint("CustomX509TrustManager", "TrustAllX509TrustManager")
     fun sslContext(): SSLContext {
         certificate  // created if needed
@@ -70,7 +70,7 @@ object Identity {
     /** Six digits both screens show while pairing: the same only if each
      * side got the other's certificate untouched; pcNonce and appNonce are
      * the two sides' random numbers, the app's committed to before it saw
-     * the PC's (plusone/companion.py). */
+     * the PC's (plusone/link/trust.py). */
     fun pairingCode(a: ByteArray, b: ByteArray, pcNonce: ByteArray, appNonce: ByteArray): String {
         val (first, second) = if (compare(a, b) <= 0) a to b else b to a
         val digest = MessageDigest.getInstance("SHA-256").apply {

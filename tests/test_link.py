@@ -90,7 +90,7 @@ def test_text_from_the_app():
 
 
 class FakeApp:
-    """The tablet's app as far as the protocol goes (CompanionService.kt):
+    """The tablet's app as far as the protocol goes (LinkServer.kt):
     each connection runs one of the scripts given, in order."""
 
     def __init__(self, tmp_path, scripts, version=link.PROTOCOL, paired=True, at=None):

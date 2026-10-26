@@ -1,4 +1,4 @@
-package io.github.gabrielesantangelo.plusone
+package io.github.gabrielesantangelo.plusone.link
 
 import org.json.JSONObject
 import java.io.BufferedInputStream
@@ -12,7 +12,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
- * Messages between the PC and the app (plusone/companion.py): a 4-byte
+ * Messages between the PC and the app (plusone/link/wire.py): a 4-byte
  * big-endian length, a JSON header of that length, and as many payload
  * bytes as the header's "size" says (none without one). Only the PC sends
  * payloads (a PDF), and the app copies them to a file, never into memory.

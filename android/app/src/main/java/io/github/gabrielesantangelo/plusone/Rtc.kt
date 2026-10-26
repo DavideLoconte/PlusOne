@@ -150,10 +150,6 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
         const val WAIT = 5_000L    // ms for each step of the answer
         const val HIGH = 3         // webrtc::Priority::kHigh
         const val GATHER = 5_000L  // ms for ICE's candidates, at most
-        // ms without a word from the PC (it pings every 5 s, devices.py:
-        // KEEPALIVE) before the capture ends: a PC gone without closing the
-        // connection (asleep, off the network) does not keep the microphone on.
-        const val SILENT_PC = 15_000
     }
 }
 

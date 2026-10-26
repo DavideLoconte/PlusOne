@@ -13,6 +13,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.Executors
+import io.github.gabrielesantangelo.plusone.link.Sealed
 
 /**
  * The PC's desktop on this screen. The PC sends each encoded frame (H.264)

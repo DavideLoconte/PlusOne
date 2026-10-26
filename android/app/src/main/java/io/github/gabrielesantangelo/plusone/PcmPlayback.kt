@@ -8,6 +8,7 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.nio.ByteBuffer
+import io.github.gabrielesantangelo.plusone.link.Sealed
 
 /**
  * The PC's sound on the speakers as it is (plusone/pcm.py): 16-bit stereo PCM
