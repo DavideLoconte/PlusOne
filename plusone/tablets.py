@@ -1,22 +1,17 @@
 """The paired tablets, and the one in use: the only one that gets the
-desktop (Second Screen) and the PDFs to sign.
-
-Second Screen cannot say who it is: anything can call itself the tablet
-over Wi-Fi Direct. Plus One's app can, with the certificate paired. So once
-a tablet joins the Wi-Fi Direct group, before any picture leaves, the PC
-asks the app over that same link (verify): no app, another certificate, or
-an app reached from elsewhere, and the desktop is not sent.
+desktop and the PDFs to sign, and whose camera, microphone and speakers
+are the PC's. Where its app is: announced on the network (nearby.py), or
+where it was last.
 """
 from dataclasses import dataclass
 
-from . import companion, log
+from . import companion
 
 
 @dataclass(frozen=True)
 class Tablet:
     fingerprint: str  # of its app's certificate
     name: str
-    wifi_direct: str | None = None  # its address, once Second Screen came from it
 
     @property
     def app_id(self):
@@ -35,7 +30,7 @@ class Tablets:
 
     def all(self):
         """The paired tablets, by name."""
-        return sorted((Tablet(fp, entry["name"][:companion.MAX_NAME], entry.get("wifi_direct"))
+        return sorted((Tablet(fp, entry["name"][:companion.MAX_NAME])
                        for fp, entry in self.paired.entries().items()),
                       key=lambda t: (t.name.lower(), t.fingerprint))
 
@@ -89,43 +84,3 @@ class Tablets:
         at = self.paired.entries().get(tablet.fingerprint, {}).get("app_at", "")
         host, _colon, port = at.rpartition(":")
         return [(host, int(port))] if host and port.isdigit() and 0 < int(port) < 65536 else []
-
-    # -- Second Screen (engine.Controller) ----------------------------------------
-    def match(self):
-        """What Wi-Fi Direct looks for (p2p.P2PLink): the tablet in use's
-        address, and its name (the address may change), or None."""
-        tablet = self.active()
-        if tablet is None:
-            return None
-        return [value for value in (tablet.wifi_direct, tablet.name) if value]
-
-    def verify(self, address):
-        """None if the device at address (in the Wi-Fi Direct group) is the
-        tablet in use, else why not: (English template, its arguments)."""
-        tablet = self.active()
-        if tablet is None:
-            return "Pair a tablet first", {}
-        args = {"name": tablet.name}
-        # The app's port, and where mDNS says it is (it is announced over
-        # Wi-Fi Direct too); only ever at address.
-        ports = [companion.APP_PORT] + [port for _a, port in self.addresses(tablet)]
-        try:
-            companion.verify(address, tablet.fingerprint, ports, self.paired)
-        except companion.Impostor as e:
-            log("Second Screen:", e)
-            return "This is not {name}: the desktop was not sent", args
-        except companion.PairingRefused:
-            return "{name} no longer knows this PC: pair it again", args
-        except companion.Incompatible:
-            return "Plus One on {name} and on this PC are different versions: update them", args
-        except Exception as e:  # noqa: BLE001 - whatever it was, not the tablet's app answering
-            log("Second Screen: the app did not answer:", repr(e))
-            return "Plus One does not answer on {name}: open it on the tablet and connect again", args
-        log(f"Second Screen: {address} is {tablet.name}")
-        return None
-
-    def learned(self, wifi_direct):
-        """Second Screen came from the tablet in use at this address."""
-        tablet = self.active()
-        if tablet and wifi_direct:
-            self.paired.learn(tablet.fingerprint, wifi_direct=wifi_direct.lower())

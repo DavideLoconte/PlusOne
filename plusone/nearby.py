@@ -134,7 +134,7 @@ class Nearby:
         self._browsers = []
         self.services.clear()
         self.tablets.clear()
-        # Replaced, not cleared: other threads iterate it (tablets.verify).
+        # Replaced, not cleared: other threads iterate it (tablets.targets).
         self.companions = {}
 
     # -- Avahi -----------------------------------------------------------------

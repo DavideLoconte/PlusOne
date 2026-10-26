@@ -179,7 +179,7 @@ class PairingReceiver : BroadcastReceiver() {
 }
 
 /** Ready again after a restart, and after an update (which stops the app:
- * a PDF sent then found no app, and went to Second Screen instead). */
+ * a PDF sent then found no app). */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val again = intent.action == Intent.ACTION_BOOT_COMPLETED || intent.action == Intent.ACTION_MY_PACKAGE_REPLACED

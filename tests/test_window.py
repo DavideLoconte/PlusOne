@@ -115,10 +115,6 @@ def test_every_section_in_the_sidebar(monkeypatch, tmp_path):
     app.devices.camera.state = "in use"
     win._refresh()
     assert "success" in win.sidebar_marks["camera"].get_css_classes()
-    # adb opens Samsung's Second Screen: shown only when that is the way.
-    assert not win.adb_row.get_visible()
-    win.via_row.set_selected(1)
-    assert win.adb_row.get_visible() and app.settings.display_via == "second-screen"
 
 
 def test_no_other_tablet_while_connected(monkeypatch, tmp_path):
@@ -260,14 +256,6 @@ def test_what_changes_elsewhere_shows(monkeypatch, tmp_path):
     app.settings.app_screen = "2880x1800"
     win._refresh()
     assert win.mode_row.get_model().get_n_items() > 1
-
-
-def test_adb_missing_keeps_the_choice(monkeypatch, tmp_path):
-    win, app = make(monkeypatch, tmp_path, [(KITCHEN, "Kitchen")])
-    win.has_adb = False
-    app.settings.use_adb = True
-    win.quality_row.set_selected(1)
-    assert app.settings.use_adb
 
 
 def test_pairing_another_tablet_while_connected_keeps_the_one_in_use(monkeypatch, tmp_path):

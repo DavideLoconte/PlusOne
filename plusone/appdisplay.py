@@ -1,4 +1,4 @@
-"""The desktop in Plus One's app, instead of Second Screen.
+"""The desktop in Plus One's app on the tablet.
 
 Each encoded frame (H.264, no MPEG-TS) is cut into UDP packets and sent the
 moment the encoder has it, sealed with AES-GCM under a key handed to the app
@@ -377,6 +377,7 @@ class Input:
                 self.pen = False
         if self.pen:
             self.pen.report(report)
+        pen.feed.publish(report)  # the signing window draws with them as they come
         self.pen_last = report if report[1] & pen.IN_RANGE else None
 
 
@@ -517,6 +518,10 @@ class AppStreamer:
                           "videoscale ! video/x-raw,width=960,height=600 ! videoconvert ! "
                           "autovideosink sync=false preview.")
         else:
+            # Mutter gives the virtual monitor the stream's max-framerate as
+            # its refresh rate; asking for more than the tablet shows only
+            # queued frames there (measured with Second Screen: 120 ran at up
+            # to 90 fps, the delay grew).
             video = (f"pipewiresrc path={source} do-timestamp=true always-copy=false keepalive-time=100 ! "
                      f"video/x-raw,format={media.CAPTURE_FORMAT},width={width},height={height},"
                      f"max-framerate={fps}/1")

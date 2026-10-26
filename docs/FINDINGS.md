@@ -1,5 +1,9 @@
 # Samsung Second Screen: reverse-engineering notes
 
+Plus One used Second Screen up to 0.8; since 0.9 the desktop goes only
+through its own app. These notes, and the tools they name (in the history
+up to 0.8), stay for whoever needs them.
+
 Device: Galaxy Tab S10 FE+ (SM-X620), One UI 8.5 / Android 16, Second Screen
 `com.samsung.android.secondscreen` 1.0.17.9. Sink engine:
 `/system/lib64/libremotedisplay_wfd.so`. Analysed with REA (JADX) for the APK

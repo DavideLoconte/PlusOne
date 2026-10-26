@@ -1,10 +1,9 @@
-"""Signing on the tablet: requests, windows and the connection opened for them."""
+"""Signing on the tablet, in its app: requests, and signing here instead."""
 from gi.repository import GLib
 import pytest
 
-from plusone import i18n
 from plusone import companion
-from plusone.engine import NOT_ANSWERING, Settings, State
+from plusone.engine import Settings, State
 from plusone import signing as signing_module
 from plusone.signing import Signing
 from plusone.tablets import Tablets
@@ -103,60 +102,42 @@ def make(monkeypatch, paired=True):
     app = FakeApp(paired)
     signing = Signing(app)
     opened, notes = [], []
-    monkeypatch.setattr(signing, "_open_on_tablet", opened.append)
+    monkeypatch.setattr(signing, "_open", opened.append)
     monkeypatch.setattr(signing, "_notify_waiting", lambda path, body: notes.append((path, body)))
     return app, signing, opened, notes
 
 
-def test_asking_again_while_waiting_opens_one_window(monkeypatch, tmp_path):
-    # Files was clicked three times while the tablet took its time: Done must
-    # still close the only window and the connection opened for it.
-    app, signing, opened, _ = make(monkeypatch)
+def test_asked_again_while_on_the_tablet_is_one_request(monkeypatch, tmp_path):
+    # Files was clicked three times while the tablet took its time.
+    app, signing, _, _ = make(monkeypatch)
+    app.nearby.app_on = ("10.0.0.2", 40000, "Galaxy Tab", APP)
+    sent = []
+    monkeypatch.setattr(signing, "_sign_in_app", lambda path, target: (sent.append(path),
+                                                                         signing.in_app.update({path: "t"})))
     path = str(tmp_path / "form.pdf")
     for _ in range(3):
         signing.request(path)
-    assert signing.queue == [path] and app.controller.starts == 1
-    app.controller.state = State.STREAMING
-    signing.on_state(State.STREAMING)
-    assert opened == [path]
+    assert sent == [path]
+
+
+def test_a_window_here_is_brought_up_not_opened_again(monkeypatch, tmp_path):
+    _app, signing, opened, _ = make(monkeypatch)
+    path = str(tmp_path / "form.pdf")
     window = FakeWindow(path)
     signing.windows.append(window)
     signing.request(path)
-    assert window.presented == 1 and opened == [path]
-    signing._done(window, path, None)
-    while GLib.MainContext.default().iteration(False):
-        pass
-    assert app.controller.stops == 1
+    assert window.presented == 1 and opened == []
 
 
-def test_no_disconnect_while_another_document_waits_for_the_monitor(monkeypatch, tmp_path):
-    app, signing, _, _ = make(monkeypatch)
-    signing.connected_for_us = True
-    signing.opening.add(str(tmp_path / "other.pdf"))
-    signing._maybe_disconnect()
-    assert app.controller.stops == 0
-
-
-def test_not_answering_reaches_the_notification(monkeypatch, tmp_path):
-    app, signing, _, notes = make(monkeypatch)
+def test_without_the_app_on_the_network_signing_here_is_offered(monkeypatch, tmp_path):
+    app, signing, opened, notes = make(monkeypatch)
     path = str(tmp_path / "form.pdf")
     signing.request(path)
-    app.controller.state, app.controller.detail = State.CONNECTING, (NOT_ANSWERING, {})
-    assert signing.on_state(State.CONNECTING) is True
-    assert notes[-1] == (path, i18n._(NOT_ANSWERING))
-
-
-def test_a_start_that_fails_at_once_keeps_its_notification(monkeypatch, tmp_path):
-    # GNOME Network Displays running, say: "sign on this PC instead" must
-    # not be replaced by "tap Second screen".
-    app, signing, _, notes = make(monkeypatch)
-
-    def failing_start():
-        app.controller.state = State.ERROR
-        signing.on_state(State.ERROR)
-    app.controller.start = failing_start
-    signing.request(str(tmp_path / "form.pdf"))
-    assert notes == [] and signing.queue == []
+    assert notes and notes[-1][0] == path and "Galaxy Tab" in notes[-1][1]
+    assert app.controller.starts == 0  # nothing else is tried: no Second Screen
+    from gi.repository import GLib as G
+    signing._sign_here(None, G.Variant("s", path))
+    assert opened == [path]
 
 
 def spin(until, timeout=5):
@@ -185,7 +166,7 @@ def test_the_tablets_app_signs_when_it_is_on_the_network(monkeypatch, tmp_path):
     # The copy sent is what was signed and what the marks go on; the result next to the original.
     (target, sent, expect, title), = asked
     assert target == [("10.0.0.2", 40000)] and expect == APP and title == "form.pdf"
-    assert sent.startswith(str(tmp_path / "sent")) and app.controller.starts == 0  # no Second Screen
+    assert sent.startswith(str(tmp_path / "sent")) and app.controller.starts == 0
     src, marks_saved, like = saved[0]
     assert src == sent and like == path
     stroke = marks_saved[1][0]
@@ -194,15 +175,17 @@ def test_the_tablets_app_signs_when_it_is_on_the_network(monkeypatch, tmp_path):
     assert spin(lambda: app.held == 0) and not (tmp_path / "sent").exists() or not list((tmp_path / "sent").iterdir())
 
 
-def test_an_unreachable_app_falls_back_to_second_screen(monkeypatch, tmp_path):
+def test_an_app_that_does_not_answer_offers_signing_here(monkeypatch, tmp_path):
     app, signing, _, notes = make(monkeypatch)
     app.nearby.app_on = ("10.0.0.2", 40000, "Galaxy Tab", APP)
 
     def unreachable(*args, **kwargs):
         raise ConnectionRefusedError()
     monkeypatch.setattr(companion, "sign", unreachable)
-    signing.request(str(tmp_path / "form.pdf"))
-    assert spin(lambda: app.controller.starts == 1)
+    path = str(tmp_path / "form.pdf")
+    signing.request(path)
+    assert spin(lambda: notes and notes[-1][0] == path and "did not answer" in notes[-1][1])
+    assert app.controller.starts == 0
 
 
 def test_pen_and_signatures_from_the_tablet_are_kept(monkeypatch, tmp_path):
@@ -224,7 +207,7 @@ def test_only_the_tablet_in_use_signs(monkeypatch, tmp_path):
     app.nearby.app_on = ("10.0.0.7", 40000, "Someone's Tab", "ffff" + "0" * 12)
     monkeypatch.setattr(companion, "sign", lambda *a, **k: (_ for _ in ()).throw(AssertionError("sent")))
     signing.request(str(tmp_path / "form.pdf"))
-    assert app.controller.starts == 1  # Second Screen, which checks the tablet itself
+    assert not signing.in_app
 
 
 def test_nothing_is_sent_without_a_paired_tablet(monkeypatch, tmp_path):
@@ -232,7 +215,7 @@ def test_nothing_is_sent_without_a_paired_tablet(monkeypatch, tmp_path):
     app.nearby.app_on = ("10.0.0.2", 40000, "Galaxy Tab", APP)
     monkeypatch.setattr(companion, "sign", lambda *a, **k: (_ for _ in ()).throw(AssertionError("sent")))
     signing.request(str(tmp_path / "form.pdf"))
-    assert app.notes == ["sign"] and app.controller.starts == 0 and not signing.queue
+    assert app.notes == ["sign"] and app.controller.starts == 0 and not signing.in_app
 
 
 def test_one_app_per_tablet():

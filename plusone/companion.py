@@ -1,9 +1,9 @@
-"""The companion app on the tablet (android/): it signs PDFs with ink drawn
-on the tablet itself, under the nib, instead of through Second Screen.
+"""The companion app on the tablet (android/): it shows the desktop, signs
+PDFs with ink drawn on the tablet itself, under the nib, and lends the PC
+its camera, microphone and speakers.
 
-The app listens on the home network (and on Wi-Fi Direct, during Second
-Screen) at APP_PORT and says so with mDNS (_plusone._tcp, found by
-nearby.py). Plus One connects over TLS, each side presenting a self-signed
+The app listens on the home network at APP_PORT and says so with mDNS
+(_plusone._tcp, found by nearby.py). Plus One connects over TLS, each side presenting a self-signed
 certificate. Pairing happens only when the user asks for it, choosing the
 tablet in Plus One's window (pair()): both screens show a six-digit code
 made from the two certificates and the user confirms it on both (like
@@ -97,13 +97,13 @@ def identity(directory=None):
 
 class Paired:
     """Tablets the user paired with, by certificate fingerprint: their name,
-    and their Wi-Fi Direct address once Second Screen came from them."""
+    and where their app was last on the network."""
 
     def __init__(self, directory=None):
         self.path = os.path.join(directory or CONFIG, "paired.json")
 
     def entries(self):
-        """{fingerprint: {"name": ..., maybe "wifi_direct": ..., "app_at": "ip:port"}}."""
+        """{fingerprint: {"name": ..., maybe "app_at": "ip:port"}}."""
         try:
             with open(self.path) as f:
                 data = json.load(f)
@@ -115,7 +115,7 @@ class Paired:
                 entry = {"name": entry}  # 0.5 kept the name only
             if isinstance(entry, dict) and isinstance(entry.get("name"), str):
                 entries[fp] = {key: value for key, value in entry.items()
-                               if key == "name" or (key in ("wifi_direct", "app_at") and isinstance(value, str))}
+                               if key == "name" or (key == "app_at" and isinstance(value, str))}
         return entries
 
     def all(self):
@@ -128,8 +128,8 @@ class Paired:
         write_private(self.path, data)
 
     def learn(self, fp, **fields):
-        """What was found out about a paired tablet (wifi_direct=its Wi-Fi Direct
-        address, app_at=where its app was last on the network)."""
+        """What was found out about a paired tablet (app_at=where its app was
+        last on the network)."""
         data = self.entries()
         if fp in data and any(data[fp].get(key) != value for key, value in fields.items()):
             data[fp].update(fields)
@@ -248,15 +248,15 @@ def _connect(target, paired, ask_pairing, expect=None, any_version=False):
     return sock, wire, name
 
 
-def _handshake(target, paired, ask_pairing, expect=None, pin=None, timeout=CONNECT_TIMEOUT, any_version=False):
+def _handshake(target, paired, ask_pairing, expect=None, timeout=CONNECT_TIMEOUT, any_version=False):
     """(socket, wire, tablet name, its certificate's fingerprint, its hello)
     of a TLS link to the app at target, the tablet paired: pairing if needed
     when ask_pairing is given (the user chose this tablet to pair with; it
     asks them to compare the code), else raising PairingRefused. expect:
     the id the app was announced with; if it is a paired tablet's, that
-    tablet's certificate is required (Impostor otherwise). pin: the only
-    certificate fingerprint accepted. any_version: an app of another
-    protocol is not Incompatible (to update it), if both know each other."""
+    tablet's certificate is required (Impostor otherwise). any_version: an
+    app of another protocol is not Incompatible (to update it), if both know
+    each other."""
     cert, key, ours = identity()
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.minimum_version = ssl.TLSVersion.TLSv1_3
@@ -287,8 +287,6 @@ def _handshake(target, paired, ask_pairing, expect=None, pin=None, timeout=CONNE
         pinned = [p for p in known if expect and p.startswith(expect)]
         if pinned and fp not in pinned:
             raise Impostor(f"an app at {target[0]} announced as a paired tablet, with another certificate")
-        if pin and fp != pin:
-            raise Impostor(f"at {target[0]}, an app that is not the paired tablet's")
         known = fp in known
         sock.settimeout(IO_TIMEOUT)
         wire.send({"type": "hello", "name": socket.gethostname(), "version": PROTOCOL, "paired": known,
@@ -349,35 +347,6 @@ def pair(targets, ask, paired=None):
                 pass
         return fp, name
     raise error or OSError("no address for the tablet")
-
-
-def verify(address, tablet, ports, paired=None, timeout=3):
-    """Whether the device at address, the other end of a Wi-Fi Direct group,
-    is the paired tablet whose certificate has the fingerprint tablet: its
-    app answers there (at one of ports), with that certificate, knows this
-    PC, and says it was reached at address, not through someone passing the
-    connection on from elsewhere. Returns the tablet's name; raises OSError
-    & co. (no app answering), Impostor, PairingRefused (the tablet does not
-    know this PC) or Incompatible."""
-    paired = paired or Paired()
-    error = None
-    for port in dict.fromkeys(ports):
-        try:
-            sock, wire, name, _fp, hello = _handshake((address, port), paired, None, pin=tablet,
-                                                      timeout=timeout)
-        except (OSError, EOFError, ValueError) as e:
-            error = e
-            continue
-        with sock:
-            at = str(hello.get("at", ""))
-            if at != address:
-                raise Impostor(f"{name} was reached at {at or 'an address it does not say'}, not {address}")
-            try:
-                wire.send({"type": "bye"})
-            except OSError:
-                pass
-        return name
-    raise error or OSError("no port to try")
 
 
 def _answer(wire, job, on_opened, name, on_signatures):

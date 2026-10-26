@@ -1,12 +1,10 @@
 """Sign a PDF on the tablet in one step.
 
-With Plus One's app on the tablet (companion.py), the PDF goes to it over
-the home network and the ink is drawn on the tablet itself. Otherwise
-Second Screen: connects the tablet if needed, opens the signing window full
-screen on the tablet's monitor as soon as it appears, and disconnects again
-if the connection was opened for this. Either way the result comes back
-with a notification; if the tablet does not come, the notification offers
-signing on the PC.
+The PDF goes to Plus One's app on the tablet in use (companion.py) over the
+network, and the ink is drawn on the tablet itself, under the nib. The
+signed copy comes back next to the original, with a notification. When
+the app cannot be reached, the notification says so and offers signing on
+this PC (sign.py's window) instead.
 """
 import os
 import shutil
@@ -17,12 +15,9 @@ import uuid
 from gi.repository import Gio, GLib
 
 from . import companion, log, once, signatures
-from .engine import NOT_ANSWERING, State
 from .i18n import _
 
-MONITOR_WAIT = 5  # seconds for the tablet's monitor to appear once streaming
 NOTIFICATION = "sign"
-UPDATE = "update"
 # Shared with the signing window (sign.py).
 PEN = os.path.join(GLib.get_user_config_dir(), "plus-one", "pen.json")
 # The PDFs as they were sent to the tablet's app: signed, that copy is what
@@ -33,13 +28,10 @@ SENT = os.path.join(GLib.get_user_cache_dir(), "plus-one", "signing")
 class Signing:
     def __init__(self, app):
         self.app = app
-        self.queue = []            # paths waiting for the tablet
-        self.opening = set()       # paths waiting for the tablet's monitor
-        self.windows = []
+        self.windows = []          # signing on this PC
         self.in_app = {}           # paths the tablet's app is signing -> that request's token
         self.tablet = None         # its name
         self.signed = []           # signed in a row (several PDFs sent at once): one notification
-        self.connected_for_us = False
         for name, callback in (("sign-here", self._sign_here), ("open-file", self._open_file),
                                ("show-file", self._show_file)):
             action = Gio.SimpleAction.new(name, GLib.VariantType("s"))
@@ -47,8 +39,7 @@ class Signing:
             app.add_action(action)
 
     def request(self, path):
-        """Sign the PDF at path on the tablet in use: in its app if that is on
-        the network, else through Second Screen."""
+        """Sign the PDF at path on the tablet in use, in its app."""
         path = os.path.abspath(path)
         log("signing", path)
         from .pdf import problem
@@ -68,40 +59,25 @@ class Signing:
             note.add_button_with_target(_("Sign on this PC"), "app.sign-here", GLib.Variant("s", path))
             self.app.send_notification(NOTIFICATION, note)
             return
-        if not (self.in_app or self.windows or self.queue or self.opening):
+        if not (self.in_app or self.windows):
             self.signed = []  # nothing on the way: a new batch
-        # Asked again while the tablet takes its time: one window per
-        # document, or Done would leave the others open, and the tablet with them.
+        # Asked again while the tablet takes its time: one window per document.
         for window in self.windows:
             if window.path == path:
                 window.present()
                 return
-        if path in self.opening or path in self.in_app:
+        if path in self.in_app:
             return
-        controller = self.app.controller
-        # (The "Sign on Tablet" switch is Files' entry only: the app signs whenever it is there.)
+        # (The "Sign on Tablet" switch is Files' entry only: the app signs
+        # whenever it is there. Showing the desktop, it signs too: the
+        # desktop rests meanwhile and comes back after.)
         target = self._find_app()
-        # Showing the desktop through the app, the app signs too (the ink
-        # under the nib); the desktop rests meanwhile and comes back after.
-        if target and (controller.state != State.STREAMING or controller.app_display is not None):
+        if target:
             self._sign_in_app(path, target)
             return
-        self._second_screen(path)
-
-    def _second_screen(self, path):
-        controller = self.app.controller
-        if controller.state == State.STREAMING:
-            self._open_on_tablet(path)
-            return
-        if path not in self.queue:
-            self.queue.append(path)
-        if not controller.running:
-            self.connected_for_us = True
-            controller.start()
-            if path not in self.queue:
-                return  # it could not start, and on_state() said so
-        self._notify_waiting(path, _("Tap “Second screen” on the tablet to sign {name}")
-                             .format(name=os.path.basename(path)))
+        tablet = self.app.tablets.active()
+        self._notify_waiting(path, _("Plus One on {tablet} is not on the network: open it there, or sign here")
+                          .format(tablet=tablet.name))
 
     # -- in the tablet's app ---------------------------------------------------
     def _sign_in_app(self, path, target):
@@ -199,11 +175,9 @@ class Signing:
             self.app.send_notification(NOTIFICATION, note)
             return False
         if error == "incompatible":
-            note = Gio.Notification.new(_("Update Plus One"))
-            note.set_body(_("The app on the tablet and Plus One on this PC are different versions: "
-                            "signing with Second Screen instead"))
-            self.app.send_notification(UPDATE, note)
-            self._second_screen(path)
+            # (The tablet's app is brought to this PC's version by itself: updates.py.)
+            self._notify_waiting(path, _("Plus One on the tablet is another version than on this PC: "
+                                      "it is updated once nothing is in use; or sign here"))
             return False
         if error == "lost":
             note = Gio.Notification.new(_("Lost the tablet"))
@@ -212,9 +186,9 @@ class Signing:
             self.app.send_notification(NOTIFICATION, note)
             return False
         if error is not None:
-            # The app did not answer: Second Screen instead.
             log("signing in the app failed:", repr(error))
-            self._second_screen(path)
+            self._notify_waiting(path, _("Plus One on {tablet} did not answer: open it there, or sign here")
+                              .format(tablet=self.tablet))
             return False
         if isinstance(result, dict):
             self._keep_from_app(result)
@@ -291,65 +265,26 @@ class Signing:
         elif path in self.in_app:
             self._notify_waiting(path, template.format(name=os.path.basename(path), tablet=tablet))
 
-    # -- Second Screen ---------------------------------------------------------
     def _notify_waiting(self, path, body):
+        """About this PDF, with the way to sign it here instead."""
         note = Gio.Notification.new(_("Sign on the tablet"))
         note.set_body(body)
+        note.set_default_action("app.show")
         note.add_button_with_target(_("Sign on this PC"), "app.sign-here", GLib.Variant("s", path))
         self.app.send_notification(NOTIFICATION, note)
 
-    def on_state(self, state):
-        """Returns True if it told the user about this state itself."""
-        if not self.queue:
-            return False
-        if state == State.STREAMING:
-            queue, self.queue = self.queue, []
-            self.app.withdraw_notification(NOTIFICATION)
-            for path in queue:
-                self._open_on_tablet(path)
-        elif state == State.CONNECTING and self.app.controller.detail[0] == NOT_ANSWERING:
-            self._notify_waiting(self.queue[-1], _(NOT_ANSWERING))
-            return True
-        elif state in (State.IDLE, State.ERROR) and not self.app.controller.running:
-            # Gave up, failed or was stopped: offer the PC instead.
-            queue, self.queue = self.queue, []
-            self.connected_for_us = False
-            for path in queue:
-                note = Gio.Notification.new(_("The tablet did not connect"))
-                note.set_body(_("You can sign {name} on this PC instead")
-                              .format(name=os.path.basename(path)))
-                note.add_button_with_target(_("Sign on this PC"), "app.sign-here",
-                                            GLib.Variant("s", path))
-                self.app.send_notification(NOTIFICATION, note)
-            return True
-        return False
-
-    # -- windows ---------------------------------------------------------------
-    def _open_on_tablet(self, path, tries=0):
-        from .sign import tablet_monitor
-        self.opening.add(path)
-        monitor = tablet_monitor()
-        if monitor is None and tries < MONITOR_WAIT * 4:
-            GLib.timeout_add(250, once(self._open_on_tablet, path, tries + 1))
-            return
-        self._open(path, monitor)
-
-    def _open(self, path, monitor=None):
+    # -- signing on this PC ------------------------------------------------------
+    def _open(self, path):
         from .sign import SignWindow
-        self.opening.discard(path)
         try:
             window = SignWindow(self.app, path, lambda result: self._done(window, path, result))
         except Exception as e:  # noqa: BLE001 - GLib.Error mostly (damaged, a password), but whatever it is
             note = Gio.Notification.new(_("Cannot open {name}").format(name=os.path.basename(path)))
             note.set_body(getattr(e, "message", None) or str(e))
             self.app.send_notification(NOTIFICATION, note)
-            self._maybe_disconnect()
             return
         self.windows.append(window)
-        if monitor is not None:
-            window.fullscreen_on_monitor(monitor)
-        else:
-            window.maximize()
+        window.maximize()
         window.present()
 
     def _done(self, window, path, result):
@@ -358,8 +293,6 @@ class Signing:
         if result:
             from .pdf import digitally_signed
             self._signed(result, digitally_signed(path))
-        # Let the window go away first; the display it is on may follow.
-        GLib.idle_add(once(self._maybe_disconnect))
 
     def _signed(self, result, certified=False):
         """One notification for the PDFs signed in a row. certified: the
@@ -379,22 +312,11 @@ class Signing:
         note.add_button_with_target(_("Show in folder"), "app.show-file", GLib.Variant("s", result))
         self.app.send_notification(NOTIFICATION, note)
 
-    def _maybe_disconnect(self):
-        if self.connected_for_us and not self.windows and not self.queue and not self.opening:
-            self.connected_for_us = False
-            self.app.controller.stop()
-
     # -- notification actions --------------------------------------------------
     def _sign_here(self, _action, param):
         path = param.get_string()
         self.in_app.pop(path, None)  # whatever the app sends back now is ignored
-        if path in self.queue:
-            self.queue.remove(path)
         self.app.withdraw_notification(NOTIFICATION)
-        if self.connected_for_us and not self.queue and self.app.controller.state != State.STREAMING:
-            # Stop searching for the tablet: the radio is not needed any more.
-            self.connected_for_us = False
-            self.app.controller.stop()
         self._open(path)
 
     def _open_file(self, _action, param):

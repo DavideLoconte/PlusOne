@@ -5,7 +5,6 @@ import os
 import pytest
 
 from plusone import i18n
-from plusone.engine import NOT_ANSWERING
 
 ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "plusone")
 
@@ -51,8 +50,7 @@ def app_constants():
 @pytest.mark.parametrize("text", sorted(
     (strings_in("gui.py") | strings_in("app.py") | strings_in("engine.py") | strings_in("sign.py")
      | strings_in("signing.py") | strings_in("signature_pad.py") | strings_in("tablets.py") | strings_in("pdf.py")
-     | strings_in("updates.py") | app_constants()
-     | {NOT_ANSWERING})
+     | strings_in("updates.py") | app_constants())
     - i18n.NEUTRAL))
 def test_has_italian(text):
     assert text in i18n._IT, f"missing Italian translation for {text!r}"

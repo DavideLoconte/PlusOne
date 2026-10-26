@@ -7,7 +7,6 @@ import os
 _IT = {
     # Window
     "Ready": "Pronto",
-    "Waiting for the tablet": "In attesa del tablet",
     "Connecting…": "Collegamento…",
     "Connected": "Connesso",
     "Problem": "Problema",
@@ -24,9 +23,6 @@ _IT = {
     "Quick Settings toggle": "Interruttore nelle impostazioni rapide",
     "Adds a “Tablet” button to GNOME's Quick Settings":
         "Aggiunge un pulsante «Tablet» alle impostazioni rapide di GNOME",
-    "Open Second Screen from here": "Apri Second Screen da qui",
-    "Uses adb: needs wireless debugging on the tablet": "Usa adb: serve il debug wireless sul tablet",
-    "adb is not available": "adb non è disponibile",
     "Log": "Registro",
     # Notifications and background
     "Tablet connected": "Tablet collegato",
@@ -85,10 +81,7 @@ _IT = {
     "Keep signing": "Continua a firmare",
     "Discard": "Scarta",
     "Sign on the tablet": "Firma sul tablet",
-    "Tap “Second screen” on the tablet to sign {name}": "Tocca «Second screen» sul tablet per firmare {name}",
     "Sign on this PC": "Firma su questo PC",
-    "The tablet did not connect": "Il tablet non si è collegato",
-    "You can sign {name} on this PC instead": "Puoi firmare {name} su questo PC",
     "Cannot open {name}": "Impossibile aprire {name}",
     "Cannot sign {name}": "Impossibile firmare {name}",
     "{name} is not a file": "{name} non è un file",
@@ -101,9 +94,6 @@ _IT = {
     "Show in folder": "Mostra nella cartella",
     "Choose the PDFs to sign": "Scegli i PDF da firmare",
     # Engine states
-    "Mode {mode} is not supported": "La modalità {mode} non è supportata",
-    "Close {apps}: it also uses Wi-Fi Direct": "Chiudi {apps}: usa anche lui il Wi-Fi Direct",
-    "This PC's Wi-Fi cannot do Wi-Fi Direct": "Il Wi-Fi di questo PC non supporta il Wi-Fi Direct",
     "Sending {name} to Plus One on {tablet}": "Invio di {name} a Plus One su {tablet}",
     "Not paired": "Non abbinato",
     "Sign {name} on {tablet}": "Firma {name} su {tablet}",
@@ -114,16 +104,10 @@ _IT = {
     "Paired tablets": "Tablet abbinati",
     "Forget {tablet}?": "Dimenticare {tablet}?",
     "Signed {count} PDFs": "{count} PDF firmati",
-    "Update Plus One": "Aggiorna Plus One",
-    "The app on the tablet and Plus One on this PC are different versions: signing with Second Screen instead":
-        "L'app sul tablet e Plus One su questo PC sono versioni diverse: si firma con Second Screen",
     "Lost the tablet": "Tablet perso",
     "What was signed on the tablet did not reach the PC: {name} is unchanged":
         "Quanto firmato sul tablet non è arrivato al PC: {name} è rimasto com'era",
-    "Opening Second Screen on the tablet…": "Apro Second Screen sul tablet…",
-    "Tap “Second screen” on the tablet": "Tocca «Second screen» sul tablet",
     "Opening the desktop on {name}…": "Apro il desktop su {name}…",
-    "Second screen through": "Secondo schermo tramite",
     "Tablet speakers": "Casse del tablet",
     # The window's sidebar and its pages
     "Microphone": "Microfono",
@@ -158,11 +142,24 @@ _IT = {
     "Above 1920 × 1200 the picture comes a little later": "Sopra 1920 × 1200 l'immagine arriva un po' più tardi",
     "The tablet's sizes appear after it showed the desktop once":
         "Le misure del tablet compaiono dopo che ha mostrato il desktop una volta",
-    "Plus One's app, when it is there": "L'app Plus One, se c'è",
-    "Samsung's Second Screen": "Second Screen di Samsung",
     "{name}: paused while Plus One is not on its screen": "{name}: in pausa finché Plus One non è sul suo schermo",
     "The tablet closed the desktop": "Il tablet ha chiuso il desktop",
     "The tablet is no longer reachable": "Il tablet non è più raggiungibile",
+    # 0.9: the app only
+    "Needs python3-cryptography": "Serve python3-cryptography",
+    "On {name}, let Plus One display over other apps, or open it":
+        "Su {name}, consenti a Plus One di apparire sopra le altre app, oppure aprilo",
+    "Plus One on the tablet is another version than on this PC: it is updated once nothing is in use; or sign here":
+        "Plus One sul tablet è un'altra versione rispetto a questo PC: si aggiorna appena niente è in uso; "
+        "oppure firma qui",
+    "Plus One on {tablet} did not answer: open it there, or sign here":
+        "Plus One su {tablet} non ha risposto: aprilo lì, oppure firma qui",
+    "Plus One on {tablet} is not on the network: open it there, or sign here":
+        "Plus One su {tablet} non è in rete: aprilo lì, oppure firma qui",
+    "The second screen ended": "Il secondo schermo si è chiuso",
+    "{name} did not answer: is Plus One open on it?": "{name} non ha risposto: Plus One è aperto lì?",
+    "{name} did not let the desktop show: {reason}": "{name} non ha mostrato il desktop: {reason}",
+    "{name} is not on the network: open Plus One on it": "{name} non è in rete: apri Plus One lì",
     # 0.8: updates
     "Updating Plus One on {tablet}": "Aggiornamento di Plus One su {tablet}",
     "To {version}, as on this PC": "Alla {version}, come su questo PC",
@@ -175,11 +172,7 @@ _IT = {
     "Keep the tablet's app up to date": "Tieni aggiornata l'app sul tablet",
     "With this PC's version, while nothing is in use": "Alla versione di questo PC, quando niente è in uso",
     "The desktop stopped: {error}": "Il desktop si è fermato: {error}",
-    "The tablet did not answer: open Second Screen on it and connect again":
-        "Il tablet non ha risposto: apri Second Screen e collega di nuovo",
     "Connecting to {name}…": "Collegamento a {name}…",
-    "The tablet is not answering: close and reopen Second Screen":
-        "Il tablet non risponde: chiudi e riapri Second Screen",
     # 0.6: pairing from the window, the tablet in use
     "About Plus One": "Informazioni su Plus One",
     "Pair a tablet": "Abbina un tablet",
@@ -284,11 +277,8 @@ _IT = {
     "Plus One on the tablet and on this PC are different versions: update them":
         "Plus One sul tablet e su questo PC sono versioni diverse: aggiornali",
     "Pair a tablet first": "Prima abbina un tablet",
-    "This is not {name}: the desktop was not sent": "Questo non è {name}: lo schermo non è stato inviato",
     "Plus One on {name} and on this PC are different versions: update them":
         "Plus One su {name} e su questo PC sono versioni diverse: aggiornali",
-    "Plus One does not answer on {name}: open it on the tablet and connect again":
-        "Plus One non risponde su {name}: aprilo sul tablet e collega di nuovo",
 }
 
 # Templates that read the same in every language.

@@ -21,11 +21,10 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("Gst", "1.0")
-gi.require_version("NM", "1.0")
 from gi.repository import Adw, Gio, GLib, Gst  # noqa: E402
 
 from . import __version__, add_log_handler, i18n, log, once  # noqa: E402
-from .engine import NOT_ANSWERING, Controller, Settings, State  # noqa: E402
+from .engine import Controller, Settings, State  # noqa: E402
 from .i18n import _  # noqa: E402
 from .nearby import Nearby  # noqa: E402
 from .signing import Signing  # noqa: E402
@@ -57,7 +56,6 @@ CONFIG = os.path.join(GLib.get_user_config_dir(), "plus-one", "settings.json")
 IN_FLATPAK = os.path.exists("/.flatpak-info")
 TITLES = {
     State.IDLE: "Ready",
-    State.WAITING: "Waiting for the tablet",
     State.CONNECTING: "Connecting…",
     State.STREAMING: "Connected",
     State.ERROR: "Problem",
@@ -260,8 +258,8 @@ class PlusOneApp(Adw.Application):
         if self.settings.background:
             set_autostart(True)
         set_sign_entry(self.settings.sign_on_tablet)
-        # Which tablets have the app, and where: for pairing, signing and
-        # checking Second Screen's tablet. Avahi listens anyway.
+        # Which tablets have the app, and where: for pairing, the desktop,
+        # signing and the devices. Avahi listens anyway.
         self.nearby.start()
         self.devices.apply()
         self._update_hold()
@@ -354,10 +352,8 @@ class PlusOneApp(Adw.Application):
             listener(line)
 
     def window_closed(self):
-        # Without the background mode, closing the window ends Plus One; not
-        # while a PDF is being signed on the tablet's monitor (it would go).
-        signing = self.signing
-        if not self.settings.background and not (signing.windows or signing.queue or signing.opening):
+        # Without the background mode, closing the window ends Plus One.
+        if not self.settings.background:
             self.controller.stop()
         self._idle()  # an update may have waited for the window
 
@@ -374,8 +370,7 @@ class PlusOneApp(Adw.Application):
 
     def _on_state(self, state, template, args):
         self._update_hold()
-        if not self.signing.on_state(state):
-            self._notify(state, template)
+        self._notify(state, template)
         self._emit_properties()
         for listener in list(self.listeners):
             listener()
@@ -386,9 +381,9 @@ class PlusOneApp(Adw.Application):
         """Whether something is in use: a connection, a PDF being signed, the
         tablet's camera, microphone or speakers used by a program here."""
         signing = self.signing
-        return bool(self.controller.running or signing.windows or signing.in_app or signing.queue
-                    or signing.opening or any(getattr(self.devices, kind).state == "in use"
-                                              for kind in ("camera", "microphone", "speakers")))
+        return bool(self.controller.running or signing.windows or signing.in_app
+                    or any(getattr(self.devices, kind).state == "in use"
+                           for kind in ("camera", "microphone", "speakers")))
 
     def _idle(self):
         """What waited for nothing to be in use: updates, both sides."""
@@ -430,16 +425,12 @@ class PlusOneApp(Adw.Application):
             note.add_button(_("Disconnect"), "app.disconnect")
         elif state == State.ERROR or (state == State.IDLE and template):
             # A title that says what happened (not "Ready"), and the one button that helps.
-            note = Gio.Notification.new(title if state == State.ERROR else _("The tablet did not connect"))
+            note = Gio.Notification.new(title if state == State.ERROR else _("The second screen ended"))
             note.set_body(detail)
             if template == "Pair a tablet first":
                 note.add_button(_("Pair a tablet"), "app.pair")
             else:
                 note.add_button(_("Try again"), "app.connect")
-        elif template == NOT_ANSWERING:
-            # Nothing else would tell: the window may well be closed.
-            note = Gio.Notification.new(title)
-            note.set_body(detail)
         else:
             self.withdraw_notification(NOTIFICATION)
             return

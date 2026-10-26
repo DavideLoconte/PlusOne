@@ -112,17 +112,6 @@ def load_css():
                                               Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
 
-def tablet_monitor():
-    """The tablet's virtual monitor (Mutter names them Meta-N), if any."""
-    monitors = Gdk.Display.get_default().get_monitors()
-    found = None
-    for i in range(monitors.get_n_items()):
-        monitor = monitors.get_item(i)
-        if (monitor.get_connector() or "").startswith("Meta-"):
-            found = monitor
-    return found
-
-
 def rgba(spec):
     color = Gdk.RGBA()
     color.parse(spec)

@@ -53,11 +53,11 @@ jobs:
           bundle: plus-one.flatpak
           manifest-path: packaging/flatpak/io.github.gabrielesantangelo.PlusOne.yml
           build-dir: flatpak_app
-          # libnm only rebuilds when the manifest changes.
+          # Poppler and the wheels only rebuild when the manifest changes.
           cache-key: flatpak-builder-${{ hashFiles('packaging/flatpak/*.yml') }}
       # flatpak build, not flatpak-builder --run: that needs rofiles-fuse,
       # which a container cannot spawn.
-      - name: Plus One starts in the Flatpak (libnm, GStreamer, libadwaita, Poppler there)
+      - name: Plus One starts in the Flatpak (GStreamer, libadwaita, Poppler there)
         run: |
           flatpak build flatpak_app plus-one --help
           flatpak build flatpak_app env PYTHONPATH=/app/lib/plus-one python3 -P -c \

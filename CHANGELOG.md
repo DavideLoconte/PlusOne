@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+The app only.
+
+- **Samsung's Second Screen is gone**: the desktop goes only through Plus
+  One's app, which does all it did and better (about 22 ms instead of
+  45-50, the picture following the network, the fingers as a touchpad).
+  With it go Wi-Fi Direct, RTSP, MPEG-TS, UIBC, the adb option, the
+  "Second screen through" choice, signing full screen on the tablet's
+  monitor through it, and NetworkManager as a dependency (the Flatpak no
+  longer builds libnm). When the app cannot show the desktop, Plus One
+  says why (not on the network, not answering, not allowed to come to the
+  front, another version, the pairing forgotten) instead of trying Second
+  Screen; when it cannot sign, the notification offers signing on this
+  PC. Settings of Second Screen in settings.json are ignored.
+- The command line runs the desktop in the app (`--size` one of the
+  tablet's sizes, `--test` a test pattern).
+
 ## 0.8.1
 
 Updates by themselves; the fingers as on a touchpad; the picture that

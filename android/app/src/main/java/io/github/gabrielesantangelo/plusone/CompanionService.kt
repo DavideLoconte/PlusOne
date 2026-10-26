@@ -115,8 +115,8 @@ class CompanionService : Service() {
             if (stopped) return
             socket = try {
                 val factory = Identity.sslContext().serverSocketFactory
-                // A port the PC knows: over Wi-Fi Direct it checks who the
-                // tablet is before mDNS has said where the app listens.
+                // A port the PC knows: where it tries first, before mDNS has
+                // said where the app listens (and where it was last).
                 (try { factory.createServerSocket(PORT) } catch (e: java.net.BindException) {
                     factory.createServerSocket(0)
                 }) as SSLServerSocket
@@ -231,8 +231,8 @@ class CompanionService : Service() {
                 require(hello.optString("type") == "hello") { "expected hello" }
                 val pcName = readable(hello.optString("name"))
                 // "at": the address the PC reached, so it can tell this
-                // tablet answered itself (over Wi-Fi Direct, say), not
-                // through someone passing the connection on.
+                // tablet answered itself, not through someone passing the
+                // connection on.
                 wire.send(JSONObject().put("type", "hello").put("name", deviceName(this))
                     .put("version", PROTOCOL).put("paired", known).put("at", address(socket.localAddress))
                     .put("app", Updates.versionCode(this)))

@@ -10,8 +10,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT"></a>
 </p>
 
-<p align="center">Your Samsung Galaxy Tab as a wireless second monitor for GNOME on Linux.<br>
-Through Plus One's small app on the tablet, or the <b>Second Screen</b> feature Samsung ships for Windows PCs.</p>
+<p align="center">Your Samsung Galaxy Tab as a wireless second monitor for GNOME on Linux,<br>
+a signing tablet, a webcam, a microphone and speakers, through Plus One's small app on it.</p>
 
 ---
 
@@ -19,48 +19,40 @@ Through Plus One's small app on the tablet, or the <b>Second Screen</b> feature 
 
 - **Real extended display.** A virtual monitor appears in *Settings → Displays*;
   drag windows onto the tablet like onto any other screen.
+- **Low latency, over your Wi-Fi.** About 25 ms from the PC's screen to the
+  tablet's decoder at 1920×1200@60, hardware H.264 (Intel's low-power encoder
+  first, then NVENC, VA-API) or x264, encrypted. The bitrate follows what
+  the Wi-Fi takes, so a weak network makes the picture softer, not late.
+- **Touch and S Pen.** The fingers work as a laptop's touchpad, where they
+  touch: tap, drag, two to scroll with momentum, pinch to zoom, three to
+  swipe. The S Pen becomes a real Linux drawing tablet with pressure (4096
+  levels), tilt and hover.
 - **Only your tablet.** Pair it once in Plus One's window: both screens show
-  the same code. Before any picture leaves the PC, Plus One asks Plus One's
-  app on the tablet, over that same Wi-Fi Direct link, to prove it is that
-  tablet: another device calling itself your tablet gets nothing. The video
-  itself comes from the built-in *Second screen* tile (One UI).
-- **Through Plus One's app, over your Wi-Fi.** With the app open on the
-  tablet, the desktop goes to it: about 25 ms from the PC's screen to the
-  tablet's decoder at 1920×1200@60 (Second Screen: about 50 ms to the glass),
-  encrypted, no Wi-Fi Direct, every sample of the pen; the fingers work as
-  a touchpad's (two to scroll, with momentum; a pinch to zoom). The picture's bitrate
-  follows what the Wi-Fi takes, so a weak network makes it softer, not late.
-  Without the app, Samsung's Second Screen as before.
-- **Low latency.** 60 fps, hardware H.264 (Intel's low-power encoder first,
-  then NVENC, VA-API) or x264.
-- **Touch and S Pen.** Fingers drive the desktop; the S Pen becomes a real Linux
-  drawing tablet with pressure (4096 levels), tilt and hover.
-- **Sign PDFs on the tablet.** Right-click a PDF → *Sign on Tablet*: the page
-  opens full screen on the tablet, you sign with the pen, a signed copy
-  appears next to the original.
+  the same code. From then on the two recognize each other, and nothing else
+  on the network gets the desktop, the PDFs, the camera or the sound.
+- **Sign PDFs on the tablet.** Right-click a PDF → *Sign on Tablet*: it opens
+  in Plus One's app, you sign with the pen, ink right under the nib, and a
+  signed copy appears next to the original.
 - **One click.** A *Tablet* toggle in GNOME's Quick Settings, a notification
   with *Disconnect*, and Plus One ready in the background from login.
-- **Wireless, no setup.** Wi-Fi Direct between PC and tablet, no router needed,
-  no developer options on the tablet. Reconnects by itself when you reopen
-  Second Screen soon after closing it.
 - **The tablet's camera and microphone for the PC.** A webcam and a
   microphone that every program sees (Chrome, Firefox, Discord, Slack,
   OBS...). The tablet turns them on only while a program uses them, so
   nothing goes over the network otherwise; each has its own switch.
 - **The tablet's speakers for the PC.** A sound output, *Tablet speakers*,
   there while the tablet is: the sound goes as it is (16-bit stereo PCM at
-  48 kHz, no codec), only while a program plays.
-- **Correct aspect ratio, automatically.** The tablet's preferred mode is read
-  from its EDID (1920×1200 on a Tab S10 FE+), so the picture fills the screen.
+  48 kHz, no codec), only while a program plays, in time with the picture.
+- **Up to date by themselves.** The `.deb` updates through apt, and the PC
+  brings the tablet's app to its own version.
 - **Simple GNOME app**, in English and Italian.
 
 ## Requirements
 
 | | |
 |---|---|
-| **PC** | Linux with GNOME 46+ on **Wayland** (Mutter), NetworkManager, a Wi-Fi card with P2P (Wi-Fi Direct) support. Tested on Ubuntu 24.04. |
+| **PC** | Linux with GNOME 46+ on **Wayland** (Mutter), on the same network as the tablet. Tested on Ubuntu 24.04. |
 | **Encoder** | One of: NVIDIA (NVENC), Intel/AMD (VA-API), or software x264. |
-| **Tablet** | A Galaxy Tab with *Second screen* in quick settings (One UI 5.1.1 or later). Tested on a Galaxy Tab S10 FE+ with One UI 8.5. |
+| **Tablet** | A Galaxy Tab with Android 13 or later, with Plus One's app (`plus-one-companion_*.apk`, in each release). Tested on a Galaxy Tab S10 FE+ with One UI 8.5. |
 
 ## Install
 
@@ -73,8 +65,7 @@ Download `plus-one_<version>_all.deb` from the
 sudo apt install ./plus-one_0.8.1_all.deb
 ```
 
-The package pulls in GTK 4, libadwaita, GStreamer and NetworkManager bindings
-from your distribution. It also installs the S Pen's helper, which makes the
+The package pulls in GTK 4, libadwaita and GStreamer from your distribution. It also installs the S Pen's helper, which makes the
 pen a tablet with pressure and tilt: a small program that runs as root only
 when Plus One asks (D-Bus activation), only for the session in front of the
 PC (polkit), and makes the pen's virtual HID device and nothing else, taking
@@ -114,7 +105,6 @@ The GNOME runtime it needs comes from Flathub. Differences from the `.deb`:
 - A sandbox cannot install the S Pen's helper: for pressure and tilt, run
   `sudo ./enable-pen.sh` once from the sources (it installs the helper on the
   host); without it the pen works as a mouse.
-- No *Open Second Screen from here* (adb is not in the sandbox).
 - The sandbox is not much of a boundary: Plus One needs GNOME's screen
   capture and remote input without asking (the virtual monitor and the
   tablet's touches), the host's dconf (mapping the pen to the monitor) and
@@ -138,7 +128,7 @@ sudo ./enable-pen.sh       # optional: S Pen pressure and tilt (the pen's helper
 Dependencies on Ubuntu:
 
 ```bash
-sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gstreamer-1.0 gir1.2-nm-1.0 \
+sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-gstreamer-1.0 \
     gir1.2-poppler-0.18 python3-pypdf python3-cryptography openssl avahi-daemon \
     gstreamer1.0-pipewire gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-vaapi gstreamer1.0-x \
@@ -167,10 +157,10 @@ up to date* turns it off.
 
 1. Click **Tablet** in GNOME's Quick Settings (top-right corner), or press
    **Use as second screen** in the Plus One window.
-2. With Plus One's app on the tablet and on the same Wi-Fi, that is all: the
-   app opens the desktop by itself, a new monitor to the right of your other
-   screens (arrange it in *Settings → Displays*). The S Pen works on it as a
-   pen tablet; the fingers as a laptop's touchpad, where they touch:
+2. That is all: the app on the tablet opens the desktop by itself, a new
+   monitor to the right of your other screens (arrange it in *Settings →
+   Displays*). The S Pen works on it as a pen tablet; the fingers as a
+   laptop's touchpad, where they touch:
 
    | Fingers | |
    |---|---|
@@ -181,25 +171,14 @@ up to date* turns it off.
    | two moved together | scroll; flicked, it goes on and slows down, until a finger touches |
    | two moved apart or together | pinch: zoom where the program does (browsers, maps, viewers) |
    | three swiped | up: the overview; down: out of it; sideways: another workspace |
-3. Without the app (or with *Second screen through: Samsung's Second Screen*
-   in the preferences), swipe down on the tablet for quick settings and tap
-   **Second screen**; a few seconds later the monitor appears.
 
-Through the app: leaving it for another app, or the tablet's screen going
-off, pauses the desktop (the PC captures and encodes nothing meanwhile); its
+Leaving the app for another one, or the tablet's screen going off, pauses
+the desktop (the PC captures and encodes nothing meanwhile); its
 notification, *Showing the desktop of …*, brings it back. To stop, Back on
 the tablet, *Stop* in that notification, or *Disconnect* on the PC.
 
-Through Second Screen the order does not matter: you can tap the tablet
-first. To stop, click the toggle again, use *Disconnect* in the
-notification, or close Second Screen on the tablet; reopening it within a
-minute and a half reconnects by itself.
-
 Plus One runs in the background from login (*Ready in the background*), so the
-toggle answers at once; idle, it uses no radio and no CPU. It only searches for
-the tablet after you ask, and gives up after two minutes without an answer:
-while it searches, the Wi-Fi card also scans for Wi-Fi Direct devices and
-other traffic sees occasional delays of about 100 ms.
+toggle answers at once; idle, it uses no radio and no CPU.
 
 To connect from a keyboard shortcut, bind this command in *Settings → Keyboard
 → Custom Shortcuts* (`Disconnect` works the same way):
@@ -219,15 +198,13 @@ both do. **Signing → Sign on Tablet** in the Plus One window
 turns that entry off (in Files, Open With and the app grid). The PDF goes to the tablet in use only, and only to
 a paired one; **Sign a PDF…** in the window does the same.
 
-1. If the tablet is not connected yet, Plus One connects it: tap **Second
-   screen** on the tablet.
-2. The document opens full screen on the tablet. Sign with the S Pen: it
-   draws with pressure, and erases while you hold its side button; fingers
-   never draw, so resting your hand is fine. Pinch with two fingers to zoom
-   and move.
-3. Tap **Done**. `name-signed.pdf` is saved next to the original (which is
-   left untouched) and a notification offers *Open* and *Show in folder*. If
-   the connection was opened for signing, the tablet disconnects again.
+1. The document opens in Plus One's app on the tablet, by itself if the app
+   may display over other apps, else from its notification. Sign with the
+   S Pen: it draws with pressure, right under the nib, and erases while you
+   hold its side button; fingers never draw, so resting your hand is fine.
+   Pinch with two fingers to zoom and move.
+2. Tap **Done**. `name-signed.pdf` is saved next to the original (which is
+   left untouched) and a notification offers *Open* and *Show in folder*.
 
 The pen button in the toolbar sets the colour, the thickness and the
 stabilization (how much the ink smooths the pen's movement); Plus One
@@ -243,39 +220,35 @@ with the round handle, resize it from a corner; tap elsewhere when it is
 right. The **lasso** button selects anything on the page the same way:
 draw around it, or tap a stroke; **Delete** (or the Delete key) removes
 the selection.
-If the tablet does not connect, the notification offers *Sign on this PC*
-(mouse or a pen tablet). The signature is drawn into the page (a simple
+If the tablet's app cannot be reached, the notification offers *Sign on this
+PC* (the same tools, with the mouse or a pen tablet). The signature is drawn into the page (a simple
 electronic signature), not a cryptographic digital signature.
 
 The Files menu entry needs `python3-nautilus` (installed with the `.deb` by
 default) and appears after Files restarts (`nautilus -q`). In the Flatpak,
 use *Open With*; if the folder cannot be written, Plus One asks where to save.
 
-### The companion app: ink under the nib
-
-Through Second Screen, the ink reaches the tablet as video, 70-100 ms behind
-the pen. Plus One's app for the tablet draws it on the tablet itself, as a
-note app does, and needs neither Second Screen nor Wi-Fi Direct: the PC finds
-it on the home network.
+### Plus One's app on the tablet
 
 1. Install `plus-one-companion_*.apk` from the release on the tablet
    (Android 13 or later; allow installing from your browser or file manager
    when Android asks), and open **Plus One** once.
-2. In the app, allow it to **display over other apps**, so a PDF sent from
-   the PC opens by itself (without it, a notification to tap).
+2. In the app, allow it to **display over other apps**, so the desktop and
+   a PDF sent from the PC open by themselves (without it, a notification to
+   tap).
 3. Pair it in Plus One's window on the PC (see *Usage*). From then on they
-   recognize each other, and nothing else on the network can send PDFs to
-   the tablet or read what you sign. Signing never pairs by itself.
+   recognize each other, and nothing else on the network can reach the
+   tablet through it. Nothing ever pairs by itself.
 
-The app has the same tools (pen colour and thickness, your signatures,
-date, text, the S Pen's button to erase, undo, pinch to zoom). The pen and
-the signatures are shared with the PC: each time you sign, what you added
-or removed on either side reaches the other. The app lists them too, under
-**My signatures**. When it is on the network, Sign on
-Tablet uses it; otherwise Second Screen as before. It waits for the PC with a
-quiet notification; **Ready in the background** in the app turns that off (it
-is then ready for 10 minutes after you open it). If the Wi-Fi drops while you
-sign, Plus One finds the app again and gets the signature when you are done.
+The pen and the signatures are shared with the PC: each time you sign, what
+you added or removed on either side reaches the other. The app lists them
+too, under **My signatures**. It waits for the PC with a quiet notification;
+**Ready in the background** in the app turns that off (it is then ready for
+10 minutes after you open it). If the Wi-Fi drops while you sign, Plus One
+finds the app again and gets the signature when you are done.
+
+When the PC hands the app an update, Google Play Protect may ask to scan it
+first (*App scan recommended*): *Scan app*, and it installs.
 
 **More than one tablet.** Pair each of them; the one in use, picked under
 its name in the window, is the one that gets the PDFs and the desktop.
@@ -308,8 +281,7 @@ it, as with a webcam plugged in: the window says which program does, and
 the tablet says so in its notification. They go over **WebRTC**, as in a video call: Google's
 libwebrtc on the tablet (the sound's gain control, congestion control,
 retransmissions) and GStreamer's webrtcbin on the PC (the jitter buffer), encrypted
-(DTLS-SRTP, its keys vouched for by the pairing), over your Wi-Fi or Wi-Fi
-Direct; H.264 up to 2.5 Mbit/s at 720p (5 at 1080p), Opus for the sound,
+(DTLS-SRTP, its keys vouched for by the pairing), over your Wi-Fi; H.264 up to 2.5 Mbit/s at 720p (5 at 1080p), Opus for the sound,
 about 160 ms from the tablet's microphone to a program on the PC (measured).
 The PC needs `gstreamer1.0-nice`, `gir1.2-gst-plugins-bad-1.0` and
 `swh-plugins` (the `.deb` brings them). The window's **Camera** page picks
@@ -360,13 +332,6 @@ second of silence (a paused player that keeps its stream open). On the tablet,
 **For the PC → Speakers** in Plus One's app (on at first) lets the PC use
 them.
 
-### Recommended once: tablet low-latency mode
-
-Second Screen reads a configuration file, which cuts its internal buffering
-(measured roughly 90 → 50 ms together with the other tweaks). Plus One's app
-writes it the first time it opens (`Documents/wfd/wfdconfig.txt`, containing
-`sink_latency_mode low`); nothing to do by hand.
-
 ### Settings
 
 The window has a sidebar of what Plus One does: **Second screen**,
@@ -378,11 +343,10 @@ system's language.
 
 | Setting | |
 |---|---|
-| Second screen → Quality | *Balanced* (20 Mbit/s at 1920×1200, the default), *Sharper text* (40) or *For weak Wi-Fi* (10). Through the app that is the most: less while the network does not take it (frames lost, a queue growing), down to 1.5 Mbit/s. |
-| Second screen → Resolution | Through the app: *Automatic* (1920×1200 on a Tab S10 FE+) or the tablet's sizes at its proportions, from 2560 wide at scale 2 (sharp text). Through Second Screen: *Automatic* reads the tablet's preferred mode from its EDID, or a WFD mode. |
-| Second screen → Through | Plus One's app when it is there, or always Samsung's Second Screen. |
-| Second screen → Touch and S Pen | Forward finger touches and the pen from the tablet. |
-| Second screen → Open Second Screen from here | Through Second Screen only: uses `adb` to open the tile for you. Needs *USB debugging* or *Wireless debugging* on the tablet; off by default. |
+| Second screen → Quality | *Balanced* (20 Mbit/s at 1920×1200, the default), *Sharper text* (40) or *For weak Wi-Fi* (10): the most, less while the network does not take it (frames lost, a queue growing), down to 1.5 Mbit/s. |
+| Second screen → Resolution | *Automatic* (1920×1200 on a Tab S10 FE+) or the tablet's sizes at its proportions, from 2560 wide at scale 2 (sharp text). |
+| Second screen → Touch and S Pen | The fingers and the pen from the tablet. |
+| Tablets → Keep the tablet's app up to date | The PC hands the app its own version while nothing is in use. On by default. |
 | General → Quick Settings toggle | Turns the *Tablet* GNOME Shell extension on or off (Plus One offers it once, after the first pairing). Shown when the extension is installed (the `.deb`, or the zip for Flatpak users) and GNOME Shell knows it, which is after the next login. |
 | General → Ready in the background | Start at login and keep running after the window closes, so the Quick Settings toggle connects at once. Costs nothing while idle. |
 
@@ -402,66 +366,65 @@ mouse (hover moves the pointer, tip clicks, side button right-clicks).
 ### Command line
 
 ```bash
-plus-one --cli                       # same engine, no window; mode from the tablet
-plus-one --cli --size 1680x1050      # a fixed mode
-plus-one --cli --test                # test pattern + local preview window
+plus-one --cli                       # the desktop on the tablet in use, no window
+plus-one --cli --size 2560x1600      # one of the tablet's sizes
+plus-one --cli --test                # a test pattern instead of the desktop
 plus-one --help
 ```
 
-`--test` shows the same moving timer on the PC and on the tablet: photograph
-both screens together and the difference between the two timers is the
-latency.
+`python3 -m plusone.appdisplay ADDRESS --test --preview` shows the same
+moving timer on the PC and on the tablet: photograph both screens together
+and the difference between the two timers is the latency.
 
 ## Troubleshooting
 
 | Problem | What to do |
 |---|---|
-| *“Close GNOME Network Displays”* | It uses the same Wi-Fi Direct device. Quit it. |
-| Never connects | Reopen Second Screen on the tablet. A VPN with a firewall/kill switch can block the link; turn it off to check. Open *General → Log* in the window. |
-| *“Plus One does not answer on …”* | Plus One's app must be running on the tablet: open it (and keep *Ready in the background* on in the app). The desktop is only sent once it proved the tablet is yours. |
-| *“This is not …: the desktop was not sent”* | Something else came over Wi-Fi Direct as your tablet, or the tablet in use is another one: check its name in the window. |
+| *“… is not on the network: open Plus One on it”* | Open Plus One's app on the tablet, on the same network as the PC (and keep *Ready in the background* on in the app). A guest network that keeps devices apart, or a VPN with a firewall or kill switch, can keep them from seeing each other. |
+| *“… did not answer”* | The app was there a moment ago: open it on the tablet, or move closer. Open *General → Log* in the window. |
+| *“… let Plus One display over other apps”* | In the app, allow it, or open Plus One on the tablet before connecting. |
+| *“… no longer knows this PC”* | The app forgot this PC (reinstalled, or *Forget* on the tablet): pair it again from the window. |
+| *“… are different versions”* | The PC updates the app by itself once nothing is in use (Play Protect may ask for a tap); else install the release's APK by hand. |
 | *Tablet camera* says it needs v4l2loopback | See *The tablet's camera and microphone*: the module is not loaded. |
 | The camera or microphone says the tablet does not allow it | In Plus One's app on the tablet, *For the PC*: turn it on, and allow it when Android asks. |
-| *“… no longer knows this PC”* | The app forgot this PC (reinstalled, or *Forget* on the tablet): pair it again from the window. |
-| *“Connection is not secure”* on the tablet | Shown at every connection: the stream is not HDCP-protected. Harmless. |
-| Picture squashed or with black bars | Use one of the listed modes; the tablet lays out the picture by the negotiated mode. |
-| Stutter / artefacts | Lower *Quality*, move closer, avoid 2.4 GHz congestion. Packet loss shows in the log. |
+| Picture soft | The Wi-Fi does not take more: Plus One lowers the bitrate rather than letting the delay grow. Move closer, or use a 5 GHz network. The log says how much it takes. |
 | Pen not in GIMP | See the S Pen section (restart GIMP, enable *xwayland-tablet stylus*). |
 | App icon or Quick Settings toggle missing after install | Log out and back in; GNOME Shell only looks for new icons and extensions at login. |
-| Wi-Fi slower for a moment | Expected while Plus One searches for the tablet (up to two minutes after you click *Tablet*); it stops once connected or after giving up. |
 
 ## How it works
 
 ```
-GNOME (Mutter)                    Plus One                          Galaxy Tab
-──────────────                    ────────                          ──────────
-virtual monitor ──PipeWire──▶ capture ▶ H.264 ▶ MPEG-TS/RTP ──UDP──▶ Second Screen
-                                       ▲                              (Miracast sink)
-remote desktop  ◀──── touch ───── UIBC server ◀──────── TCP ──────────── touch / S Pen
-/dev/uhid       ◀──── S Pen ─────┘
-                         Wi-Fi Direct group + WFD RTSP session (NetworkManager)
+GNOME (Mutter)                  Plus One (PC)                          Plus One's app (tablet)
+──────────────                  ─────────────                          ───────────────────────
+virtual monitor ──PipeWire──▶ capture ▶ H.264 ──UDP, AES-GCM──▶ decoder ▶ screen
+remote desktop  ◀── fingers, as a touchpad ── input ◀──────────────────── touch / S Pen
+/dev/uhid       ◀── S Pen ──────────────────┘
+                       TLS link (paired): keys, requests, PDFs, updates
 ```
 
 - **Display**: `org.gnome.Mutter.ScreenCast.RecordVirtual` creates the monitor
-  without a consent dialog; its size follows the negotiated stream.
-- **Link**: Second Screen is a Wi-Fi Display (Miracast) sink. Plus One forms the
-  Wi-Fi Direct group through NetworkManager and acts as the WFD source (RTSP
-  M1–M7, keep-alives, IDR requests).
-- **Tuning for Samsung's sink** (found by reverse engineering the tablet side):
-  the source identifies as a Windows Miracast source, which selects the sink's
-  PC profile and makes it share its EDID; the EDID's preferred mode is
-  negotiated exactly (a VESA mode for 16:10) so the picture fills the screen; the stream is video-only, so frames are shown on
-  arrival instead of being synchronised to an audio clock.
-- **Input**: UIBC generic events become Mutter remote-desktop touches; the pen
-  arrives as an HID device whose descriptor and reports are replayed into
-  `/dev/uhid`.
+  without a consent dialog, at the size asked for.
+- **Link**: the app announces itself with mDNS (`_plusone._tcp`); the PC
+  connects over TLS 1.3, both certificates pinned at pairing. The session's
+  key goes over it; the frames, the input and the sound go over UDP, sealed
+  with AES-GCM.
+- **Picture**: each frame is sent the moment the encoder has it and shown as
+  soon as it is decoded; the bitrate follows the losses and the delay the app
+  reports each second, and a frame is not even encoded while the data before
+  it still waits to go out.
+- **Input**: the fingers' state comes in packets the app repeats; the PC
+  turns it into clicks, drags, scrolling (with momentum), pinches and
+  swipes through Mutter's remote desktop; the pen's reports are replayed into
+  `/dev/uhid` by the pen's helper.
 - **Application**: one GApplication process holds the connection and offers it
   over D-Bus (`io.github.gabrielesantangelo.PlusOne1`: `Connect`, `Disconnect`,
   `ShowWindow`, `SignDocument(path)`, properties `State`, `Active`, `Title`, `Detail`, `Background`).
   The window, the notifications and the Quick Settings extension are front
   ends; D-Bus activation starts the process when one of them needs it.
 
-Details, evidence and the tools used are in [docs/FINDINGS.md](docs/FINDINGS.md).
+Up to 0.8 Plus One could also use Samsung's *Second Screen* (Miracast over
+Wi-Fi Direct); the reverse engineering behind it is in
+[docs/FINDINGS.md](docs/FINDINGS.md).
 
 What comes next, and the convenience rules every feature follows, is in
 [docs/ROADMAP.md](docs/ROADMAP.md).
@@ -470,18 +433,18 @@ What comes next, and the convenience rules every feature follows, is in
 
 ```
 plusone/          the app: app.py (background app, D-Bus, notifications), gui.py (window),
-                  engine.py (ties display, p2p, rtsp, media, uibc, pen together),
+                  engine.py + appdisplay.py + media.py + display.py + pen.py (the desktop on the tablet),
                   signing.py + sign.py + pdf.py + ink.py + modeler.py (Sign on Tablet),
-                  devices.py + rtc.py (the tablet's camera and microphone as the PC's, over WebRTC),
-                  nearby.py (tablets on the network), tablets.py (the paired ones, the one in
-                  use, and the check that Second Screen's tablet is it), companion.py (the app's protocol)
+                  devices.py + rtc.py + pcm.py (the tablet's camera, microphone and speakers),
+                  nearby.py (the apps on the network), tablets.py (the paired ones, the one in
+                  use), companion.py (the app's protocol), updates.py (both sides up to date)
 data/gnome-shell/ the Quick Settings extension
 data/nautilus/    the Files context-menu entry
 android/          the companion app for the tablet (Kotlin)
 tests/            unit and protocol tests (a scripted fake tablet, no hardware needed)
 packaging/        build-deb.sh and maintainer scripts
-tools/            CI scripts; tools/re/ has the reverse-engineering and measurement helpers
-docs/FINDINGS.md  protocol and reverse-engineering notes
+tools/            CI scripts; tools/re/ has the reverse-engineering helpers (the Second Screen ones, and its measurements, are in the history up to 0.8)
+docs/             the roadmap; FINDINGS.md, the reverse engineering of Second Screen (up to 0.8)
 ```
 
 Run the app from the checkout with `bin/plus-one`.
@@ -532,7 +495,8 @@ flatpak run org.flatpak.Builder --user --install --force-clean flatpak-build \
 ## Acknowledgements
 
 - [GNOME Network Displays](https://gitlab.gnome.org/GNOME/gnome-network-displays),
-  the reference for Wi-Fi Direct and WFD on GNOME.
+  the reference for Wi-Fi Direct and WFD on GNOME, when Plus One went through
+  Second Screen.
 - [segunda-tela-linux](https://github.com/paulorochagodoi/segunda-tela-linux),
   whose notes on the Windows side of Second Screen were the starting point.
 - [REA](https://github.com/morluto/rea) and JADX, used to study the tablet's

@@ -1,14 +1,13 @@
 """S Pen from the tablet: a real Linux tablet device when possible.
 
-Second Screen sends the pen as a UIBC HIDC "Gesture" device: first its HID
-report descriptor (digitizer pen, report ID 0x14: tip/barrel/invert/eraser/
-in-range bits, X/Y 0..32767, pressure 0..4096, X/Y tilt -90..90), then
-10-byte input reports. If /dev/uhid is writable we create a virtual HID
-device with that same descriptor (S_PEN, never the one received: whatever
-reaches the UIBC port must not get to describe a keyboard) and replay the
-reports that fit it, so the kernel creates a proper tablet (pressure and
-tilt reach Krita, GIMP, Xournal++...). Otherwise the pen drives the pointer
-through Mutter's remote desktop session.
+The app sends the pen as Second Screen did, 10-byte reports of a digitizer
+pen (report ID 0x14: tip/barrel/invert/eraser/in-range bits, X/Y 0..32767,
+pressure 0..4096, X/Y tilt -90..90; DisplayInput.kt). Plus One's pen helper
+(root, data/pen-helper) makes a virtual HID device with that descriptor
+(S_PEN, its own: whoever sends reports never gets to describe a keyboard)
+and replays the reports that fit it, so the kernel creates a proper tablet
+(pressure and tilt reach Krita, GIMP, Xournal++...). Without the helper the
+pen drives the pointer through Mutter's remote desktop session.
 
 The reports are also published, all of them, to readers in this process
 (`feed`): the signing window draws with those.
@@ -37,7 +36,7 @@ TIP, BARREL, IN_RANGE = 0x01, 0x02, 0x10
 AXIS_MAX = 32767
 PRESSURE_MAX = 4096
 REPORT_ID, REPORT_SIZE = 0x14, 10
-# The Galaxy Tab's S Pen as Second Screen describes it (one report, 0x14):
+# The Galaxy Tab's S Pen as Second Screen described it (one report, 0x14):
 # Digitizer / Pen / Stylus with tip, barrel, invert, eraser and in-range
 # bits, X and Y 0..32767, tip pressure 0..4096, X and Y tilt -90..90.
 S_PEN = bytes.fromhex(
@@ -78,7 +77,7 @@ class Feed:
         self.readers = [r for r in self.readers if r is not reader]
 
     def publish(self, data):
-        readers = self.readers  # called from the UIBC thread
+        readers = self.readers  # called from the app display's listening thread
         if readers:
             sample = parse_report(data)
             if sample:
@@ -184,7 +183,7 @@ class UhidPen:
             raise
         self.fd = fd
         self.closing = False
-        # report() (the UIBC thread) against the drain thread's close: a
+        # report() (the listening thread) against the drain thread's close: a
         # write must never reach a number another file has by then.
         self._lock = threading.Lock()
         # The kernel queues start/open notifications; drain them so the queue

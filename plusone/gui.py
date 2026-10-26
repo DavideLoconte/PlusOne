@@ -1,7 +1,6 @@
 """Plus One's window (see app.py): a sidebar of what it does, each page with
 its button and its settings; pairing and the log in dialogs of their own."""
 import os
-import shutil
 import threading
 
 import gi
@@ -15,9 +14,7 @@ from .app import APP_ID, IN_FLATPAK, set_shell_extension, shell_extension_state 
 from .devices import neural_available  # noqa: E402
 from .engine import State, parse_size  # noqa: E402
 from .i18n import _  # noqa: E402
-from .rtsp import MODES  # noqa: E402
 
-MODE_LIST = sorted(((w, h, f) for (w, h, f) in MODES if f == 60), key=lambda m: -m[0] * m[1])
 TABLET_ICON = "tablet-symbolic"  # the system's (Adwaita, Yaru): drawn in the theme's colours
 WEBSITE = "https://github.com/GabrieleSantangelo/PlusOne"
 QUALITY_LIST = ["720p", "1080p"]
@@ -70,12 +67,6 @@ def device_status(kind, state, users=()):
     }.get(state, "")
 CSS = b".pair-code { font-size: 300%; font-weight: 800; letter-spacing: 0.1em; }"
 _resources_added = False
-
-
-def mode_label(mode):
-    w, h, _f = mode
-    ratio = "16:10" if w * 10 == h * 16 else "16:9" if w * 9 == h * 16 else ""
-    return f"{w} × {h} ({ratio})" if ratio else f"{w} × {h}"
 
 
 def _add_resources(display):
@@ -245,14 +236,9 @@ class Window(Adw.ApplicationWindow):
             [_(label) for label, _kbit in QUALITY_BITRATES]),
             selected=min(range(len(QUALITY_BITRATES)), key=lambda i: abs(QUALITY_BITRATES[i][1] - s.bitrate)),
             subtitle=_("Sharper text takes more of the Wi-Fi"))
-        # Entry 0 is "Automatic"; the rest are the tablet's sizes through the
-        # app, or Second Screen's modes (MODE_LIST): _fill_modes().
+        # Entry 0 is "Automatic"; the rest are the tablet's sizes: _fill_modes().
         self.mode_row = Adw.ComboRow(title=_("Resolution"), subtitle_lines=2)
-        # Plus One's app shows the desktop when it answers; Second Screen otherwise.
-        self.via_row = Adw.ComboRow(title=_("Second screen through"), model=Gtk.StringList.new(
-            [_("Plus One's app, when it is there"), _("Samsung's Second Screen")]),
-            selected=0 if s.display_via == "auto" else 1)
-        for row in (self.quality_row, self.mode_row, self.via_row):
+        for row in (self.quality_row, self.mode_row):
             group.add(row)
         page.add(group)
 
@@ -263,22 +249,14 @@ class Window(Adw.ApplicationWindow):
             "set up": _("Without Plus One's pen helper (the .deb installs it) the S Pen works as a mouse, "
                         "without pressure"),
         }.get(pen.uhid_missing(), _("Fingers and the pen drive the desktop; the pen with pressure and tilt")))
-        self.has_adb = has_adb = shutil.which("adb") is not None
-        self.adb_row = Adw.SwitchRow(title=_("Open Second Screen from here"), active=s.use_adb and has_adb,
-                                     sensitive=has_adb,
-                                     subtitle=_("Uses adb: needs wireless debugging on the tablet")
-                                     if has_adb else _("adb is not available"))
         group.add(self.touch_row)
-        group.add(self.adb_row)
         page.add(group)
 
         self._fill_modes()
         # Read when a connection starts: locked while one is up.
-        self.session_rows = [self.quality_row, self.via_row, self.mode_row, self.touch_row, self.adb_row]
-        self.via_row.connect("notify::selected", lambda *_a: self._fill_modes())
-        for row, signal in ((self.quality_row, "notify::selected"), (self.via_row, "notify::selected"),
-                            (self.mode_row, "notify::selected"),
-                            (self.touch_row, "notify::active"), (self.adb_row, "notify::active")):
+        self.session_rows = [self.quality_row, self.mode_row, self.touch_row]
+        for row, signal in ((self.quality_row, "notify::selected"), (self.mode_row, "notify::selected"),
+                            (self.touch_row, "notify::active")):
             row.connect(signal, self._apply)
         return page
 
@@ -447,7 +425,7 @@ class Window(Adw.ApplicationWindow):
         text = self._status(tablet)
         self.status_label.set_label(text)
         self.status_label.set_css_classes(["error"] if state == State.ERROR else ["dim-label"])
-        self.spinner.set_visible(state in (State.WAITING, State.CONNECTING))
+        self.spinner.set_visible(state == State.CONNECTING)
         if not self.controller.running:
             self.screen_button.set_label(_("Use as second screen"))
             self.screen_button.set_css_classes(["pill", "suggested-action"])
@@ -457,9 +435,7 @@ class Window(Adw.ApplicationWindow):
             self.screen_button.set_css_classes(["pill"])
         in_session = state in (State.CONNECTING, State.STREAMING)
         for row in self.session_rows:
-            row.set_sensitive(not in_session and (row is not self.adb_row or self.has_adb))
-        # adb opens Samsung's Second Screen: of no use through the app.
-        self.adb_row.set_visible(self.via_row.get_selected() == 1)
+            row.set_sensitive(not in_session)
 
     def _mark(self, key, on, working):
         mark = self.sidebar_marks[key]
@@ -544,52 +520,35 @@ class Window(Adw.ApplicationWindow):
         return sizes(screen) if screen else []
 
     def _fill_modes(self):
-        """Resolution's choices for the way chosen: the tablet's sizes (at its
-        proportions) through the app, Second Screen's modes otherwise."""
+        """Resolution's choices: the tablet's sizes, at its proportions."""
         from .appdisplay import scale_for
         s = self.settings
         self._modes_for = s.app_screen
-        if self.via_row.get_selected() == 0:
-            choices = self._app_sizes()
-            labels = [_("Automatic")]
-            for w, h in choices:
-                labels.append(f"{w} × {h}" if scale_for((w, h)) == 1 else
-                              _("{width} × {height}, sharp: as {half}").format(
-                                  width=w, height=h, half=f"{w // 2} × {h // 2}"))
-            current = parse_size(s.app_size)
-            selected = 1 + choices.index(current) if current in choices else 0
-            subtitle = (_("Above 1920 × 1200 the picture comes a little later")
-                        if choices else _("The tablet's sizes appear after it showed the desktop once"))
-        else:
-            labels = [_("Automatic")] + [mode_label(m) for m in MODE_LIST]
-            current = (s.width, s.height, s.fps)
-            selected = 0 if s.auto_mode or current not in MODE_LIST else 1 + MODE_LIST.index(current)
-            subtitle = ""
+        choices = self._app_sizes()
+        labels = [_("Automatic")]
+        for w, h in choices:
+            labels.append(f"{w} × {h}" if scale_for((w, h)) == 1 else
+                          _("{width} × {height}, sharp: as {half}").format(
+                              width=w, height=h, half=f"{w // 2} × {h // 2}"))
+        current = parse_size(s.app_size)
+        selected = 1 + choices.index(current) if current in choices else 0
+        subtitle = (_("Above 1920 × 1200 the picture comes a little later")
+                    if choices else _("The tablet's sizes appear after it showed the desktop once"))
         self._filling = True
         self.mode_row.set_model(Gtk.StringList.new(labels))
         self.mode_row.set_selected(selected)
         self.mode_row.set_subtitle(subtitle)
         self._filling = False
-        if hasattr(self, "adb_row"):
-            self.adb_row.set_visible(self.via_row.get_selected() == 1)
 
     def _apply(self, *_args):
         if getattr(self, "_filling", False):
             return  # the choices being replaced, not chosen
         s = self.settings
         selected = self.mode_row.get_selected()
-        if self.via_row.get_selected() == 0:
-            choices = self._app_sizes()
-            s.app_size = "auto" if selected == 0 or selected > len(choices) else "%dx%d" % choices[selected - 1]
-        else:
-            s.auto_mode = selected == 0
-            if not s.auto_mode:
-                s.width, s.height, s.fps = MODE_LIST[selected - 1]
+        choices = self._app_sizes()
+        s.app_size = "auto" if selected == 0 or selected > len(choices) else "%dx%d" % choices[selected - 1]
         s.bitrate = QUALITY_BITRATES[self.quality_row.get_selected()][1]
         s.touch = self.touch_row.get_active()
-        if self.has_adb:  # else the row is off only because adb is missing: the choice stays
-            s.use_adb = self.adb_row.get_active()
-        s.display_via = "auto" if self.via_row.get_selected() == 0 else "second-screen"
         self.app.save_settings()
 
     def _camera_options(self, *_args):

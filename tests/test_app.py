@@ -68,10 +68,11 @@ def test_a_broken_settings_file_is_not_trusted(tmp_path):
     for content in ("[]", "null", "3"):
         path.write_text(content)
         assert load_settings(str(path)) == Settings()
+    # (fps, display_via: settings of Second Screen, gone since 0.9, ignored)
     path.write_text('{"background": "no", "bitrate": "9999; rm", "fps": true, "encoder": 3, '
-                    '"tablet": 7, "known_sinks": ["Tab"], "touch": false}')
+                    '"tablet": 7, "display_via": "second-screen", "touch": false}')
     settings = load_settings(str(path))
-    assert settings.background is True and settings.bitrate == Settings().bitrate and settings.fps == 60
+    assert settings.background is True and settings.bitrate == Settings().bitrate
     assert settings.encoder == "auto" and settings.tablet is None and settings.touch is False
 
 

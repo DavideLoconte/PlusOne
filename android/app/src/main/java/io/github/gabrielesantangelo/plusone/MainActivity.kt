@@ -30,7 +30,6 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (savedInstanceState == null) tryOut(intent)  // not again when recreated
-        Wfd.ensure(this)  // Second Screen's low-latency mode, without a file made by hand
         content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }

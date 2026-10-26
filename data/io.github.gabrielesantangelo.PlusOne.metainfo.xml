@@ -12,9 +12,10 @@
   <url type="bugtracker">https://github.com/GabrieleSantangelo/PlusOne/issues</url>
   <summary>Your Galaxy Tab as a second monitor</summary>
   <description>
-    <p>Extends the GNOME desktop onto a Samsung Galaxy Tab through the
-    Second Screen app already on the tablet: virtual monitor, Wi-Fi Direct,
-    low-latency H.264 video, touch and S Pen with pressure and tilt.</p>
+    <p>With Plus One's app on a Samsung Galaxy Tab: the GNOME desktop
+    extended onto it over the Wi-Fi (low-latency H.264, the fingers as a
+    touchpad, the S Pen with pressure and tilt), PDFs signed on it with the
+    S Pen, and its camera, microphone and speakers as the PC's.</p>
   </description>
   <launchable type="desktop-id">io.github.gabrielesantangelo.PlusOne.desktop</launchable>
   <replaces>

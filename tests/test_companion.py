@@ -9,7 +9,6 @@ import struct
 import threading
 
 import pytest
-from conftest import free_port
 
 from plusone import companion
 
@@ -344,52 +343,6 @@ def test_the_app_is_handed_its_update_whatever_its_protocol(tmp_path, pc):
     assert message["sha256"] == hashlib.sha256(b"an app").hexdigest()
     with pytest.raises(companion.Incompatible):  # anything else: not across versions
         companion.sign(app.target, str(apk), paired=paired)
-
-
-def says_bye(wire):
-    assert receive(wire)[0] == {"type": "bye"}
-
-
-def test_the_tablet_in_the_wi_fi_direct_group_is_verified(tmp_path, pc):
-    # Its app answers at the address Second Screen came from, with the
-    # paired certificate, knowing this PC; the first port that answers counts.
-    _path, paired = pc
-    app = FakeApp(tmp_path, [says_bye])
-    fp = companion.fingerprint(app.der)
-    paired.add(fp, "Tab")
-    closed = free_port()
-    assert companion.verify("127.0.0.1", fp, [closed, app.target[1]], paired) == "Tab"
-
-
-def test_another_device_is_not_the_tablet(tmp_path, pc):
-    _path, paired = pc
-    real = FakeApp(tmp_path / "real", [says_bye])
-    paired.add(companion.fingerprint(real.der), "Tab")
-    other = FakeApp(tmp_path / "other", [says_bye])
-    paired.add(companion.fingerprint(other.der), "Other paired tablet")
-    with pytest.raises(companion.Impostor):
-        companion.verify("127.0.0.1", companion.fingerprint(real.der), [other.target[1]], paired)
-
-
-def test_the_tablet_reached_through_someone_else_is_not_verified(tmp_path, pc):
-    # The real tablet's app, but reached at another address than the group's
-    # (someone in the group passing the connection on over the LAN).
-    _path, paired = pc
-    app = FakeApp(tmp_path, [says_bye], at="192.168.1.30")
-    fp = companion.fingerprint(app.der)
-    paired.add(fp, "Tab")
-    with pytest.raises(companion.Impostor):
-        companion.verify("127.0.0.1", fp, [app.target[1]], paired)
-
-
-def test_a_tablet_that_forgot_this_pc_is_not_verified(tmp_path, pc):
-    _path, paired = pc
-    app = FakeApp(tmp_path, [says_bye], paired=False)
-    fp = companion.fingerprint(app.der)
-    paired.add(fp, "Tab")
-    with pytest.raises(companion.PairingRefused):
-        companion.verify("127.0.0.1", fp, [app.target[1]], paired)
-    assert app.codes == []
 
 
 def test_marks_that_make_no_sense_are_left_out():

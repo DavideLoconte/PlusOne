@@ -1,4 +1,5 @@
-"""Use a Samsung Galaxy Tab's built-in Second Screen app as a Linux monitor."""
+"""Plus One: a Samsung Galaxy Tab, with Plus One's app on it, as a second
+screen, a signing tablet, a webcam, a microphone and speakers for GNOME."""
 import json
 import os
 import tempfile

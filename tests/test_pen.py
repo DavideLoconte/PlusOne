@@ -1,7 +1,22 @@
 import struct
 
 from plusone.pen import (BTN_LEFT, BTN_RIGHT, UHID_CREATE2, UHID_INPUT2, PointerPen, UhidPen)
-from test_uibc import PEN_DESCRIPTOR, PEN_REPORT, Recorder
+
+# Descriptor and a report captured from a Galaxy Tab S10 FE+ S Pen (Second
+# Screen's UIBC sent them so; the app sends the same reports).
+PEN_DESCRIPTOR = bytes.fromhex(
+    "050d0902a10185140920a10009420944093c0945093215002501750195058102950381030501"
+    "093075109501a4550d65133500463a2027ff7f000081020931462c1827ff7f00008102b4050d"
+    "093026001081027508093d15a6255a8102093e8102c0c0")
+PEN_REPORT = bytes.fromhex("14114a39277dfc013319")
+
+
+class Recorder:
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, name):
+        return lambda *args: self.calls.append((name, *args))
 
 
 def report(bits, x, y, pressure=0):

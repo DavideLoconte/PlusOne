@@ -5,7 +5,7 @@ sdk: org.gnome.Sdk
 command: plus-one
 
 finish-args:
-  - --share=network                 # RTSP, RTP and UIBC sockets
+  - --share=network                 # the tablet's app: its link, the desktop, the sound
   - --share=ipc
   - --socket=wayland
   - --socket=fallback-x11
@@ -16,8 +16,6 @@ finish-args:
   - --talk-name=org.gnome.Mutter.ScreenCast
   - --talk-name=org.gnome.Mutter.RemoteDesktop
   - --talk-name=org.gnome.Mutter.DisplayConfig
-  - --talk-name=org.gnome.NetworkDisplays  # to warn when it holds the Wi-Fi Direct device
-  - --system-talk-name=org.freedesktop.NetworkManager
   # The S Pen's helper on the host (from the .deb or enable-pen.sh), for its pressure.
   - --system-talk-name=io.github.gabrielesantangelo.PlusOne.Pen
   # Finding the tablets' app (mDNS): without it nothing can be paired.
@@ -38,59 +36,6 @@ cleanup:
   - /share/man
 
 modules:
-  # libnm and its GObject introspection data (Wi-Fi Direct through NetworkManager);
-  # same recipe as GNOME Network Displays, plus introspection for Python.
-  - name: NetworkManager
-    buildsystem: meson
-    build-options:
-      cflags: -ltinfo
-      cxxflags: -ltinfo
-    config-opts:
-      - -Dsystemdsystemunitdir=no
-      - -Ddbus_conf_dir=/app/etc/dbus-1/system.d
-      - -Diptables=/usr/bin/true
-      - -Ddnsmasq=/usr/bin/true
-      - -Dsession_tracking=no
-      - -Dselinux=false
-      - -Dsystemd_journal=false
-      - -Dlibaudit=no
-      - -Dwext=false
-      - -Dwifi=true
-      - -Dppp=false
-      - -Dmodem_manager=false
-      - -Dovs=false
-      - -Dnmcli=false
-      - -Dnmtui=false
-      - -Dintrospection=true
-      - -Dvapi=false
-      - -Ddocs=false
-      - -Dtests=no
-      - -Dfirewalld_zone=false
-      - -Dlibpsl=false
-      - -Dqt=false
-      - -Dnm_cloud_setup=false
-    cleanup:
-      - /bin
-      - /etc
-      - /libexec
-      - /sbin
-      - /var
-      - /lib/NetworkManager
-    sources:
-      - type: git
-        url: https://gitlab.freedesktop.org/NetworkManager/NetworkManager.git
-        tag: 1.52.0
-        commit: 995a28fa1ccc54ad22e794294c3c6783cc3f30ed
-    modules:
-      - name: libndp
-        buildsystem: autotools
-        cleanup:
-          - /bin
-        sources:
-          - type: archive
-            url: https://github.com/jpirko/libndp/archive/v1.9.tar.gz
-            sha256: e564f5914a6b1b799c3afa64c258824a801c1b79a29e2fe6525b682249c65261
-
   # PDF rendering for "Sign on Tablet" (GObject introspection, cairo backend).
   - name: poppler
     buildsystem: cmake-ninja

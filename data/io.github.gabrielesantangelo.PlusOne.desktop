@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
 Name=Plus One
-Comment=Use your Samsung Galaxy Tab as a second monitor via Second Screen
+Comment=Your Samsung Galaxy Tab as a second screen, signing tablet, webcam and speakers
 Exec=plus-one
 Icon=io.github.gabrielesantangelo.PlusOne
 Categories=Utility;GTK;
-Keywords=tablet;monitor;second screen;miracast;display;galaxy;
+Keywords=tablet;monitor;second screen;display;galaxy;sign;pdf;webcam;
 StartupNotify=true
 DBusActivatable=true
 Actions=connect;
