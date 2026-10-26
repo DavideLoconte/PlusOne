@@ -17,15 +17,18 @@ except (ValueError, ImportError, AttributeError):
     signal_add = GLib.unix_signal_add
 
 from . import media, once  # noqa: E402
-from .engine import Controller, Settings, State  # noqa: E402
+from .engine import Controller, Settings, State, parse_size  # noqa: E402
 from .rtsp import MODES  # noqa: E402
 
 
-def parse_size(text):
+def size_argument(text):
+    """--size: "auto", or WxH as the settings take it."""
     if text == "auto":
         return None
-    w, _, h = text.partition("x")
-    return int(w), int(h)
+    size = parse_size(text)
+    if size is None:
+        raise argparse.ArgumentTypeError(f"not a size: {text!r}")
+    return size
 
 
 def main():
@@ -38,7 +41,7 @@ def main():
     ap = argparse.ArgumentParser(prog="plus-one", description=__doc__)
     ap.add_argument("--cli", action="store_true", help="run without the window")
     ap.add_argument("--peer", help="tablet Wi-Fi Direct MAC or name (default: first WFD sink)")
-    ap.add_argument("--size", type=parse_size, default=None,
+    ap.add_argument("--size", type=size_argument, default=None,
                     help="WIDTHxHEIGHT of the virtual monitor (default: from the tablet's EDID)")
     ap.add_argument("--fps", type=int, default=60)
     ap.add_argument("--bitrate", type=int, default=20000, help="kbit/s")

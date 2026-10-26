@@ -3,7 +3,6 @@ pen settings and signatures (normalized to keep, placed on a page)."""
 import collections
 import json
 import math
-import os
 
 from . import write_private
 from .modeler import LEVELS

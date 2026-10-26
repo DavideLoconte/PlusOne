@@ -10,7 +10,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
-from . import __version__, companion, i18n, log, once, pen  # noqa: E402
+from . import __version__, companion, log, once, pen  # noqa: E402
 from .app import APP_ID, IN_FLATPAK, set_shell_extension, shell_extension_state  # noqa: E402
 from .devices import neural_available  # noqa: E402
 from .engine import State, parse_size  # noqa: E402
@@ -28,18 +28,7 @@ NOISE_LIST = ["off", "light", "neural"]  # devices.NOISE
 
 
 def device_status(kind, state, users=()):
-    """What the window says under the camera's or the microphone's switch."""
-    if state == "setup":
-        return (_("Needs the v4l2loopback module: see the README") if kind == "camera"
-                else _("Needs PipeWire's pactl and pw-link"))
-    if state == "webrtc":
-        return _("Needs WebRTC for GStreamer: gstreamer1.0-nice and gir1.2-gst-plugins-bad-1.0")
-    if state == "reload":
-        return _("The webcam module is loaded with other settings: sudo modprobe -r v4l2loopback && "
-                 "sudo modprobe v4l2loopback")
-    if state == "decoder":
-        return _("Needs an H.264 decoder: gstreamer1.0-libav")
-    camera = kind == "camera"
+    """What the window says under the camera's, the microphone's or the speakers' switch."""
     if kind == "speakers":
         return {
             "setup": _("Needs PipeWire's pactl and pw-link, and python3-cryptography"),
@@ -51,6 +40,17 @@ def device_status(kind, state, users=()):
             "tablet-unpaired": _("The tablet no longer knows this PC: pair it again"),
             "tablet-version": _("Plus One on the tablet and on this PC are different versions: update them"),
         }.get(state, "")
+    if state == "setup":
+        return (_("Needs the v4l2loopback module: see the README") if kind == "camera"
+                else _("Needs PipeWire's pactl and pw-link"))
+    if state == "webrtc":
+        return _("Needs WebRTC for GStreamer: gstreamer1.0-nice and gir1.2-gst-plugins-bad-1.0")
+    if state == "reload":
+        return _("The webcam module is loaded with other settings: sudo modprobe -r v4l2loopback && "
+                 "sudo modprobe v4l2loopback")
+    if state == "decoder":
+        return _("Needs an H.264 decoder: gstreamer1.0-libav")
+    camera = kind == "camera"
     return {
         "off": _("As a webcam for this PC's programs") if camera else _("As a microphone for this PC's programs"),
         "ready": _("On: the tablet turns its camera on while a program uses it") if camera
@@ -126,15 +126,12 @@ class Window(Adw.ApplicationWindow):
         self.settings = app.settings
         _add_resources(self.get_display())
         for name, callback in (("preferences", lambda *a: self.show_section("general")),
-                               ("signatures", lambda *a: self._show_signatures()),
-                               ("tablets", lambda *a: self.show_section("tablets")),
-                               ("pair", lambda *a: self.pair()),
                                ("log", lambda *a: LogDialog(self.app).present(self)),
                                ("about", lambda *a: self._about())):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", callback)
             self.add_action(action)
-        # The tablet in use (Tablets, or the action from elsewhere).
+        # The tablet in use (the Tablets page's rows), locked while connected.
         self.use_action = Gio.SimpleAction.new_stateful("use-tablet", GLib.VariantType("s"), GLib.Variant("s", ""))
         self.use_action.connect("change-state", self._on_use)
         self.add_action(self.use_action)
@@ -266,7 +263,7 @@ class Window(Adw.ApplicationWindow):
             "set up": _("Without Plus One's pen helper (the .deb installs it) the S Pen works as a mouse, "
                         "without pressure"),
         }.get(pen.uhid_missing(), _("Fingers and the pen drive the desktop; the pen with pressure and tilt")))
-        has_adb = shutil.which("adb") is not None
+        self.has_adb = has_adb = shutil.which("adb") is not None
         self.adb_row = Adw.SwitchRow(title=_("Open Second Screen from here"), active=s.use_adb and has_adb,
                                      sensitive=has_adb,
                                      subtitle=_("Uses adb: needs wireless debugging on the tablet")
@@ -311,7 +308,7 @@ class Window(Adw.ApplicationWindow):
         return page
 
     def _device_row(self, kind, title):
-        row = Adw.SwitchRow(title=title, subtitle_lines=3)
+        row = Adw.SwitchRow(title=title, subtitle_lines=3, use_markup=False)
         row.handler = row.connect("notify::active", lambda r, _p: self.app.set_device(kind, r.get_active()))
         self.device_rows[kind] = row
         return row
@@ -385,9 +382,11 @@ class Window(Adw.ApplicationWindow):
         s = self.settings
         page = Adw.PreferencesPage()
         group = Adw.PreferencesGroup()
-        background = Adw.SwitchRow(title=_("Ready in the background"), active=s.background,
-                                   subtitle=_("Starts at login and stays ready after you close this window"))
-        background.connect("notify::active", lambda row, _p: self.app.set_background(row.get_active()))
+        self.background_row = background = Adw.SwitchRow(
+            title=_("Ready in the background"), active=s.background,
+            subtitle=_("Starts at login and stays ready after you close this window"))
+        background.handler = background.connect("notify::active",
+                                                lambda row, _p: self.app.set_background(row.get_active()))
         # Shown once the shell says the extension is installed (never in a Flatpak).
         self.extension_row = Adw.SwitchRow(title=_("Quick Settings toggle"), visible=False,
                                            subtitle=_("Adds a “Tablet” button to GNOME's Quick Settings"))
@@ -409,6 +408,12 @@ class Window(Adw.ApplicationWindow):
 
     # -- state -----------------------------------------------------------------------
     def _refresh(self):
+        # Changed elsewhere too: Quick Settings' toggle, the first desktop
+        # through the app (its sizes).
+        with self.background_row.handler_block(self.background_row.handler):
+            self.background_row.set_active(self.settings.background)
+        if self.settings.app_screen != self._modes_for:
+            self._fill_modes()
         tablet = self.app.tablets.active()
         self.stack.set_visible_child_name("tablet" if tablet else "empty")
         if tablet is None:
@@ -440,7 +445,7 @@ class Window(Adw.ApplicationWindow):
             self.screen_button.set_css_classes(["pill"])
         in_session = state in (State.CONNECTING, State.STREAMING)
         for row in self.session_rows:
-            row.set_sensitive(not in_session and (row is not self.adb_row or shutil.which("adb") is not None))
+            row.set_sensitive(not in_session and (row is not self.adb_row or self.has_adb))
         # adb opens Samsung's Second Screen: of no use through the app.
         self.adb_row.set_visible(self.via_row.get_selected() == 1)
 
@@ -531,6 +536,7 @@ class Window(Adw.ApplicationWindow):
         proportions) through the app, Second Screen's modes otherwise."""
         from .appdisplay import scale_for
         s = self.settings
+        self._modes_for = s.app_screen
         if self.via_row.get_selected() == 0:
             choices = self._app_sizes()
             labels = [_("Automatic")]
@@ -569,7 +575,8 @@ class Window(Adw.ApplicationWindow):
                 s.width, s.height, s.fps = MODE_LIST[selected - 1]
         s.bitrate = QUALITY_BITRATES[self.quality_row.get_selected()][1]
         s.touch = self.touch_row.get_active()
-        s.use_adb = self.adb_row.get_active()
+        if self.has_adb:  # else the row is off only because adb is missing: the choice stays
+            s.use_adb = self.adb_row.get_active()
         s.display_via = "auto" if self.via_row.get_selected() == 0 else "second-screen"
         self.app.save_settings()
 
@@ -750,7 +757,8 @@ class PairDialog(Adw.Dialog):
             return
         if attempt != self.attempt:  # paired all the same: in use only if it is the one shown
             return
-        self.app.use_tablet(fingerprint)
+        if not self.app.controller.running:  # else the connected one stays in use (Tablets later)
+            self.app.use_tablet(fingerprint)
         self.on_paired(name)
         self.close()
 

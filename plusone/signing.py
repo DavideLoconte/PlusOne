@@ -79,7 +79,8 @@ class Signing:
         if path in self.opening or path in self.in_app:
             return
         controller = self.app.controller
-        target = self._find_app() if self.app.settings.sign_on_tablet else None
+        # (The "Sign on Tablet" switch is Files' entry only: the app signs whenever it is there.)
+        target = self._find_app()
         # Showing the desktop through the app, the app signs too (the ink
         # under the nib); the desktop rests meanwhile and comes back after.
         if target and (controller.state != State.STREAMING or controller.app_display is not None):

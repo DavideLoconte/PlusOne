@@ -160,6 +160,18 @@ def test_silence_lifts_what_touches():
     assert [c[0] for c in monitor.calls] == ["touch_down", "touch_up"]
 
 
+def test_the_listener_looks_often_only_while_something_touches():
+    touch, _monitor, clock = touch_input()
+    assert not touch.busy()
+    touch.packet(fingers((0, 0.5, 0.5)))
+    assert touch.busy()  # a second finger may come
+    clock.now += 0.1
+    touch.check()
+    assert touch.busy()  # down
+    touch.packet(fingers())
+    assert not touch.busy()
+
+
 def test_sizes_keep_the_tablet_s_proportions():
     assert appdisplay.sizes((2880, 1800))[:4] == [(2880, 1800), (2560, 1600), (2304, 1440), (1920, 1200)]
     assert appdisplay.sizes((1800, 2880))[0] == (2880, 1800)  # portrait reported: landscape

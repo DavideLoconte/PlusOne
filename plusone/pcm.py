@@ -5,9 +5,13 @@ plain media AudioTrack, as the tablet's own players do (PcmPlayback.kt).
 libwebrtc, which played it before, is made for calls: its jitter buffer
 stretched and squeezed the music to keep the delay down, and it sounded so.
 
+Digital silence (a player paused, its stream left open: a browser's, a
+chat program's) goes for a second, then nothing until there is sound again:
+the app pauses meanwhile and starts again with its little wait.
+
 Shaped for devices.Feed as an rtc.Receiver is: offer() and answer() carry
 the session's key and ports (JSON) where WebRTC's carry SDP; failed(),
-losses() (here: packets sent) and close().
+losses() (here: the sound captured) and close().
 """
 import json
 import os
@@ -25,19 +29,20 @@ RATE, CHANNELS = 48000, 2
 FRAMES = 240             # per packet: 5 ms
 BYTES = FRAMES * CHANNELS * 2
 HEADER = struct.Struct("!BI")  # kind, packet number
+SILENCE = bytes(BYTES)
+QUIET_AFTER = 200        # packets of silence in a row (a second) after which none go
 
 
 class PcmSender:
-    kind = "speakers"
-
     def __init__(self, source):
         self.key = os.urandom(32)
         self.channel = Channel(self.key)
         self.peer = None      # the app's address: set by Feed from the paired link
         self.broken = None
         self.sent = 0
+        self.captured = 0     # buffers of sound from PipeWire
+        self._quiet = 0       # packets of silence in a row
         self._pending = b""
-        self._lock = threading.Lock()
         self._running = True
         self.pipeline = Gst.parse_launch(
             f"{source} ! audioconvert ! audioresample "
@@ -67,13 +72,20 @@ class PcmSender:
         if sample is None:
             return Gst.FlowReturn.EOS
         buf = sample.get_buffer()
-        with self._lock:
-            data = self._pending + buf.extract_dup(0, buf.get_size())
-            whole = len(data) - len(data) % BYTES
-            for at in range(0, whole, BYTES):
-                self.channel.send(HEADER.pack(PCM, self.sent & 0xFFFFFFFF) + data[at:at + BYTES])
-                self.sent += 1
-            self._pending = data[whole:]
+        self.captured += 1
+        data = self._pending + buf.extract_dup(0, buf.get_size())
+        whole = len(data) - len(data) % BYTES
+        for at in range(0, whole, BYTES):
+            packet = data[at:at + BYTES]
+            if packet != SILENCE:
+                self._quiet = 0
+            elif self._quiet >= QUIET_AFTER:
+                continue
+            else:
+                self._quiet += 1
+            self.channel.send(HEADER.pack(PCM, self.sent & 0xFFFFFFFF) + packet)
+            self.sent += 1
+        self._pending = data[whole:]
         return Gst.FlowReturn.OK
 
     def _listen(self):
@@ -87,8 +99,9 @@ class PcmSender:
                         f"missed {missed} packets, {late} came late")
 
     def losses(self):
-        """(packets sent, 0, 0, 0): the sound goes as long as this grows."""
-        return self.sent, 0, 0, 0
+        """(buffers captured, 0, 0, 0): the sound goes as long as this grows,
+        silence too (not sent, but still coming from PipeWire)."""
+        return self.captured, 0, 0, 0
 
     def fail(self, reason):
         self.broken = self.broken or reason

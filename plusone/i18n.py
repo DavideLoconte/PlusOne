@@ -4,9 +4,6 @@ The app is small enough that a dictionary beats a gettext toolchain.
 """
 import os
 
-LANGUAGES = ("auto", "en", "it")
-LANGUAGE_NAMES = {"auto": "System", "en": "English", "it": "Italiano"}
-
 _IT = {
     # Window
     "Ready": "Pronto",
@@ -19,7 +16,6 @@ _IT = {
     "Resolution": "Risoluzione",
     "Automatic": "Automatica",
     "Quality": "Qualità",
-    "Mbit/s: higher is sharper but uses more bandwidth": "Mbit/s: più alto = più nitido, più banda",
     "Touch and S Pen": "Touch e S Pen",
     "Sign on Tablet": "Firma sul tablet",
     "Ready in the background": "Pronto in background",
@@ -31,8 +27,6 @@ _IT = {
     "Open Second Screen from here": "Apri Second Screen da qui",
     "Uses adb: needs wireless debugging on the tablet": "Usa adb: serve il debug wireless sul tablet",
     "adb is not available": "adb non è disponibile",
-    "Language": "Lingua",
-    "System": "Sistema",
     "Log": "Registro",
     # Notifications and background
     "Tablet connected": "Tablet collegato",
@@ -41,7 +35,7 @@ _IT = {
     # Signing
     "Cancel": "Annulla",
     "Done": "Fatto",
-    "Undo": "Annulla tratto",
+    "Undo": "Annulla",
     "Clear page": "Pulisci pagina",
     "My signature": "La mia firma",
     "My signatures": "Le mie firme",
@@ -119,11 +113,6 @@ _IT = {
     "Forget": "Dimentica",
     "Paired tablets": "Tablet abbinati",
     "Forget {tablet}?": "Dimenticare {tablet}?",
-    "The S Pen has no pressure: sudo usermod -aG plus-one $USER, then log in again":
-        "La S Pen non ha la pressione: sudo usermod -aG plus-one $USER, poi rientra nella sessione",
-    "Log out and back in for the S Pen's pressure": "Esci e rientra nella sessione per la pressione della S Pen",
-    "Without access to /dev/uhid the S Pen works as a mouse, without pressure":
-        "Senza accesso a /dev/uhid la S Pen funziona come un mouse, senza pressione",
     "Signed {count} PDFs": "{count} PDF firmati",
     "Update Plus One": "Aggiorna Plus One",
     "The app on the tablet and Plus One on this PC are different versions: signing with Second Screen instead":
@@ -173,19 +162,17 @@ _IT = {
     "Samsung's Second Screen": "Second Screen di Samsung",
     "{name}: paused while Plus One is not on its screen": "{name}: in pausa finché Plus One non è sul suo schermo",
     "The tablet closed the desktop": "Il tablet ha chiuso il desktop",
+    "The tablet is no longer reachable": "Il tablet non è più raggiungibile",
+    "The desktop stopped: {error}": "Il desktop si è fermato: {error}",
     "The tablet did not answer: open Second Screen on it and connect again":
         "Il tablet non ha risposto: apri Second Screen e collega di nuovo",
     "Connecting to {name}…": "Collegamento a {name}…",
     "The tablet is not answering: close and reopen Second Screen":
         "Il tablet non risponde: chiudi e riapri Second Screen",
     # 0.6: pairing from the window, the tablet in use
-    "Preferences": "Preferenze",
     "About Plus One": "Informazioni su Plus One",
-    "Main menu": "Menu principale",
     "Pair a tablet": "Abbina un tablet",
     "No tablet": "Nessun tablet",
-    "Pair your tablet to use it as a second screen and to sign PDFs on it.":
-        "Abbina il tuo tablet per usarlo come secondo schermo e per firmarci i PDF.",
     "Choose the tablet": "Scegli il tablet",
     "Use as second screen": "Usa come secondo schermo",
     "Stop": "Interrompi",
@@ -220,9 +207,6 @@ _IT = {
     "On the tablet, another app is using the camera": "Sul tablet un'altra app sta usando la fotocamera",
     "On the tablet, another app is using the microphone": "Sul tablet un'altra app sta usando il microfono",
     "Camera": "Fotocamera",
-    "Camera and microphone": "Fotocamera e microfono",
-    "The tablet's microphone, as a microphone for this PC's programs (switched on in the window).":
-        "Il microfono del tablet, come microfono per i programmi di questo PC (si accende nella finestra).",
     "Noise reduction": "Riduzione del rumore",
     "Off": "Spenta",
     "Light, on the tablet": "Leggera, sul tablet",
@@ -231,15 +215,11 @@ _IT = {
         "La neurale toglie più rumore della stanza, con circa mezzo core del processore",
     "Neural needs DeepFilterNet's plugin in ~/.ladspa: light until then":
         "La neurale richiede il plugin di DeepFilterNet in ~/.ladspa: fino ad allora, leggera",
-    "The tablet's camera, as a webcam for this PC's programs (switched on in the window).":
-        "La fotocamera del tablet, come webcam per i programmi di questo PC (si attiva dalla finestra).",
     "Front": "Frontale",
     "Back": "Posteriore",
     "Picture": "Immagine",
     "1080p takes about twice the bandwidth. A change waits until no program uses the camera":
         "1080p usa circa il doppio della banda. Un cambio attende che nessun programma usi la fotocamera",
-    "On your network": "Sulla tua rete",
-    "Not on your network now": "Ora non è sulla tua rete",
     "Pair another tablet…": "Abbina un altro tablet…",
     "With Plus One on your Wi-Fi": "Con Plus One sulla tua Wi-Fi",
     "Not there? Open Plus One on the tablet, on the same Wi-Fi as this PC.":
@@ -265,7 +245,6 @@ _IT = {
     "For weak Wi-Fi": "Per Wi-Fi debole",
     "Sharper text takes more of the Wi-Fi": "Il testo più nitido usa più Wi-Fi",
     "Second screen": "Secondo schermo",
-    "Advanced": "Avanzate",
     "Without Plus One's pen helper (the .deb installs it) the S Pen works as a mouse, without pressure":
         "Senza l'aiutante di Plus One per la penna (lo installa il .deb) la S Pen funziona come un mouse, "
         "senza pressione",
@@ -282,7 +261,6 @@ _IT = {
     "No tablet paired": "Nessun tablet abbinato",
     "To use it again, pair it again: both screens show a code.":
         "Per usarlo di nuovo, abbinalo di nuovo: entrambi gli schermi mostreranno un codice.",
-    "Screen": "Schermo",
     "Signing": "Firma",
     "General": "Generale",
     "In Files and Open With, for PDFs": "In File e Apri con, per i PDF",

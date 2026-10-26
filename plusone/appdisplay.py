@@ -10,6 +10,7 @@ carry the time they were captured, and pings match the two clocks.
 import argparse
 import collections
 import os
+import select
 import socket
 import struct
 import threading
@@ -35,6 +36,8 @@ PEN_SAMPLE = 9                  # the S Pen's report after its ID (DisplayInput.
 TOUCH_MAX = 65535
 MAX_FINGERS = 10
 INPUT_SILENCE = 0.4  # seconds: the app repeats what touches every 0.1 s; quiet this long, all is lifted
+IDLE_WAIT = 0.25     # seconds the listener sleeps while nothing touches (stop() waits as long)
+STATS_EVERY = 30     # the app's reports (one a second) logged: one in so many, and each with a loss
 # Two fingers tapped together are the right button: a first finger waits
 # this long for a second before it goes down on the desktop; both lifted
 # within TAP_TIME, having moved less than TAP_MOVE of the screen, click.
@@ -177,6 +180,11 @@ class Input:
             self.pen.report(report)
         self.pen_last = report if report[1] & pen.IN_RANGE else None
 
+    def busy(self):
+        """Whether check() has something to look after: a finger down or
+        waiting, the pen near."""
+        return bool(self.down) or self.waiting is not None or self.pen_last is not None
+
     def check(self):
         """Every few ms: a first finger waited long enough for a second; and
         nothing heard for a while, whatever touches is lifted (the app's last
@@ -206,11 +214,13 @@ class Channel:
     """The session's UDP socket, sealed both ways."""
 
     def __init__(self, key):
-        # Here, not at the top: the preferences use this module's sizes
+        # Here, not at the top: the window uses this module's sizes
         # where python3-cryptography may be missing (from the sources).
         from cryptography.hazmat.primitives.ciphers.aead import AESGCM
         self.aead = AESGCM(key)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Room for a keyframe's packets at once (as much of it as the kernel
+        # allows: net.core.wmem_max; past it, sending waits for the Wi-Fi).
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 << 20)
         self.sock.bind(("0.0.0.0", 0))
         self.port = self.sock.getsockname()[1]
@@ -232,11 +242,14 @@ class Channel:
                 log("app display: cannot send:", e.strerror)
 
     def receive(self, timeout):
-        """A body from the app, or None (nothing in time, or not the app's)."""
-        self.sock.settimeout(timeout)
+        """A body from the app, or None (nothing in time, or not the app's).
+        The socket stays blocking: a timeout on it would be the streaming
+        thread's too, and a frame's tail dropped when the buffer is full."""
         try:
+            if not select.select([self.sock], [], [], timeout)[0]:
+                return None
             packet, address = self.sock.recvfrom(2048)
-        except (socket.timeout, OSError):
+        except (OSError, ValueError):  # closed
             return None
         if address[0] != self.app[0] or len(packet) < NONCE.size + 17:
             return None
@@ -258,13 +271,15 @@ class AppStreamer:
     """The virtual monitor (or a test pattern), encoded, to the app."""
 
     def __init__(self, source, channel, width, height, fps, bitrate, encoder, on_stats=None, input=None,
-                 on_visible=None, preview=False):
+                 on_visible=None, preview=False, on_error=None):
         """input: an Input for the fingers and the pen, or None.
         on_visible(shown): from the listening thread, when the app starts or
-        stops showing the desktop (left for another app, its screen off)."""
+        stops showing the desktop (left for another app, its screen off).
+        on_error(message): on the main loop, if the pipeline fails."""
         self.channel = channel
         self.on_stats = on_stats or (lambda stats: None)
         self.on_visible = on_visible or (lambda shown: None)
+        self.on_error = on_error or (lambda message: None)
         self.input = input
         self.shown = True
         if source == "test":
@@ -291,7 +306,7 @@ class AppStreamer:
             f"video/x-h264,stream-format=byte-stream,alignment=au ! "
             f"appsink name=out emit-signals=true sync=false async=false max-buffers=0")
         enc = self.pipeline.get_by_name("enc")
-        media.Streamer._cap_keyframes(enc, bitrate, fps)
+        media.cap_keyframes(enc, bitrate, fps)
         # When each frame going into the encoder was captured, in order: one
         # comes out per one in (no B frames), and a flush drops those held.
         # (Its output timestamps could not be traced back after a flush.)
@@ -301,6 +316,9 @@ class AppStreamer:
         self._in_probe = self._in_pad.add_probe(Gst.PadProbeType.BUFFER, self._frame_in)
         self._sink = self.pipeline.get_by_name("out")
         self._handler = self._sink.connect("new-sample", self._send)
+        bus = self.pipeline.get_bus()
+        bus.add_signal_watch()
+        self._bus_handler = bus.connect("message::error", self._failed)
         self._frame = 0
         self._last_keyframe = 0.0
         self._encoded = []  # ms from capture to sent, since the last stats
@@ -319,8 +337,16 @@ class AppStreamer:
             self.input.close()
         self.pipeline.set_state(Gst.State.NULL)
         self._sink.disconnect(self._handler)
+        bus = self.pipeline.get_bus()
+        bus.disconnect(self._bus_handler)
+        bus.remove_signal_watch()
         self.keyframes.remove()
         self._in_pad.remove_probe(self._in_probe)
+
+    def _failed(self, _bus, message):
+        error, debug = message.parse_error()
+        log("app display: pipeline error:", error.message, debug or "")
+        self.on_error(f"{message.src.get_name()}: {error.message}")
 
     def _frame_in(self, pad, info):
         # pipewiresrc and a live test source stamp buffers with the running
@@ -353,7 +379,10 @@ class AppStreamer:
 
     def _listen(self):
         while self._running:
-            body = self.channel.receive(0.02)  # Input.check(): a first finger waits 80 ms at most
+            # Input.check() every 20 ms while something touches or waits (a
+            # first finger waits 80 ms at most for a second); else seldom.
+            busy = self.input is not None and self.input.busy()
+            body = self.channel.receive(0.02 if busy else IDLE_WAIT)
             if self.input:
                 self.input.check()
             if not body:
@@ -427,6 +456,7 @@ class AppDisplay:
         self.channel = self.monitor = self.streamer = self.sock = None
         self.tablet_size = None  # what the app said its screen is
         self.started = False
+        self._reports = 0
         self._stopped = threading.Event()
 
     def start(self):
@@ -497,7 +527,8 @@ class AppDisplay:
             self._stream("test")
             return
         from .display import VirtualMonitor
-        self.monitor = VirtualMonitor(on_ready=self._stream)
+        self.monitor = VirtualMonitor(on_ready=self._stream,
+                                      on_closed=lambda: self._ended(RuntimeError("the screen sharing was stopped")))
         try:
             self.monitor.start()
         except GLib.Error as e:
@@ -514,10 +545,11 @@ class AppDisplay:
         try:
             self.streamer = AppStreamer(source, self.channel, width, height, fps,
                                         bitrate_for(self.bitrate, (width, height)), self.encoder,
-                                        on_stats=lambda stats: log("app display:", describe(stats)),
+                                        on_stats=self._stats,
                                         input=touch,
                                         on_visible=lambda shown: GLib.idle_add(once(self.on_paused, not shown)),
-                                        preview=self.preview)
+                                        preview=self.preview,
+                                        on_error=lambda message: self._ended(RuntimeError(message)))
             self.streamer.start()
         except Exception as e:  # noqa: BLE001 - said, not left half-started
             self._ended(e)
@@ -526,6 +558,12 @@ class AppDisplay:
         if self.monitor is not None and scale_for((width, height)) != 1:
             GLib.timeout_add(300, self._scale, 5)
         self.on_started(self.mode, self.tablet_size)
+
+    def _stats(self, stats):
+        """From the listening thread: the app's report of the last second."""
+        self._reports += 1
+        if stats["lost"] or self._reports % STATS_EVERY == 1:
+            log("app display:", describe(stats))
 
     def _scale(self, tries):
         """The virtual monitor appears in the display configuration a

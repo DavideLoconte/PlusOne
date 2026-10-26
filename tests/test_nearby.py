@@ -3,7 +3,7 @@ import base64
 
 from gi.repository import GLib
 
-from plusone.nearby import BROWSER, KDE_CONNECT, QUICK_SHARE, Nearby, tablet_name
+from plusone.nearby import BROWSER, COMPANION, KDE_CONNECT, QUICK_SHARE, RETRIES, Nearby, tablet_name
 
 
 def quick_share(first_byte, name=None):
@@ -81,6 +81,22 @@ def test_a_tablet_that_stops_answering_is_gone():
     nearby._recheck()
     nearby._resolved(nearby.bus, GLib.Error("Timeout reached"), tablet)
     assert not nearby.present() and changes == [True, False]
+
+
+def test_the_app_stays_through_one_lost_answer():
+    # A resolve that times out once (Wi-Fi power saving) asks again; the app
+    # (and the tablet's speakers with it) goes only once every retry failed.
+    nearby, changes = watching()
+    app = (3, 0, "Plus One on Tab", COMPANION, "local")
+    announce(nearby, "ItemNew", app)
+    nearby._resolved(nearby.bus, reply(app, [b"name=Tab", b"id=00ff"]), app)
+    assert app in nearby.companions and nearby.present()
+    said = list(changes)
+    for _ in RETRIES:
+        nearby._resolved(nearby.bus, GLib.Error("Timeout reached"), app)
+        assert app in nearby.companions and changes == said
+    nearby._resolved(nearby.bus, GLib.Error("Timeout reached"), app)
+    assert app not in nearby.companions and not nearby.present()
 
 
 def test_without_avahi_there_is_no_telling():

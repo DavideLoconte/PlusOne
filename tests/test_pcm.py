@@ -53,3 +53,26 @@ def test_an_answer_without_the_app_s_address_or_a_port_is_refused():
             sender.answer(json.dumps({"port": 70000}))
     finally:
         sender.close()
+
+
+def test_silence_stops_going_after_a_second_and_sound_goes_again():
+    # A paused player that keeps its stream: a second of zeros goes (the
+    # app plays them out), then nothing until there is sound again.
+    sender = pcm.PcmSender("audiotestsrc num-buffers=1")
+    sent = []
+    sender.channel.send = sent.append
+    try:
+        def push(data):
+            buffer = Gst.Buffer.new_wrapped(data)
+            sample = Gst.Sample.new(buffer, None, None, None)
+            sender._send(type("Sink", (), {"emit": lambda self, signal: sample})())
+
+        for _ in range(pcm.QUIET_AFTER + 50):
+            push(pcm.SILENCE)
+        assert len(sent) == pcm.QUIET_AFTER and sender.captured == pcm.QUIET_AFTER + 50
+        push(b"\x01\x00" * (pcm.BYTES // 2))
+        assert len(sent) == pcm.QUIET_AFTER + 1
+        _kind, number = pcm.HEADER.unpack_from(sent[-1])
+        assert number == pcm.QUIET_AFTER and sender.losses()[0] == pcm.QUIET_AFTER + 51
+    finally:
+        sender.close()

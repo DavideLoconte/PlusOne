@@ -189,6 +189,8 @@ class Nearby:
             self._failed[key] = failed
             if 0 < failed <= len(RETRIES):
                 GLib.timeout_add_seconds(RETRIES[failed - 1], once(self._retry, key))
+                if key in self.companions:
+                    return  # one answer lost is not the app gone (the tablet's speakers with it)
             self._companion(key, reply, txt)
             # The app runs on a tablet: that is a tablet on the network too.
             self._update(key, self.companions[key][2] if key in self.companions else None)

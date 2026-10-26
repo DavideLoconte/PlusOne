@@ -186,7 +186,7 @@ Tablet*, or launch *Sign on Tablet* from the app grid and pick a file). Files
 offers it while a tablet is on your network or connected: Plus One sees it
 when the tablet announces itself, which Android's Quick Share and KDE Connect
 both do. **Signing → Sign on Tablet** in the Plus One window
-turns it off everywhere. The PDF goes to the tablet in use only, and only to
+turns that entry off (in Files, Open With and the app grid). The PDF goes to the tablet in use only, and only to
 a paired one; **Sign a PDF…** in the window does the same.
 
 1. If the tablet is not connected yet, Plus One connects it: tap **Second
@@ -325,7 +325,8 @@ One)*). The output is there only while the tablet's app is on the network:
 away, GNOME plays on the PC again. While a program plays, the sound goes as
 it is, 16-bit stereo PCM at 48 kHz in encrypted packets of 5 ms (1.5
 Mbit/s), and the app plays it as the tablet's own players do, with the
-tablet's media volume; nothing goes while nothing plays. On the tablet,
+tablet's media volume; nothing goes while nothing plays, nor after a
+second of silence (a paused player that keeps its stream open). On the tablet,
 **For the PC → Speakers** in Plus One's app (on at first) lets the PC use
 them.
 

@@ -1214,7 +1214,7 @@ class SignWindow(Adw.ApplicationWindow):
         box.append(frame)
         popover = Gtk.Popover(child=box)
         # Picking the pen means drawing again.
-        popover.connect("show", lambda p: self.eraser.set_active(False))
+        popover.connect("show", lambda p: (self.eraser.set_active(False), self.lasso.set_active(False)))
         return Gtk.MenuButton(child=self.pen_swatch, popover=popover, tooltip_text=_("Pen"),
                               css_classes=["flat"])
 
@@ -1284,7 +1284,8 @@ class SignWindow(Adw.ApplicationWindow):
         return self.eraser.get_active()
 
     def toast(self, text, timeout=4):
-        self.toasts.add_toast(Adw.Toast(title=text, timeout=timeout))
+        # Plain text: an error may carry a path with "&" or "<" in it.
+        self.toasts.add_toast(Adw.Toast(title=GLib.markup_escape_text(text), timeout=timeout))
 
     # -- pages and marks -------------------------------------------------------
     def page(self):

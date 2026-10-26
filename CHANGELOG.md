@@ -1,5 +1,54 @@
 # Changelog
 
+## Unreleased
+
+From a review of the whole code, bugs and security.
+
+- Fixed: the webcam showed no black while the tablet was away or
+  refusing (and froze on the last picture when its session dropped): its
+  black frames' timer and the in-use one were the same.
+- Fixed: a tablet gone from the network (off, out of range) left the
+  desktop in the app "connected" for about 15 minutes, and the speakers
+  sending into nothing: a session's link now gives up after 20 s without
+  the tablet acknowledging.
+- Fixed: an encoder error, or the screen sharing stopped from GNOME's
+  indicator, left the tablet on a frozen desktop; the session ends and
+  says why (the tablet gone, or the error).
+- Fixed: a large keyframe (HiDPI sizes) could lose its tail when the send
+  buffer filled; the tablet asked for it again and again.
+- Fixed: the tablet's screen going off and on popped "Tablet connected"
+  each time.
+- Fixed: with the speakers on (and the background off), closing the
+  window quit Plus One, and the speakers went with it.
+- Fixed: one mDNS answer lost took the speakers away for a moment.
+- Fixed: Ctrl+Q while signing lost the marks without asking.
+- Fixed: pairing another tablet while connected switched the tablet in
+  use mid-session.
+- Fixed: the window's "Ready in the background" did not follow the Quick
+  Settings toggle; the tablet's sizes appeared only after reopening it;
+  a missing adb cleared the "Open Second Screen from here" choice; the
+  speakers' "needs" text was the microphone's; a program name with "&"
+  did not show.
+- Fixed: turning off "Sign on Tablet" (Files' entry) also stopped signing
+  in the tablet's app.
+- Fixed: picking the pen in the signing window left Select on.
+- Signature thumbnails on white, readable in the dark style.
+- Less while idle: digital silence (a paused player keeping its stream)
+  is not sent to the speakers after a second; the desktop's listener
+  wakes 4 times a second instead of 50 while nothing touches; the app
+  pings every 10 s while the desktop is hidden, and the stats are logged
+  every 30 s.
+- The app: a newer desktop session ends the one before (its PC told);
+  a closing desktop screen no longer pauses or ends the next session;
+  the decoder is made again after an error, and no keyframes are asked
+  for while there is none; the desktop is letterboxed when Android 16
+  turns a large screen's app to portrait; camera and microphone allowed
+  while the desktop is in front without "display over other apps".
+- Security hardening in the app: connections from the tablet itself
+  (another app posing as a PC) are closed; Pair works a moment after the
+  question is in front, not under a tap meant for something else; the
+  PC's name is shown without control or direction-changing characters.
+
 ## 0.7.0
 
 The desktop in Plus One's app, and the tablet's speakers.

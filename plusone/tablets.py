@@ -62,7 +62,7 @@ class Tablets:
 
     def screen_seen(self, screen):
         """The tablet's app said its screen is (w, h): remembered for the
-        preferences' sizes."""
+        sizes the Second screen page offers."""
         text = f"{max(screen)}x{min(screen)}"
         if self.settings.app_screen != text:
             self.settings.app_screen = text

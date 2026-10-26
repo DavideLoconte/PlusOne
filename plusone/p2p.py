@@ -115,8 +115,6 @@ class P2PLink:
         self._reset = False  # the Wi-Fi device was recreated while we looked
         self.client = nm_client()
         self.device = next(d for d in self.client.get_devices() if isinstance(d, NM.DeviceWifiP2P))
-        if isinstance(match, str):
-            match = [match]
         # A list (the tablet in use's address and name): exact. A string
         # (--peer): an address, or part of a name.
         self.exact = not isinstance(match, str)

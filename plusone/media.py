@@ -44,12 +44,6 @@ CAPTURE_FORMAT = "BGRA"
 # CPU it was +30% of a core), the others' by videoconvert.
 VA_CONVERT = "vapostproc ! video/x-raw(memory:VAMemory),format=NV12"
 CONVERT = {"va-lp": VA_CONVERT, "va": VA_CONVERT}
-# Mutter gives the virtual monitor the stream's max-framerate as its refresh
-# rate. At 60 Hz it skips frames that come a little early (a window drawing
-# at 60 fps reached the encoder at about 47), but asking for 120 is worse:
-# the stream then ran at up to 90 fps, which Second Screen (showing 60) queued,
-# so the delay grew, and it lost packets and asked for keyframes every few
-# seconds. Keep the monitor at the stream's rate.
 TS_PER_RTP = 7  # 7 x 188 bytes of MPEG-TS per RTP packet, as WFD sinks expect
 RTP_MP2T = 33
 # Pads a frame's last RTP packet to 7 TS packets, the size sinks always got
@@ -145,6 +139,16 @@ class Keyframes:
             self.probe = None
 
 
+def cap_keyframes(enc, bitrate, fps):
+    """Each encoder names its rate-control buffer differently; set the
+    ones this one has (kbit or milliseconds)."""
+    kbit, ms = int(bitrate / fps * VBV_FRAMES), int(1000 * VBV_FRAMES / fps)
+    for prop, value in (("vbv-buffer-size", kbit), ("cpb-size", kbit),
+                        ("cpb-length", ms), ("vbv-buf-capacity", ms)):
+        if enc.find_property(prop):
+            enc.set_property(prop, value)
+
+
 def pick_encoder(preferred="auto"):
     names = list(ENCODERS) if preferred == "auto" else [preferred]
     for name in names:
@@ -178,6 +182,13 @@ class Streamer:
         else:
             # Mutter only sends frames on damage; keepalive repeats the last
             # one so the sink keeps receiving data on a static screen.
+            # Mutter gives the virtual monitor the stream's max-framerate as
+            # its refresh rate. At 60 Hz it skips frames that come a little
+            # early (a window drawing at 60 fps reached the encoder at about
+            # 47), but asking for 120 is worse: the stream then ran at up to
+            # 90 fps, which Second Screen (showing 60) queued, so the delay
+            # grew, and it lost packets and asked for keyframes every few
+            # seconds. Keep the monitor at the stream's rate.
             video = (f"pipewiresrc path={source} do-timestamp=true always-copy=false keepalive-time=100 ! "
                      f"video/x-raw,format={CAPTURE_FORMAT},width={width},height={height},"
                      f"max-framerate={fps}/1")
@@ -193,7 +204,7 @@ class Streamer:
         self.sender = RtpSender(host, port, bind_port)
         self._sink = self.pipeline.get_by_name("out")
         self._sink_handler = self._sink.connect("new-sample", self._send)
-        self._cap_keyframes(self.pipeline.get_by_name("enc"), bitrate, fps)
+        cap_keyframes(self.pipeline.get_by_name("enc"), bitrate, fps)
         self.keyframes = Keyframes(self.pipeline.get_by_name("enc"))
         self._last_keyframe = 0.0
         # Encoded frames of the last seconds, (time, bytes, keyframe): when
@@ -242,16 +253,6 @@ class Streamer:
             pts = time.monotonic_ns()
         self.sender.send(data, pts)
         return Gst.FlowReturn.OK
-
-    @staticmethod
-    def _cap_keyframes(enc, bitrate, fps):
-        """Each encoder names its rate-control buffer differently; set the
-        ones this one has (kbit or milliseconds)."""
-        kbit, ms = int(bitrate / fps * VBV_FRAMES), int(1000 * VBV_FRAMES / fps)
-        for prop, value in (("vbv-buffer-size", kbit), ("cpb-size", kbit),
-                            ("cpb-length", ms), ("vbv-buf-capacity", ms)):
-            if enc.find_property(prop):
-                enc.set_property(prop, value)
 
     def _count(self, _pad, info):
         buf = info.get_buffer()

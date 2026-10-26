@@ -42,6 +42,7 @@ PAIRING_TIMEOUT = 120        # seconds for the user to compare the codes
 IO_TIMEOUT = 30              # seconds for a message to go through
 PING_EVERY = 15              # seconds of silence while the user signs before asking "still there?"
 SILENT_FOR = 45              # seconds of silence after which the link is taken for dead
+LINK_TIMEOUT = 20            # seconds a session's link waits for the tablet to acknowledge
 MAX_HEADER = 16 * 1024 * 1024  # the marks of a long document (the app takes as much)
 UNPAIRED_HEADER = 4096         # hello and pairing: small, from an app not yet known
 HANDSHAKE_FOR = 20             # seconds for TLS, hello and pairing messages (not the user's answer)
@@ -191,9 +192,10 @@ class Impostor(PairingRefused):
 
 
 class Refused(Exception):
-    """The app did not let the PC have the camera or the microphone: the
-    reason, "off" (not let in the app), "permission" (not by Android),
-    "background" (it could not come to the front to start) or "unavailable"."""
+    """The app did not let the PC have the camera, the microphone, the
+    speakers or the screen: the reason, "off" (not let in the app),
+    "permission" (not by Android), "background" (it could not come to the
+    front to start) or "unavailable"."""
 
 
 class Lost(Exception):
@@ -508,9 +510,14 @@ def _wait(sock, wire, name, job, target, paired, on_opened, on_signatures, locat
 
 def open_link(targets, expect, paired=None):
     """(socket, wire) of a link to the paired tablet's app at targets (its
-    addresses), for the camera's or the microphone's WebRTC session (rtc.py)."""
+    addresses), held while a session lasts: the camera's, the microphone's,
+    the speakers' or the desktop's."""
     sock, wire, _name = _connect_any(targets, paired or Paired(), None, expect)
     sock.settimeout(IO_TIMEOUT)
+    # A tablet gone from the network (off, out of range) answers nothing, not
+    # even a reset: the pings then go unacknowledged, and the kernel gives the
+    # link up after LINK_TIMEOUT instead of TCP's own quarter of an hour.
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT, LINK_TIMEOUT * 1000)
     return sock, wire
 
 

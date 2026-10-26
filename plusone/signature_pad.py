@@ -33,7 +33,16 @@ def draw_eraser_icon(area, cr, width, height):
 
 
 def draw_thumb(cr, signature, width, height, color):
-    """The signature fitted into width x height, in the pen's colour."""
+    """The signature fitted into width x height, in the pen's colour, on
+    white (as on paper, and seen in the dark style too)."""
+    r = 4  # rounded, as the theme's cards
+    cr.new_sub_path()
+    for x, y, start in ((width - r, r, -math.pi / 2), (width - r, height - r, 0),
+                        (r, height - r, math.pi / 2), (r, r, math.pi)):
+        cr.arc(x, y, r, start, start + math.pi / 2)
+    cr.close_path()
+    cr.set_source_rgb(1, 1, 1)
+    cr.fill()
     strokes = signature["strokes"]
     tall = max((pt[1] for s in strokes for pt in s), default=0) or 0.01
     scale = min(width - 6, (height - 6) / tall)

@@ -106,7 +106,7 @@ def test_keyframe_cap_is_set_on_the_encoder():
     enc = Gst.ElementFactory.make("x264enc")
     if enc is None:
         pytest.skip("x264enc not installed")
-    media.Streamer._cap_keyframes(enc, 20000, 60)
+    media.cap_keyframes(enc, 20000, 60)
     assert enc.get_property("vbv-buf-capacity") == int(1000 * media.VBV_FRAMES / 60)
 
 

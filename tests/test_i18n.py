@@ -26,7 +26,7 @@ def strings_in(filename):
             found.add(args[0].value)
         if name == "_set_state" and len(args) > 1 and isinstance(args[1], ast.Constant):
             found.add(args[1].value)
-        if name == "_fail" and args and isinstance(args[0], ast.Constant):
+        if name in ("_fail", "stop") and args and isinstance(args[0], ast.Constant):
             found.add(args[0].value)
     return found
 
@@ -45,7 +45,8 @@ def app_constants():
 
 @pytest.mark.parametrize("text", sorted(
     (strings_in("gui.py") | strings_in("app.py") | strings_in("engine.py") | strings_in("sign.py")
-     | strings_in("signing.py") | strings_in("signature_pad.py") | strings_in("tablets.py") | app_constants()
+     | strings_in("signing.py") | strings_in("signature_pad.py") | strings_in("tablets.py") | strings_in("pdf.py")
+     | app_constants()
      | {NOT_ANSWERING})
     - i18n.NEUTRAL))
 def test_has_italian(text):

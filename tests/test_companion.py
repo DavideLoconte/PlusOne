@@ -307,6 +307,22 @@ def test_pairing_a_tablet_paired_already_asks_nothing(tmp_path, pc):
     assert asked == []
 
 
+def test_a_sessions_link_gives_up_on_a_tablet_gone_from_the_network(tmp_path, pc):
+    # Not TCP's quarter of an hour of retries: the kernel drops the link
+    # once the pings go unacknowledged for LINK_TIMEOUT.
+    _path, paired = pc
+    held = threading.Event()
+    app = FakeApp(tmp_path, [lambda wire: held.wait(5)])
+    fp = companion.fingerprint(app.der)
+    paired.add(fp, "Tab")
+    sock, _wire = companion.open_link([app.target], fp[:16], paired)
+    try:
+        assert sock.getsockopt(socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT) == companion.LINK_TIMEOUT * 1000
+    finally:
+        held.set()
+        sock.close()
+
+
 def says_bye(wire):
     assert receive(wire)[0] == {"type": "bye"}
 

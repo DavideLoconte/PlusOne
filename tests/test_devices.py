@@ -401,6 +401,25 @@ def test_a_dropped_session_shows_black_not_the_last_picture(monkeypatch):
     assert len(pushed) == 2
 
 
+def test_a_program_opening_the_camera_keeps_black_coming():
+    # Black's timer and the in-use one are two: a program opening the
+    # device (which starts the in-use one) must not stop black.
+    camera = devices.Camera(FakeApp())
+    camera.frames = [types.SimpleNamespace(emit=lambda signal, buffer: None)]
+    camera.opened = [types.SimpleNamespace(path="/dev/video9", count=2, baseline=1)]
+    camera._black_frame = bytes((16, 128)) * 4
+    try:
+        camera._pace(False)
+        black = camera._black_timer
+        camera._opened(None)  # a program reads: black 30 times a second
+        assert camera._black_timer and camera._black_timer != black and camera._timer
+        assert GLib.MainContext.default().find_source_by_id(camera._black_timer)
+    finally:
+        for timer in (camera._black_timer, camera._timer):
+            if timer:
+                GLib.source_remove(timer)
+
+
 def test_a_stale_microphone_is_removed(monkeypatch):
     ran = []
 

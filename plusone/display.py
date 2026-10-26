@@ -28,13 +28,16 @@ def virtual_monitor_edid():
 
 
 class VirtualMonitor:
-    def __init__(self, on_ready):
-        """on_ready(node_id) runs on the GLib loop once PipeWire has the stream."""
+    def __init__(self, on_ready, on_closed=None):
+        """on_ready(node_id) runs on the GLib loop once PipeWire has the stream;
+        on_closed() if the session ends without stop() (GNOME's screen
+        sharing indicator stopped it, say)."""
         self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         self.on_ready = on_ready
+        self.on_closed = on_closed or (lambda: None)
         self.rd_session = None
         self.stream = None
-        self._sub = None
+        self._sub = self._closed_sub = None
 
     def _call(self, name, path, iface, method, args=None, rtype=None):
         return self.bus.call_sync(name, path, iface, method, args,
@@ -59,8 +62,24 @@ class VirtualMonitor:
         self._sub = self.bus.signal_subscribe(SC_NAME, SC_NAME + ".Stream", "PipeWireStreamAdded",
                                               self.stream, None, Gio.DBusSignalFlags.NONE,
                                               self._stream_added)
+        self._closed_sub = self.bus.signal_subscribe(RD_NAME, RD_NAME + ".Session", "Closed",
+                                                     self.rd_session, None, Gio.DBusSignalFlags.NONE,
+                                                     self._closed)
         self._call(RD_NAME, self.rd_session, RD_NAME + ".Session", "Start")
         log("virtual monitor session started")
+
+    def _closed(self, *_args):
+        if self._closed_sub is None:
+            return  # stop()'s own
+        log("virtual monitor session closed by GNOME")
+        self._unsubscribe_closed()
+        self.rd_session = None  # gone already: nothing to stop
+        self.on_closed()
+
+    def _unsubscribe_closed(self):
+        if self._closed_sub is not None:
+            self.bus.signal_unsubscribe(self._closed_sub)
+            self._closed_sub = None
 
     def _stream_added(self, conn, sender, path, iface, signal, params):
         node = params.unpack()[0]
@@ -68,6 +87,7 @@ class VirtualMonitor:
         self.on_ready(node)
 
     def stop(self):
+        self._unsubscribe_closed()
         if self.rd_session:
             try:
                 self._call(RD_NAME, self.rd_session, RD_NAME + ".Session", "Stop")

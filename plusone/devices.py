@@ -1,9 +1,11 @@
-"""The tablet's camera and microphone as the PC's own: a webcam ("Plus One
-tablet camera", v4l2loopback's devices) and a microphone ("Tablet
-microphone", a virtual PipeWire source Plus One feeds), each switched on in
+"""The tablet's camera, microphone and speakers as the PC's own: a webcam
+("Plus One tablet camera", v4l2loopback's devices), a microphone ("Tablet
+microphone", a virtual PipeWire source Plus One feeds) and an output
+("Tablet speakers", a virtual sink Plus One plays from), each switched on in
 the window. Nothing goes over the network until a program on the PC uses one:
-then the tablet in use is asked for it over WebRTC (rtc.py), and lets go of
-it when the program does.
+then the tablet in use is asked for it, over WebRTC (rtc.py) for the camera
+and the microphone, as plain PCM (pcm.py) for the speakers, and lets go of it
+when the program does.
 """
 import ctypes
 import functools
@@ -121,29 +123,32 @@ def webrtc():
 
 
 class Feed:
-    """One device's WebRTC session with the tablet in use, on a thread of its
-    own while wanted, made again when it drops: receiver() makes the
-    device's rtc.Receiver, whose offer goes over the paired link with the
-    request; on_ready() once the app answered; on_problem(reason: "off",
-    "permission", "background", "unavailable", "away")."""
+    """One device's session with the tablet in use, on a thread of its own
+    while wanted, made again when it drops: receiver() makes the device's
+    rtc.Receiver (or pcm.PcmSender), whose offer goes over the paired link
+    with the request; on_ready() once the app answered; on_problem(reason:
+    "off", "permission", "background", "unavailable", "away")."""
 
     def __init__(self, request, where, receiver, on_ready, on_problem):
         self.request = request
         self.where = where  # () -> (addresses, app id) of the tablet in use, or None
         self.receiver, self.on_ready, self.on_problem = receiver, on_ready, on_problem
         self._wanted = threading.Event()
+        self._unwanted = threading.Event()  # its opposite, to wait on
         self._sock = None
         self._thread = None
 
     def start(self):
         if self._wanted.is_set():
             return
+        self._unwanted.clear()
         self._wanted.set()
         self._thread = threading.Thread(target=self._run, name=f"plusone-{self.request['type']}", daemon=True)
         self._thread.start()
 
     def stop(self):
         self._wanted.clear()
+        self._unwanted.set()
         sock, self._sock = self._sock, None
         if sock is not None:
             try:
@@ -152,9 +157,7 @@ class Feed:
                 pass
 
     def _wait(self, seconds):
-        end = time.monotonic() + seconds
-        while self._wanted.is_set() and time.monotonic() < end:
-            time.sleep(0.1)
+        self._unwanted.wait(seconds)
 
     def _run(self):
         kind = self.request["type"]
@@ -439,7 +442,7 @@ class Camera(Device):
         super().__init__(app, "camera")
         self.writers, self.opened = [], []
         self.frames = []
-        self._timer = None
+        self._black_timer = None  # (Device's _timer is the in-use one)
         self._fast = None  # the timer's pace: a program reading, or not
         self._live_at = 0.0  # monotonic time of the tablet's last frame
         self.restart_when_idle = False  # Devices.restart_camera
@@ -508,15 +511,15 @@ class Camera(Device):
         if fast == self._fast:
             return
         self._fast = fast
-        if self._timer:
-            GLib.source_remove(self._timer)
-        self._timer = GLib.timeout_add(1000 // FPS if fast else 1000, self._black)
+        if self._black_timer:
+            GLib.source_remove(self._black_timer)
+        self._black_timer = GLib.timeout_add(1000 // FPS if fast else 1000, self._black)
 
     def disable(self):
         self.stop_feed()
-        if self._timer:
-            GLib.source_remove(self._timer)
-        self._timer = self._fast = None
+        if self._black_timer:
+            GLib.source_remove(self._black_timer)
+        self._black_timer = self._fast = None
         for opened in self.opened:
             opened.close()
         for writer in self.writers:

@@ -12,7 +12,7 @@ b x + d y + f, as ink.transform takes them.
 """
 import math
 
-from .ink import bounds, side, transform
+from .ink import bounds, side, text_corners, transform
 from .pdf import Stroke, Text
 
 BLUE = (11 / 255, 153 / 255, 1.0)
@@ -129,7 +129,6 @@ def picks(mark, polygon):
         return (any(inside(polygon, x, y) for x, y in pts)
                 or any(_crosses(polygon, p, q) for p, q in zip(pts, pts[1:])))
     if isinstance(mark, Text):
-        from .ink import text_corners
         corners = text_corners(mark)
         return (any(inside(polygon, x, y) for x, y in corners)
                 or any(inside(corners, x, y) for x, y in polygon)

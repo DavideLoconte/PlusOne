@@ -232,6 +232,18 @@ def test_the_tablet_ending_it_ends_it(monkeypatch):
     shown.callbacks["on_started"]((1920, 1200, 60))
     shown.callbacks["on_ended"](EOFError(), True)
     assert second == [] and controller.state == State.IDLE and not controller.running
+    assert controller.detail[0] == "The tablet closed the desktop"
+
+
+def test_why_the_desktop_in_the_app_ended_is_said(monkeypatch):
+    for error, said in ((TimeoutError(110, "timed out"), "The tablet is no longer reachable"),
+                        (RuntimeError("enc: failed"), "The desktop stopped: {error}")):
+        controller, _second = app_controller(monkeypatch)
+        controller.start()
+        shown = FakeAppDisplay.made[0]
+        shown.callbacks["on_started"]((1920, 1200, 60))
+        shown.callbacks["on_ended"](error, True)
+        assert controller.state == State.IDLE and controller.detail[0] == said
 
 
 def test_second_screen_without_the_app_or_when_chosen(monkeypatch):

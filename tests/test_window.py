@@ -233,3 +233,49 @@ def test_the_quick_settings_toggle_is_offered_once(monkeypatch, tmp_path):
     assert turned == [True]
     win._offer_toggle(False)  # asked once only
     assert len(toasts) == 1
+
+
+def test_the_speakers_say_what_they_need():
+    # Their "setup" is python3-cryptography too, not the microphone's text.
+    assert "python3-cryptography" in gui.device_status("speakers", "setup")
+    assert "python3-cryptography" not in gui.device_status("microphone", "setup")
+
+
+def test_device_texts_are_not_markup(monkeypatch, tmp_path):
+    # A program named "A&B" or the reload hint's "&&" must show, not fail to parse.
+    win, app = make(monkeypatch, tmp_path, [(KITCHEN, "Kitchen")])
+    app.devices.speakers.state, app.devices.speakers.users = "in use", ["Tom & Jerry <3>"]
+    win._refresh()
+    row = win.device_rows["speakers"]
+    assert not row.get_use_markup() and row.get_subtitle() == "Playing Tom & Jerry <3>"
+
+
+def test_what_changes_elsewhere_shows(monkeypatch, tmp_path):
+    win, app = make(monkeypatch, tmp_path, [(KITCHEN, "Kitchen")])
+    app.settings.background = not app.settings.background  # Quick Settings' toggle
+    win._refresh()
+    assert win.background_row.get_active() == app.settings.background
+    # The first desktop through the app: its sizes offered from then on.
+    assert win.mode_row.get_model().get_n_items() == 1
+    app.settings.app_screen = "2880x1800"
+    win._refresh()
+    assert win.mode_row.get_model().get_n_items() > 1
+
+
+def test_adb_missing_keeps_the_choice(monkeypatch, tmp_path):
+    win, app = make(monkeypatch, tmp_path, [(KITCHEN, "Kitchen")])
+    win.has_adb = False
+    app.settings.use_adb = True
+    win.quality_row.set_selected(1)
+    assert app.settings.use_adb
+
+
+def test_pairing_another_tablet_while_connected_keeps_the_one_in_use(monkeypatch, tmp_path):
+    _win, app = make(monkeypatch, tmp_path, [(KITCHEN, "Kitchen")])
+    app.controller.running = True
+    new = "cccc" + "0" * 60
+    app.tablets.paired.add(new, "New")
+    paired = []
+    dialog = gui.PairDialog(app, on_paired=paired.append)
+    dialog._done(dialog.attempt, new, "New")
+    assert paired == ["New"] and app.settings.tablet != new

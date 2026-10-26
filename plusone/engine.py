@@ -44,7 +44,6 @@ class Settings:
     # The app (not the engine): keep running without a window and start at
     # login, so the Quick Settings toggle connects at once.
     background: bool = True
-    language: str = "auto"
     # "Sign on Tablet" in Files and Open With.
     sign_on_tablet: bool = True
     # The paired tablet in use (its app's certificate fingerprint, tablets.py):
@@ -196,8 +195,8 @@ class Controller:
         else:
             self._wait_for_tablet(CONNECT_WINDOW)
 
-    def stop(self, reason=""):
-        """reason: English template shown with the idle state (see i18n)."""
+    def stop(self, reason="", **args):
+        """reason: English template shown with the idle state (see i18n), formatted with args."""
         if not self._running:
             return
         with self._lock:
@@ -212,7 +211,7 @@ class Controller:
                 pass
             self.srv.close()
             self.srv = None
-        self._set_state(State.IDLE, reason)
+        self._set_state(State.IDLE, reason, **args)
 
     # -- the desktop in Plus One's app (appdisplay.py) -----------------------------
     def _start_app(self, tablet, targets):
@@ -243,7 +242,7 @@ class Controller:
             if generation == self._generation:
                 self.mode = mode
                 if screen:
-                    self.tablets.screen_seen(screen)  # the preferences offer its sizes
+                    self.tablets.screen_seen(screen)  # the window offers its sizes
                 self._set_state(State.STREAMING, "{name} · {width}×{height} @ {fps} Hz",
                                 name=tablet.name, width=mode[0], height=mode[1], fps=mode[2])
 
@@ -262,8 +261,13 @@ class Controller:
             self.app_display = None
             self.mode = None
             if was_started:
-                log("app display: the tablet ended it", repr(error) if error else "")
-                self.stop("The tablet closed the desktop")
+                log("app display: ended:", repr(error) if error else "")
+                if error is None or isinstance(error, EOFError):
+                    self.stop("The tablet closed the desktop")  # Back or Stop there
+                elif isinstance(error, OSError):
+                    self.stop("The tablet is no longer reachable")  # off, or off the network
+                else:
+                    self.stop("The desktop stopped: {error}", error=str(error))
             else:
                 log("app display: not through the app:", repr(error), "- Second Screen instead")
                 with self._lock:

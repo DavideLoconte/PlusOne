@@ -87,7 +87,7 @@ def load_settings(path=CONFIG):
             ok = type(value) is type(default)
         elif isinstance(default, int):
             ok = type(value) is int and value > 0
-        else:  # str or None
+        else:  # None by default: a string, or nothing
             ok = value is None or isinstance(value, str)
         if ok:
             kept[name] = value
@@ -229,17 +229,18 @@ class PlusOneApp(Adw.Application):
         self.log_lines = collections.deque(maxlen=400)
         add_log_handler(lambda line: GLib.idle_add(once(self._on_log, line)))
         self._held = False
+        self._notified = None  # the state the last notification was for
         self._registration = None
         for name, callback in (("connect", lambda *a: self.controller.start()),
                                ("disconnect", lambda *a: self.controller.stop()),
                                ("show", lambda *a: self.activate()),
                                ("pair", lambda *a: self._show_and_pair()),
-                               ("quit", lambda *a: self.quit())):
+                               ("quit", lambda *a: self._quit())):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", callback)
             self.add_action(action)
         self.signing = Signing(self)
-        self._device_states = {}  # the camera's and the microphone's, as last notified
+        self._device_states = {}  # the camera's, the microphone's and the speakers', as last notified
         self.devices = Devices(self)
 
     # -- GApplication ------------------------------------------------------
@@ -258,6 +259,15 @@ class PlusOneApp(Adw.Application):
         self.nearby.start()
         self.devices.apply()
         self._update_hold()
+
+    def _quit(self):
+        """Ctrl+Q, the extension's Quit: each signing window closed as by its
+        ✕ (a signature drawn is asked about, one being saved finishes), then
+        Plus One, unless one stayed."""
+        from .sign import SignWindow
+        for window in [w for w in self.get_windows() if isinstance(w, SignWindow)]:
+            window.close()
+        GLib.idle_add(once(lambda: any(isinstance(w, SignWindow) for w in self.get_windows()) or self.quit()))
 
     def do_shutdown(self):
         self.devices.shutdown()  # the microphone's source goes with Plus One
@@ -360,9 +370,9 @@ class PlusOneApp(Adw.Application):
     def _update_hold(self):
         # Stay without a window while connected, or always in background mode
         # (idle costs nothing: the radio is only used while connecting), or
-        # while the tablet's camera or microphone is the PC's.
+        # while the tablet's camera, microphone or speakers are the PC's.
         want = (self.settings.background or self.controller.running
-                or self.settings.camera or self.settings.microphone)
+                or self.settings.camera or self.settings.microphone or self.settings.speakers)
         if want and not self._held:
             self.hold()
         elif not want and self._held:
@@ -370,6 +380,11 @@ class PlusOneApp(Adw.Application):
         self._held = want
 
     def _notify(self, state, template):
+        # Paused and shown again (the tablet's screen off and on): still the
+        # same connection, not a banner each time.
+        again, self._notified = state == State.STREAMING == self._notified, state
+        if again:
+            return
         title, detail = self.status_text()
         if state == State.STREAMING:
             note = Gio.Notification.new(_("Tablet connected"))
@@ -401,6 +416,8 @@ class PlusOneApp(Adw.Application):
         set_autostart(enabled)
         self._update_hold()
         self._emit_properties()
+        for listener in list(self.listeners):  # the window's switch, if set from Quick Settings
+            listener()
 
     def use_tablet(self, fingerprint):
         """The paired tablet that gets the desktop and the PDFs from now on."""
