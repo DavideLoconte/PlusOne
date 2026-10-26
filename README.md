@@ -27,9 +27,10 @@ Through Plus One's small app on the tablet, or the <b>Second Screen</b> feature 
 - **Through Plus One's app, over your Wi-Fi.** With the app open on the
   tablet, the desktop goes to it: about 25 ms from the PC's screen to the
   tablet's decoder at 1920×1200@60 (Second Screen: about 50 ms to the glass),
-  encrypted, no Wi-Fi Direct, every sample of the pen; two fingers tapped
-  together are the right button. Without the app, Samsung's Second Screen as
-  before.
+  encrypted, no Wi-Fi Direct, every sample of the pen; a tap is a click,
+  two fingers tapped together the right button. The picture's bitrate
+  follows what the Wi-Fi takes, so a weak network makes it softer, not late.
+  Without the app, Samsung's Second Screen as before.
 - **Low latency.** 60 fps, hardware H.264 (Intel's low-power encoder first,
   then NVENC, VA-API) or x264.
 - **Touch and S Pen.** Fingers drive the desktop; the S Pen becomes a real Linux
@@ -150,7 +151,8 @@ forgets one.
 2. With Plus One's app on the tablet and on the same Wi-Fi, that is all: the
    app opens the desktop by itself, a new monitor to the right of your other
    screens (arrange it in *Settings → Displays*). Fingers and the S Pen work
-   on it; tap two fingers together for the right button.
+   on it: a tap clicks, two fingers tapped together are the right button,
+   and dragging, scrolling and pinching are touches.
 3. Without the app (or with *Second screen through: Samsung's Second Screen*
    in the preferences), swipe down on the tablet for quick settings and tap
    **Second screen**; a few seconds later the monitor appears.
@@ -348,7 +350,7 @@ system's language.
 
 | Setting | |
 |---|---|
-| Second screen → Quality | *Balanced* (20 Mbit/s at 1920×1200, the default), *Sharper text* (40) or *For weak Wi-Fi* (10). |
+| Second screen → Quality | *Balanced* (20 Mbit/s at 1920×1200, the default), *Sharper text* (40) or *For weak Wi-Fi* (10). Through the app that is the most: less while the network does not take it (frames lost, a queue growing), down to 1.5 Mbit/s. |
 | Second screen → Resolution | Through the app: *Automatic* (1920×1200 on a Tab S10 FE+) or the tablet's sizes at its proportions, from 2560 wide at scale 2 (sharp text). Through Second Screen: *Automatic* reads the tablet's preferred mode from its EDID, or a WFD mode. |
 | Second screen → Through | Plus One's app when it is there, or always Samsung's Second Screen. |
 | Second screen → Touch and S Pen | Forward finger touches and the pen from the tablet. |

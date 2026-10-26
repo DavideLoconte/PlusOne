@@ -2,8 +2,21 @@
 
 ## Unreleased
 
-From a review of the whole code, bugs and security.
+From a review of the whole code, bugs and security; and the desktop in
+the app on a weak Wi-Fi.
 
+- **The picture follows the network**: through the app, the bitrate set
+  is the most; it goes down by a third as soon as the tablet reports
+  frames lost or the delay through the network growing, and up by a tenth
+  after a few clean seconds. A frame is not even encoded while the data
+  before it is still waiting to go out, so the delay never piles up. On a
+  2.4 GHz network with a weak signal (2-5 Mbit/s for the tablet), the
+  delay went from 100-170 ms, with seconds of frozen picture, to about
+  22 ms.
+- **A tap is a click**: a finger tapped on the desktop is the left button,
+  as the pen's tip; Qt's programs (Telegram) took a touch tapped for hover
+  and wanted a second tap. Dragging, scrolling, pinching and a finger held
+  are touches as before; two fingers tapped together the right button.
 - Fixed: the webcam showed no black while the tablet was away or
   refusing (and froze on the last picture when its session dropped): its
   black frames' timer and the in-use one were the same.

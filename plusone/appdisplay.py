@@ -9,10 +9,12 @@ carry the time they were captured, and pings match the two clocks.
 """
 import argparse
 import collections
+import fcntl
 import os
 import select
 import socket
 import struct
+import termios
 import threading
 import time
 
@@ -38,12 +40,20 @@ MAX_FINGERS = 10
 INPUT_SILENCE = 0.4  # seconds: the app repeats what touches every 0.1 s; quiet this long, all is lifted
 IDLE_WAIT = 0.25     # seconds the listener sleeps while nothing touches (stop() waits as long)
 STATS_EVERY = 30     # the app's reports (one a second) logged: one in so many, and each with a loss
-# Two fingers tapped together are the right button: a first finger waits
-# this long for a second before it goes down on the desktop; both lifted
-# within TAP_TIME, having moved less than TAP_MOVE of the screen, click.
-SECOND_FINGER = 0.08  # seconds
-TAP_TIME = 0.3
+# A finger tapped (lifted within TAP_TIME, having moved less than TAP_SLOP
+# of the screen) is the left button, as the pen's tip: a touch tapped is
+# hover and focus to some programs (Qt's, Telegram's), which wanted a
+# second tap. Two fingers tapped together (less than TAP_MOVE) are the right
+# button. Anything else (a drag, a scroll, a pinch, a finger held) goes on
+# as touches, from where it began: a finger waits until it is not a tap.
+TAP_TIME = 0.3   # seconds
+TAP_SLOP = 0.012
 TAP_MOVE = 0.02
+# The bitrate follows the network (RateControl): from the one set (its
+# most) down to MIN_KBPS while the app reports frames lost or the delay
+# growing, up again slowly while it does not.
+MIN_KBPS = 1500
+QUEUE_MS = 60    # data waiting to go out past this many ms of the bitrate: the next frames are not encoded
 
 
 # Widths offered for the desktop in the app, each at the tablet's proportions
@@ -90,8 +100,8 @@ class Input:
         self.pen = None
         self.pen_last = None  # the last report, while the pen is in range
         self.heard = clock()
-        # Fingers not on the desktop yet, while it may be a two-finger tap:
-        # (since, [states]), replayed as touches once it is not.
+        # Fingers not on the desktop yet, while it may be a tap: (since,
+        # [states]), a click, or replayed as touches once it is not one.
         self.waiting = None
 
     def packet(self, body):
@@ -119,7 +129,7 @@ class Input:
 
     def _touch(self, fingers):
         """Fingers as they are now: on the desktop, unless they may be a
-        two-finger tap (the right button)."""
+        tap (the left button) or a two-finger tap (the right one)."""
         if self.waiting is None:
             if self.down or not fingers:
                 self._fingers(fingers)
@@ -132,26 +142,29 @@ class Input:
         since, states = self.waiting
         elapsed = self.clock() - since
         two = any(len(state) >= 2 for state in states)
-        if not two:
-            # One finger: down at once if it went (a tap), or once the
-            # second has not come.
-            if not states[-1] or elapsed >= SECOND_FINGER:
-                self._replay()
-            return
         first = {}
         for state in states:
             for finger, where in state.items():
                 first.setdefault(finger, where)
-        moved = max(abs(x - first[f][0]) / self.size[0] + abs(y - first[f][1]) / self.size[1]
-                    for state in states for f, (x, y) in state.items())
-        if not states[-1] and elapsed < TAP_TIME and moved < TAP_MOVE:
-            self.waiting = None
-            x, y = next(iter(first.values()))
-            self.monitor.pointer_move(x, y)
-            self.monitor.pointer_button(pen.BTN_RIGHT, True)
-            self.monitor.pointer_button(pen.BTN_RIGHT, False)
-        elif moved >= TAP_MOVE or elapsed >= TAP_TIME or len(states[-1]) > 2 or not states[-1]:
+        moved = max((abs(x - first[f][0]) / self.size[0] + abs(y - first[f][1]) / self.size[1]
+                     for state in states for f, (x, y) in state.items()), default=0)
+        lifted = not states[-1]
+        if not two:
+            if lifted and elapsed < TAP_TIME and moved < TAP_SLOP:
+                self._click(next(iter(first.values())), pen.BTN_LEFT)
+            elif lifted or moved >= TAP_SLOP or elapsed >= TAP_TIME:
+                self._replay()  # a drag, a scroll, a finger held: touches
+            return
+        if lifted and elapsed < TAP_TIME and moved < TAP_MOVE:
+            self._click(next(iter(first.values())), pen.BTN_RIGHT)
+        elif moved >= TAP_MOVE or elapsed >= TAP_TIME or len(states[-1]) > 2 or lifted:
             self._replay()  # a pinch, two fingers resting, three: touches
+
+    def _click(self, where, button):
+        self.waiting = None
+        self.monitor.pointer_move(*where)
+        self.monitor.pointer_button(button, True)
+        self.monitor.pointer_button(button, False)
 
     def _replay(self):
         states, self.waiting = self.waiting[1], None
@@ -241,6 +254,14 @@ class Channel:
                 self.errors.add(e.errno)
                 log("app display: cannot send:", e.strerror)
 
+    def queued(self):
+        """Bytes sent and not yet on the air: in the socket, the queue, the
+        Wi-Fi driver (each packet counts until it is transmitted)."""
+        try:
+            return struct.unpack("i", fcntl.ioctl(self.sock.fileno(), termios.TIOCOUTQ, b"\0" * 4))[0]
+        except (OSError, ValueError):
+            return 0
+
     def receive(self, timeout):
         """A body from the app, or None (nothing in time, or not the app's).
         The socket stays blocking: a timeout on it would be the streaming
@@ -265,6 +286,51 @@ class Channel:
 
     def close(self):
         self.sock.close()
+
+
+class RateControl:
+    """The bitrate the network takes, from the app's report each second:
+    down by a third at once when frames were lost or the delay through the
+    network grew (a queue filling somewhere), up by a tenth after a few
+    clean seconds, never above the one set (most) nor below MIN_KBPS.
+    The delay through the network: the app's capture-to-decoded less its
+    first-packet-to-decoded (decoding, which does not change with the
+    network), against the least of the last seconds; only from a second
+    with enough frames: a still desktop's one or two say little (Wi-Fi's
+    own jitter), and it went down for nothing."""
+
+    GROWN_MS = 25   # over the least: a queue
+    CLEAN = 3       # reports in a row without loss nor queue before going up
+    HISTORY = 10    # reports the least is taken over
+    FRAMES = 10     # shown in the second, for its delay to count
+
+    def __init__(self, most):
+        self.most = most
+        self.kbps = most
+        self.clean = 0
+        self.delays = collections.deque(maxlen=self.HISTORY)
+
+    def report(self, shown, lost, capture_to_decoded, first_to_decoded):
+        """A report; the new bitrate if it changed, else None."""
+        delay = capture_to_decoded - first_to_decoded if shown >= self.FRAMES else None
+        if delay is not None:
+            self.delays.append(delay)
+        grown = delay is not None and len(self.delays) >= 3 and delay > min(self.delays) + self.GROWN_MS
+        if lost or grown:
+            self.clean = 0
+            return self._set(self.kbps * 2 // 3)
+        self.clean += 1
+        if self.clean >= self.CLEAN and self.kbps < self.most:
+            self.clean = 0
+            return self._set(self.kbps * 11 // 10 + 100)
+        return None
+
+    def _set(self, kbps):
+        kbps = max(MIN_KBPS, min(self.most, kbps))
+        if kbps == self.kbps:
+            return None
+        self.kbps = kbps
+        return kbps
 
 
 class AppStreamer:
@@ -305,8 +371,11 @@ class AppStreamer:
             f"{enc} ! video/x-h264,profile=high ! h264parse config-interval=-1 ! "
             f"video/x-h264,stream-format=byte-stream,alignment=au ! "
             f"appsink name=out emit-signals=true sync=false async=false max-buffers=0")
-        enc = self.pipeline.get_by_name("enc")
+        enc = self.enc = self.pipeline.get_by_name("enc")
         media.cap_keyframes(enc, bitrate, fps)
+        self.fps = fps
+        self.rate = RateControl(bitrate)
+        self.skipped = 0  # frames not encoded: the network behind
         # When each frame going into the encoder was captured, in order: one
         # comes out per one in (no B frames), and a flush drops those held.
         # (Its output timestamps could not be traced back after a flush.)
@@ -349,6 +418,13 @@ class AppStreamer:
         self.on_error(f"{message.src.get_name()}: {error.message}")
 
     def _frame_in(self, pad, info):
+        # The network behind (more waiting to go out than QUEUE_MS of the
+        # bitrate): this frame is not encoded, rather than queued after the
+        # others (the delay would grow, and grow). A frame that never went
+        # in breaks nothing; the next one is encoded against the last.
+        if self.channel.queued() > max(64 << 10, self.rate.kbps * QUEUE_MS // 8):
+            self.skipped += 1
+            return Gst.PadProbeReturn.DROP
         # pipewiresrc and a live test source stamp buffers with the running
         # time at capture, and the pipeline's clock is the monotonic one.
         buf = info.get_buffer()
@@ -402,10 +478,18 @@ class AppStreamer:
             elif kind == STATS and len(body) == STATS_FORMAT.size:
                 _kind, shown, lost, *ms = STATS_FORMAT.unpack(body)
                 encoded, self._encoded = sorted(self._encoded), []
+                skipped, self.skipped = self.skipped, 0
+                before = self.rate.kbps
+                kbps = self.rate.report(shown, lost, ms[0] / 10, ms[3] / 10)
+                if kbps is not None:
+                    self.enc.set_property("bitrate", kbps)
+                    media.cap_keyframes(self.enc, kbps, self.fps)
                 self.on_stats({"shown": shown, "lost": lost,
                                "capture_to_decoded": [v / 10 for v in ms[:3]],
                                "whole_to_decoded": [v / 10 for v in ms[3:]],
-                               "capture_to_sent": encoded[len(encoded) // 2] if encoded else None})
+                               "capture_to_sent": encoded[len(encoded) // 2] if encoded else None,
+                               "skipped": skipped, "kbps": self.rate.kbps,
+                               "changed": kbps is not None and (before, kbps)})
 
     def visible(self, shown):
         """The app shows the desktop, or not: nothing is captured or encoded
@@ -433,7 +517,9 @@ def describe(stats):
     sent = stats["capture_to_sent"]
     return (f"{stats['shown']} fps, lost {stats['lost']}; capture to decoded {decoded[0]:.1f} ms "
             f"(90%: {decoded[1]:.1f}, max {decoded[2]:.1f}); of which capture to sent "
-            f"{sent if sent is None else round(sent, 1)} ms, first packet to decoded {stats['whole_to_decoded'][0]:.1f} ms")
+            f"{sent if sent is None else round(sent, 1)} ms, first packet to decoded {stats['whole_to_decoded'][0]:.1f} ms"
+            + (f"; {stats['skipped']} not encoded (the network behind)" if stats.get("skipped") else "")
+            + (f"; {stats['kbps']} kbit/s" if "kbps" in stats else ""))
 
 
 class AppDisplay:
@@ -562,7 +648,10 @@ class AppDisplay:
     def _stats(self, stats):
         """From the listening thread: the app's report of the last second."""
         self._reports += 1
-        if stats["lost"] or self._reports % STATS_EVERY == 1:
+        if stats.get("changed"):
+            before, now = stats["changed"]
+            log(f"app display: {before} -> {now} kbit/s, as the network takes")
+        if stats["lost"] or stats.get("skipped") or self._reports % STATS_EVERY == 1:
             log("app display:", describe(stats))
 
     def _scale(self, tries):

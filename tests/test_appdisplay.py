@@ -95,26 +95,41 @@ def touch_input():
     return appdisplay.Input(monitor, (1000, 1000), lambda: None, clock=clock), monitor, clock
 
 
-def test_a_tap_is_not_held_back():
+def test_a_finger_tapped_is_the_left_button():
+    # Not a touch tapped, which some programs (Qt's) take as hover: a click,
+    # where the finger came down.
     touch, monitor, clock = touch_input()
     assert touch.packet(fingers((0, 0.5, 0.5)))
-    assert monitor.calls == []  # a second finger may come
+    assert monitor.calls == []  # a drag, or a second finger, may come
+    clock.now += 0.08
+    touch.packet(fingers((0, 0.505, 0.5)))  # a tap's wobble
     clock.now += 0.03
     touch.packet(fingers())
-    assert [c[0] for c in monitor.calls] == ["touch_down", "touch_up"]
+    assert monitor.calls == [("pointer_move", pytest.approx(500, abs=0.1), pytest.approx(500, abs=0.1)),
+                             ("pointer_button", appdisplay.pen.BTN_LEFT, True),
+                             ("pointer_button", appdisplay.pen.BTN_LEFT, False)]
 
 
-def test_a_finger_alone_goes_down_once_no_second_came():
+def test_a_finger_that_moves_is_touches_from_where_it_began():
     touch, monitor, clock = touch_input()
     touch.packet(fingers((0, 0.5, 0.5)))
     clock.now += 0.04
-    touch.packet(fingers((0, 0.52, 0.5)))
-    assert monitor.calls == []
-    clock.now += 0.05
-    touch.check()
-    assert [c[0] for c in monitor.calls] == ["touch_down", "touch_motion"]  # nothing of it lost
+    touch.packet(fingers((0, 0.52, 0.5)))  # a drag: at once, nothing of it lost
+    assert [c[0] for c in monitor.calls] == ["touch_down", "touch_motion"]
+    assert monitor.calls[0][2] == pytest.approx(500, abs=0.1)
     touch.packet(fingers((0, 0.6, 0.5)))
     assert monitor.calls[-1][0] == "touch_motion"
+
+
+def test_a_finger_held_is_a_touch_held():
+    touch, monitor, clock = touch_input()
+    touch.packet(fingers((0, 0.5, 0.5)))
+    clock.now += appdisplay.TAP_TIME / 2
+    touch.packet(fingers((0, 0.5, 0.5)))  # the app says it again every 0.1 s
+    assert monitor.calls == []
+    clock.now += appdisplay.TAP_TIME / 2 + 0.01
+    touch.check()  # (a long press: the program's own menu, if it has one)
+    assert [c[0] for c in monitor.calls] == ["touch_down"]
 
 
 def test_two_fingers_tapped_are_the_right_button():
@@ -185,3 +200,43 @@ def test_big_sizes_are_hidpi_with_the_bitrate_to_match():
     assert appdisplay.scale_for((2880, 1800)) == 2 and appdisplay.scale_for((1920, 1200)) == 1
     assert appdisplay.bitrate_for(20000, (2880, 1800)) == 45000
     assert appdisplay.bitrate_for(20000, (1280, 800)) == 20000  # never less than asked
+
+
+def test_the_bitrate_follows_the_network():
+    rate = appdisplay.RateControl(20000)
+    for _ in range(5):  # clean: stays at the most
+        assert rate.report(60, 0, 30, 20) is None
+    assert rate.report(55, 3, 30, 20) == 13333  # frames lost: down by a third, at once
+    assert rate.report(60, 0, 80, 20) == 8888  # the delay through the network grew: a queue
+    assert rate.report(0, 40, 0, 0) == 5925  # nothing shown, all lost
+    for _ in range(2):
+        assert rate.report(60, 0, 30, 20) is None
+    assert rate.report(60, 0, 30, 20) == 6617  # clean for a while: up by a tenth
+    rate.kbps = 19950
+    for _ in range(3):
+        result = rate.report(60, 0, 30, 20)
+    assert result == 20000 and rate.kbps == 20000  # never past the one set
+    rate.kbps = appdisplay.MIN_KBPS
+    assert rate.report(60, 9, 30, 20) is None  # nor below the least
+
+
+def test_a_still_desktop_s_few_frames_do_not_move_the_bitrate():
+    rate = appdisplay.RateControl(20000)
+    for _ in range(4):
+        rate.report(30, 0, 30, 20)
+    assert rate.report(1, 0, 90, 20) is None  # one frame, late: Wi-Fi's jitter, not a queue
+    assert rate.report(30, 0, 90, 20) == 13333  # a second of them late: one
+
+
+def test_what_is_still_to_go_out_is_known():
+    app = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    app.bind(("127.0.0.1", 0))
+    channel = channel_to(app)
+    try:
+        assert channel.queued() == 0
+        channel.send(b"\x05")
+        assert channel.queued() >= 0
+    finally:
+        channel.close()
+        app.close()
+    assert channel.queued() == 0  # closed: nothing
