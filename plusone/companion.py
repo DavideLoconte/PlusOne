@@ -31,8 +31,6 @@ import time
 import unicodedata
 import uuid
 
-from gi.repository import GLib
-
 from . import log, write_private
 
 PROTOCOL = 3
@@ -47,7 +45,9 @@ MAX_HEADER = 16 * 1024 * 1024  # the marks of a long document (the app takes as 
 UNPAIRED_HEADER = 4096         # hello and pairing: small, from an app not yet known
 HANDSHAKE_FOR = 20             # seconds for TLS, hello and pairing messages (not the user's answer)
 MAX_NAME = 64
-CONFIG = os.path.join(GLib.get_user_config_dir(), "plus-one", "companion")
+# GLib.get_user_config_dir()'s answer, without GLib (none on macOS).
+CONFIG = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+                      "plus-one", "companion")
 _making_identity = threading.Lock()
 
 
@@ -517,7 +517,10 @@ def open_link(targets, expect, paired=None):
     # A tablet gone from the network (off, out of range) answers nothing, not
     # even a reset: the pings then go unacknowledged, and the kernel gives the
     # link up after LINK_TIMEOUT instead of TCP's own quarter of an hour.
-    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT, LINK_TIMEOUT * 1000)
+    if hasattr(socket, "TCP_USER_TIMEOUT"):
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT, LINK_TIMEOUT * 1000)
+    else:  # macOS: TCP_RXT_CONNDROPTIME, in seconds
+        sock.setsockopt(socket.IPPROTO_TCP, 0x80, LINK_TIMEOUT)
     return sock, wire
 
 

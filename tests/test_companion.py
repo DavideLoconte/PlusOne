@@ -317,7 +317,10 @@ def test_a_sessions_link_gives_up_on_a_tablet_gone_from_the_network(tmp_path, pc
     paired.add(fp, "Tab")
     sock, _wire = companion.open_link([app.target], fp[:16], paired)
     try:
-        assert sock.getsockopt(socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT) == companion.LINK_TIMEOUT * 1000
+        if hasattr(socket, "TCP_USER_TIMEOUT"):
+            assert sock.getsockopt(socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT) == companion.LINK_TIMEOUT * 1000
+        else:  # macOS: TCP_RXT_CONNDROPTIME
+            assert sock.getsockopt(socket.IPPROTO_TCP, 0x80) == companion.LINK_TIMEOUT
     finally:
         held.set()
         sock.close()

@@ -135,6 +135,42 @@ sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-
 
 (The `.deb`'s list, in `packaging/build-deb.sh`, is the reference.)
 
+### macOS (proof of concept)
+
+**Not usable yet: a proof of concept**, to show the port can be done.
+Expect rough edges, no release and no support.
+
+Only the desktop goes to Plus One's app, with the fingers and the pen, from
+the menu bar, over Wi-Fi or the USB cable. There is no Second Screen (macOS
+lets no app use Wi-Fi Direct), no camera, microphone or speakers, and no PDF
+signing yet. Nothing of GTK, GLib or GStreamer is needed: ScreenCaptureKit
+captures, VideoToolbox encodes.
+
+```bash
+brew install libusb    # for the cable only
+pip3 install pyobjc-framework-Cocoa pyobjc-framework-Quartz pyobjc-framework-ScreenCaptureKit \
+    pyobjc-framework-VideoToolbox pyobjc-framework-CoreMedia pyobjc-framework-libdispatch \
+    pyobjc-framework-ApplicationServices cryptography pyusb
+python3 -m plusone.menubar
+```
+
+Open Plus One's app on the tablet: the tablet appears in the menu. *Pair
+with…* the first time (compare the codes), then *Show the desktop on…*.
+Give the terminal **Screen Recording**, **Accessibility** and **Local
+Network** in System Settings → Privacy & Security. The display is made with
+a private macOS API (the one BetterDisplay uses), so a macOS update can
+break it. One finger is the pointer, two tapped together the right button;
+the S Pen sends pressure and tilt.
+
+**Over the USB cable**, with the tablet plugged in: *Pair over the cable…*,
+then *Show the desktop over the cable*. The tablet becomes Plus One's USB
+accessory (Android Open Accessory: no developer options) and asks once
+whether Plus One may use it; tick *Always*. The cable carries the same
+encrypted link as Wi-Fi, so pairing still compares the codes. Measured on
+a Galaxy Tab S6 Lite: about 20 ms from capture to decoded for a desktop;
+with full-screen random noise (the worst case, about 150 KB a frame) no
+frame lost but 55–70 ms; the cable itself carries about 22 MB/s.
+
 ## Usage
 
 Once: install Plus One's app on the tablet (`plus-one-companion_*.apk` from

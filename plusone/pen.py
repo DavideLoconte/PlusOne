@@ -21,10 +21,14 @@ import struct
 import threading
 import time
 
-from gi.repository import Gio, GLib
-
 from . import log
-from .display import virtual_monitor_edid
+
+try:
+    from gi.repository import Gio, GLib
+
+    from .display import virtual_monitor_edid
+except ImportError:  # macOS: only the report's layout is used (macos.py)
+    pass
 
 UHID_PATH = "/dev/uhid"
 UHID_DESTROY, UHID_CREATE2, UHID_INPUT2 = 1, 11, 12

@@ -13,15 +13,26 @@ import os
 import select
 import socket
 import struct
+import sys
 import threading
 import time
 
-import gi
+from . import companion, log, once, pen
 
-gi.require_version("Gst", "1.0")
-from gi.repository import GLib, Gst  # noqa: E402
+if sys.platform == "darwin":
+    from . import macos
+    later = macos.later
+else:
+    import gi
 
-from . import companion, log, media, once, pen  # noqa: E402
+    gi.require_version("Gst", "1.0")
+    from gi.repository import GLib, Gst  # noqa: E402
+
+    from . import media  # noqa: E402
+
+    def later(fn, *args):
+        """fn(*args) on the main loop."""
+        GLib.idle_add(once(fn, *args))
 
 VIDEO, KEYFRAME, PING, PONG, STATS, INPUT = 1, 2, 3, 4, 5, 6
 FROM_PC, FROM_APP = 1, 2
@@ -267,21 +278,12 @@ class Channel:
         self.sock.close()
 
 
-class AppStreamer:
-    """The virtual monitor (or a test pattern), encoded, to the app."""
+class GstVideo:
+    """The virtual monitor (or a test pattern), encoded by GStreamer: each
+    frame to on_frame(data, keyframe, captured), on the streaming thread."""
 
-    def __init__(self, source, channel, width, height, fps, bitrate, encoder, on_stats=None, input=None,
-                 on_visible=None, preview=False, on_error=None):
-        """input: an Input for the fingers and the pen, or None.
-        on_visible(shown): from the listening thread, when the app starts or
-        stops showing the desktop (left for another app, its screen off).
-        on_error(message): on the main loop, if the pipeline fails."""
-        self.channel = channel
-        self.on_stats = on_stats or (lambda stats: None)
-        self.on_visible = on_visible or (lambda shown: None)
-        self.on_error = on_error or (lambda message: None)
-        self.input = input
-        self.shown = True
+    def __init__(self, source, width, height, fps, bitrate, encoder, preview, on_frame, on_error):
+        self.on_frame, self.on_error = on_frame, on_error
         if source == "test":
             video = (f"videotestsrc is-live=true pattern=ball ! "
                      f"video/x-raw,format={media.CAPTURE_FORMAT},width={width},height={height},"
@@ -315,26 +317,15 @@ class AppStreamer:
         self._in_pad = enc.get_static_pad("sink")
         self._in_probe = self._in_pad.add_probe(Gst.PadProbeType.BUFFER, self._frame_in)
         self._sink = self.pipeline.get_by_name("out")
-        self._handler = self._sink.connect("new-sample", self._send)
+        self._handler = self._sink.connect("new-sample", self._pull)
         bus = self.pipeline.get_bus()
         bus.add_signal_watch()
         self._bus_handler = bus.connect("message::error", self._failed)
-        self._frame = 0
-        self._last_keyframe = 0.0
-        self._encoded = []  # ms from capture to sent, since the last stats
-        self._running = True
-        self._feedback = threading.Thread(target=self._listen, daemon=True)
-        log(f"app display: {width}x{height}@{fps} {encoder} {bitrate} kbit/s -> {channel.app[0]}:{channel.app[1]}")
 
     def start(self):
         self.pipeline.set_state(Gst.State.PLAYING)
-        self._feedback.start()
 
     def stop(self):
-        self._running = False
-        self._feedback.join(timeout=2)
-        if self.input:
-            self.input.close()
         self.pipeline.set_state(Gst.State.NULL)
         self._sink.disconnect(self._handler)
         bus = self.pipeline.get_bus()
@@ -342,6 +333,12 @@ class AppStreamer:
         bus.remove_signal_watch()
         self.keyframes.remove()
         self._in_pad.remove_probe(self._in_probe)
+
+    def pause(self, paused):
+        self.pipeline.set_state(Gst.State.PAUSED if paused else Gst.State.PLAYING)
+
+    def keyframe(self):
+        self.keyframes.request()
 
     def _failed(self, _bus, message):
         error, debug = message.parse_error()
@@ -360,22 +357,59 @@ class AppStreamer:
             self._captured.popleft()
         return Gst.PadProbeReturn.OK
 
-    def _send(self, appsink):
-        """Streaming thread: one frame, out at once."""
+    def _pull(self, appsink):
         sample = appsink.emit("pull-sample")
         if sample is None:
             return Gst.FlowReturn.EOS
         buf = sample.get_buffer()
-        data = buf.extract_dup(0, buf.get_size())
         captured = self._captured.popleft() if self._captured else time.monotonic_ns()
-        keyframe = not buf.has_flags(Gst.BufferFlags.DELTA_UNIT)
+        self.on_frame(buf.extract_dup(0, buf.get_size()), not buf.has_flags(Gst.BufferFlags.DELTA_UNIT), captured)
+        return Gst.FlowReturn.OK
+
+
+class AppStreamer:
+    """The virtual monitor (or a test pattern), encoded, to the app."""
+
+    def __init__(self, source, channel, width, height, fps, bitrate, encoder, on_stats=None, input=None,
+                 on_visible=None, preview=False, on_error=None):
+        """input: an Input for the fingers and the pen, or None.
+        on_visible(shown): from the listening thread, when the app starts or
+        stops showing the desktop (left for another app, its screen off).
+        on_error(message): on the main loop, if the video fails."""
+        self.channel = channel
+        self.on_stats = on_stats or (lambda stats: None)
+        self.on_visible = on_visible or (lambda shown: None)
+        self.on_error = on_error or (lambda message: None)
+        self.input = input
+        self.shown = True
+        video = macos.Video if sys.platform == "darwin" else GstVideo
+        self.video = video(source, width, height, fps, bitrate, encoder, preview, self._send, self.on_error)
+        self._frame = 0
+        self._last_keyframe = 0.0
+        self._encoded = []  # ms from capture to sent, since the last stats
+        self._running = True
+        self._feedback = threading.Thread(target=self._listen, daemon=True)
+        log(f"app display: {width}x{height}@{fps} {encoder} {bitrate} kbit/s -> {channel.app[0]}:{channel.app[1]}")
+
+    def start(self):
+        self.video.start()
+        self._feedback.start()
+
+    def stop(self):
+        self._running = False
+        self._feedback.join(timeout=2)
+        if self.input:
+            self.input.close()
+        self.video.stop()
+
+    def _send(self, data, keyframe, captured):
+        """The encoder's thread: one frame (H.264, Annex B), out at once."""
         count = -(-len(data) // PAYLOAD)
         number = self._frame = self._frame + 1
         for index in range(count):
             header = VIDEO_HEADER.pack(VIDEO, int(keyframe), number, index, count, captured)
             self.channel.send(header + data[index * PAYLOAD:(index + 1) * PAYLOAD])
         self._encoded.append((time.monotonic_ns() - captured) / 1e6)
-        return Gst.FlowReturn.OK
 
     def _listen(self):
         while self._running:
@@ -415,7 +449,7 @@ class AppStreamer:
         self.shown = shown
         if not shown and self.input:
             self.input.close()  # nothing left touching
-        self.pipeline.set_state(Gst.State.PLAYING if shown else Gst.State.PAUSED)
+        self.video.pause(not shown)
         if shown:
             self.force_keyframe()
         self.on_visible(shown)
@@ -425,7 +459,7 @@ class AppStreamer:
         if now - self._last_keyframe < MIN_KEYFRAME_GAP:
             return
         self._last_keyframe = now
-        self.keyframes.request()
+        self.video.keyframe()
 
 
 def describe(stats):
@@ -443,11 +477,12 @@ class AppDisplay:
     closest to 1920x1200 at the tablet's proportions (also when the size
     asked for is not at them: another tablet). Callbacks run on the main
     loop: on_started((width, height, fps), tablet's screen),
-    on_ended(error or None, started), on_paused(paused)."""
+    on_ended(error or None, started), on_paused(paused). relay: where the
+    stream's datagrams go instead of the app's address (usb.Bridge's)."""
 
     def __init__(self, targets, app_id, mode, bitrate, encoder, touch=True, test=False, preview=False,
-                 on_started=None, on_ended=None, on_paused=None):
-        self.targets, self.app_id, self.mode = targets, app_id, mode
+                 on_started=None, on_ended=None, on_paused=None, relay=None):
+        self.targets, self.app_id, self.mode, self.relay = targets, app_id, mode, relay
         self.bitrate, self.encoder, self.touch, self.test = bitrate, encoder, touch, test
         self.preview = preview
         self.on_started = on_started or (lambda mode, screen: None)
@@ -486,7 +521,7 @@ class AppDisplay:
             if reply.get("type") != "display-ready":
                 raise ValueError(f"the app answered {reply.get('type')!r}")
             address = self.sock.getpeername()[0]
-            self.channel.app = (address, int(reply["port"]))
+            self.channel.app = self.relay or (address, int(reply["port"]))
             self.tablet_size = (int(reply["width"]), int(reply["height"]))
             log(f"app display: {address} shows {self.tablet_size[0]}x{self.tablet_size[1]}"
                 f" at {float(reply.get('refresh', 0)):.0f} Hz")
@@ -494,7 +529,7 @@ class AppDisplay:
             if (width, height) not in sizes(self.tablet_size):
                 width, height = auto_size(self.tablet_size)
             self.mode = (width, height, fps)
-            GLib.idle_add(once(self._open))
+            later(self._open)
             self._hold(wire)
         except Exception as e:  # noqa: BLE001 - not there, refused, or gone: said to the caller
             error = e
@@ -502,7 +537,7 @@ class AppDisplay:
             if self.sock is not None:
                 self.sock.close()
             if not self._stopped.is_set():
-                GLib.idle_add(once(self._ended, error))
+                later(self._ended, error)
 
     def _hold(self, wire):
         """While the session lasts: pings (the app lets go of a silent PC),
@@ -526,6 +561,14 @@ class AppDisplay:
         if self.test:
             self._stream("test")
             return
+        if sys.platform == "darwin":
+            try:
+                self.monitor = macos.Monitor(self.mode[:2], scale_for(self.mode[:2]))
+            except Exception as e:  # noqa: BLE001 - no PyObjC, or macOS said no
+                self._ended(e)
+                return
+            self._stream(self.monitor.id)
+            return
         from .display import VirtualMonitor
         self.monitor = VirtualMonitor(on_ready=self._stream,
                                       on_closed=lambda: self._ended(RuntimeError("the screen sharing was stopped")))
@@ -541,13 +584,15 @@ class AppDisplay:
         touch = None
         if self.touch and self.monitor is not None:
             monitor = self.monitor
-            touch = Input(monitor, (width, height), lambda: pen.for_monitor(monitor, (width, height)))
+            make_pen = ((lambda: macos.Pen(monitor)) if sys.platform == "darwin"
+                        else lambda: pen.for_monitor(monitor, (width, height)))
+            touch = Input(monitor, (width, height), make_pen)
         try:
             self.streamer = AppStreamer(source, self.channel, width, height, fps,
                                         bitrate_for(self.bitrate, (width, height)), self.encoder,
                                         on_stats=self._stats,
                                         input=touch,
-                                        on_visible=lambda shown: GLib.idle_add(once(self.on_paused, not shown)),
+                                        on_visible=lambda shown: later(self.on_paused, not shown),
                                         preview=self.preview,
                                         on_error=lambda message: self._ended(RuntimeError(message)))
             self.streamer.start()
@@ -555,7 +600,7 @@ class AppDisplay:
             self._ended(e)
             return
         self.started = True
-        if self.monitor is not None and scale_for((width, height)) != 1:
+        if self.monitor is not None and scale_for((width, height)) != 1 and sys.platform != "darwin":
             GLib.timeout_add(300, self._scale, 5)
         self.on_started(self.mode, self.tablet_size)
 
@@ -613,25 +658,32 @@ def main(argv=None):
     ap.add_argument("--test", action="store_true", help="a test pattern instead of a virtual monitor")
     ap.add_argument("--preview", action="store_true", help="the test pattern in a window here too, to photograph")
     args = ap.parse_args(argv)
-    Gst.init(None)
+    if sys.platform == "darwin":
+        if args.test:
+            raise SystemExit("no test pattern on macOS")
+        encoder, run, quit = "videotoolbox", macos.run, macos.quit
+    else:
+        Gst.init(None)
+        encoder, loop = media.pick_encoder(args.encoder), GLib.MainLoop()
+        run, quit = loop.run, loop.quit
     paired = companion.Paired().all()
     if len(paired) != 1:
         raise SystemExit("pair exactly one tablet first")
     width, height = (None, None) if args.size == "auto" else map(int, args.size.split("x"))
-    loop = GLib.MainLoop()
     session = AppDisplay([(args.address, args.port)], next(iter(paired))[:16], (width, height, args.fps),
-                         args.bitrate, media.pick_encoder(args.encoder), test=args.test, preview=args.preview,
-                         on_ended=lambda error, started: (log("app display: ended", repr(error)), loop.quit()))
+                         args.bitrate, encoder, test=args.test, preview=args.preview,
+                         on_ended=lambda error, started: (log("app display: ended", repr(error)), quit()))
     session.start()
-    GLib.timeout_add_seconds(args.seconds, loop.quit)
+    timer = threading.Timer(args.seconds, later, (quit,))
+    timer.daemon = True
+    timer.start()
     try:
-        loop.run()
+        run()
     except KeyboardInterrupt:
         pass
     finally:
         session.stop()
         time.sleep(1)  # the link's thread tells the app
-
 
 if __name__ == "__main__":
     main()
