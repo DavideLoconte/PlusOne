@@ -18,7 +18,7 @@
     <string name="pair_message">Check that the PC shows the same code: %1$s</string>
     <string name="pair">Pair</string>
     <string name="pair_compare">Pair only if the PC shows this same code, and confirm there too:</string>
-    <string name="status_ready">For the second screen, tap “Second screen” in quick settings. PDFs from your PC open here by themselves.</string>
+    <string name="status_ready">Your PC\'s desktop and its PDFs open here by themselves when you use them from the PC.</string>
     <string name="heading_open">Opening by itself</string>
     <string name="overlay_on">A PDF sent by the PC opens on its own.</string>
     <string name="overlay_off">For a PDF sent by the PC to open on its own, allow Plus One to display over other apps. Without it, a notification to tap.</string>
@@ -63,7 +63,7 @@
     <string name="place">Place</string>
     <string name="heading_ready">Ready in the background</string>
     <string name="always_on">Also after a restart: the PC can send a PDF at any time. It only listens; it uses next to no battery.</string>
-    <string name="always_off">Off: your PC reaches this tablet only for 10 minutes after you open Plus One, for the second screen, PDFs, camera and microphone.</string>
+    <string name="always_off">Off: your PC reaches this tablet only for 10 minutes after you open Plus One, for the second screen, PDFs, camera, microphone and speakers.</string>
     <string name="my_signatures">My signatures</string>
     <string name="heading_signatures">My signatures</string>
     <string name="signatures_none">None yet: draw one here, or keep one while signing. They go to the PC too, and the PC\'s come here, each time you sign.</string>

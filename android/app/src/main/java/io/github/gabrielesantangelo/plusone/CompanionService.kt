@@ -28,9 +28,10 @@ import javax.net.ssl.SSLSocket
 
 /**
  * Always ready for the PC: listens over TLS on the home network and says so
- * with mDNS (_plusone._tcp), so Plus One on the PC can hand it a PDF to sign.
- * A foreground service (Android shows it as a quiet notification); it does
- * nothing until the PC connects.
+ * with mDNS (_plusone._tcp), so Plus One on the PC can hand it a PDF to
+ * sign, show its desktop here, or use the camera, the microphone and the
+ * speakers. A foreground service (Android shows it as a quiet notification);
+ * it does nothing until the PC connects.
  */
 class CompanionService : Service() {
     @Volatile private var server: SSLServerSocket? = null
@@ -146,8 +147,15 @@ class CompanionService : Service() {
                 Thread.sleep(200)
                 continue
             }
-            // Small messages go at once: the microphone's are 100 bytes every 20 ms,
-            // which Nagle's algorithm would hold back for the PC's delayed ACKs.
+            // Never the PC: it comes over the network. Another app here, maybe,
+            // posing as one to be paired with a tap on a question it timed.
+            if (fromHere(client.inetAddress)) {
+                Log.w(TAG, "a connection from this tablet itself: closed")
+                runCatching { client.close() }
+                continue
+            }
+            // Small messages go at once (pairing's, the answers to the PC's
+            // pings), not held back by Nagle's algorithm for delayed ACKs.
             try { client.tcpNoDelay = true } catch (e: Exception) {}
             // Connections not through TLS yet, few at a time: strangers that
             // never finish their handshake cannot take every thread from a paired PC.
@@ -219,7 +227,7 @@ class CompanionService : Service() {
                 val wire = Wire(socket)
                 val hello = wire.receive(Wire.UNPAIRED_HEADER)
                 require(hello.optString("type") == "hello") { "expected hello" }
-                val pcName = hello.optString("name", "PC").take(64)
+                val pcName = readable(hello.optString("name"))
                 // "at": the address the PC reached, so it can tell this
                 // tablet answered itself (over Wi-Fi Direct, say), not
                 // through someone passing the connection on.
@@ -295,7 +303,7 @@ class CompanionService : Service() {
         links.remove(fingerprint)?.forEach { runCatching { it.close() } }
     }
 
-    // The camera's and the microphone's captures: what, its connection, for which PC.
+    // The camera's and the microphone's captures, and the speakers': what, its connection, for which PC.
     private class Capture(val kind: String, val socket: SSLSocket, val pc: String)
     private val captures = mutableMapOf<RtcCapture, Capture>()
     private var elevating: CompletableFuture<Boolean>? = null  // under captures
@@ -420,14 +428,16 @@ class CompanionService : Service() {
         return if (kinds.isEmpty()) Notifications.ready(this) else Notifications.capturing(this, kinds, pcs)
     }
 
-    // Wi-Fi without power saving while the PC uses the camera or the microphone:
-    // saving, it holds packets back and sends them in bunches every 100-300 ms.
+    // Wi-Fi without power saving while the PC uses the camera, the microphone or
+    // the speakers, or its desktop is on screen: saving, it holds packets back
+    // and sends them in bunches every 100-300 ms.
     private val wifiLock by lazy {
         getSystemService(android.net.wifi.WifiManager::class.java)
             .createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "plusone:capture")
             .apply { setReferenceCounted(false) }
     }
 
+    @Synchronized  // from the main thread (onVisible) and the connections': in order
     private fun lowLatency(capturing: Boolean) {
         val any = synchronized(captures) { captures.isNotEmpty() || speakerSessions.isNotEmpty() }
         try {
@@ -453,8 +463,13 @@ class CompanionService : Service() {
         // Ended here (Back, Stop): the link closes, and the PC with it.
         session.onEnd = { Thread { runCatching { socket.close() } }.start() }
         session.onVisible = { lowLatency(false) }  // no low-latency Wi-Fi while nothing is shown
-        DisplaySession.current?.stop()
-        DisplaySession.current = session
+        // This one takes the screen: the one before ends, its PC told (its
+        // link closes), not left encoding for nobody with its monitor up.
+        val before = synchronized(DisplaySession) {
+            DisplaySession.current.also { DisplaySession.current = session }
+        }
+        before?.stop()
+        before?.end()
         session.start()
         try {
             val mode = getSystemService(android.hardware.display.DisplayManager::class.java)
@@ -471,7 +486,7 @@ class CompanionService : Service() {
             while (wire.receive().optString("type") != "stop") continue
         } finally {
             session.stop()
-            if (DisplaySession.current === session) DisplaySession.current = null
+            synchronized(DisplaySession) { if (DisplaySession.current === session) DisplaySession.current = null }
             android.os.Handler(mainLooper).post { DisplayActivity.ended(session) }
             if (DisplaySession.current == null) displaying = null
             showCaptures()
@@ -566,6 +581,18 @@ class CompanionService : Service() {
         listening.join(PAIRING_TIMEOUT.toLong())
         return accepted && answer.get() == "pair-ok"
     }
+
+    /** Whether a connection comes from this tablet: loopback, or one of its
+     * own addresses (an app here can reach the Wi-Fi one too). */
+    private fun fromHere(address: java.net.InetAddress?): Boolean =
+        address == null || address.isLoopbackAddress || address.isAnyLocalAddress ||
+            runCatching { java.net.NetworkInterface.getByInetAddress(address) != null }.getOrDefault(false)
+
+    /** The PC's name as it says it, to be read: no control characters, none
+     * that turn the text around them (U+202E and the like), not too long. */
+    private fun readable(name: String): String =
+        name.filter { !Character.isISOControl(it) && Character.getType(it) != Character.FORMAT.toInt() }
+            .trim().take(64).ifEmpty { "PC" }
 
     /** An address as the PC writes it: IPv4 without the "::ffff:" prefix, no scope. */
     private fun address(address: java.net.InetAddress): String =

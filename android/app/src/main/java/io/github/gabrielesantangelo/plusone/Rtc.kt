@@ -116,7 +116,9 @@ class RtcCapture(private val context: Context, private val request: JSONObject, 
         }
         Rtc.recordFailed.add(onFailure)  // the microphone failing (the process's one recorder)
         // libwebrtc's own processing: its gain control and, if asked, its
-        // noise suppression. No echo cancelling: the tablet plays nothing back.
+        // noise suppression. No echo cancelling: libwebrtc's would hear only
+        // what it plays itself, and the tablet's speakers (PcmPlayback) are
+        // not its. Speakers and microphone together in a call echo: a headset.
         val constraints = MediaConstraints().apply {
             mandatory += MediaConstraints.KeyValuePair("googAutoGainControl", "true")
             mandatory += MediaConstraints.KeyValuePair("googNoiseSuppression", noiseReduction.toString())
@@ -204,8 +206,7 @@ object Rtc {
 
     /** A peer connection to the PC: the media straight between the two (ICE,
      * host addresses), bundled, marked by priority. */
-    fun connection(factory: PeerConnectionFactory, label: String, gathered: CompletableFuture<Unit>,
-                   onState: (PeerConnection.PeerConnectionState) -> Unit = {}): PeerConnection =
+    fun connection(factory: PeerConnectionFactory, label: String, gathered: CompletableFuture<Unit>): PeerConnection =
         factory.createPeerConnection(
             PeerConnection.RTCConfiguration(emptyList()).apply {
                 sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
@@ -223,7 +224,6 @@ object Rtc {
                 }
                 override fun onConnectionChange(state: PeerConnection.PeerConnectionState) {
                     Log.i(RtcCapture.TAG, "$label for the PC: $state")
-                    onState(state)
                 }
                 override fun onSignalingChange(state: PeerConnection.SignalingState) {}
                 override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {}

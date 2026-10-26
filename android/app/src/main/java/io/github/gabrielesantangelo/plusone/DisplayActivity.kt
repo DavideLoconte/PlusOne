@@ -1,14 +1,18 @@
 package io.github.gabrielesantangelo.plusone
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.os.Bundle
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.widget.FrameLayout
 
 /** The PC's desktop, on the whole screen: the session in progress
  * (DisplaySession.current) decodes into this activity's surface while it
@@ -17,6 +21,10 @@ import android.view.WindowManager
 class DisplayActivity : Activity(), SurfaceHolder.Callback {
     private var surface: Surface? = null
     private var session: DisplaySession? = null  // the one decoding into the surface
+    // The one this activity shows, kept when the surface goes (before
+    // onStop()): what onStop() and onDestroy() may pause or end. Never a
+    // newer session's, which a closing activity must leave alone.
+    private var mine: DisplaySession? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -27,7 +35,13 @@ class DisplayActivity : Activity(), SurfaceHolder.Callback {
         }
         val view = SurfaceView(this)
         view.holder.addCallback(this)
-        setContentView(view)
+        // The PC's monitor has the screen's proportions, held in landscape;
+        // Android 16 lets a large screen's app turn to portrait all the same
+        // (and split the screen): then it is letterboxed, not squeezed.
+        val mode = display.mode
+        val aspect = maxOf(mode.physicalWidth, mode.physicalHeight).toFloat() /
+            minOf(mode.physicalWidth, mode.physicalHeight)
+        setContentView(Letterbox(this, view, aspect))
         DisplayInput(view) { session }
         window.insetsController?.apply {
             hide(WindowInsets.Type.systemBars())
@@ -41,21 +55,25 @@ class DisplayActivity : Activity(), SurfaceHolder.Callback {
         bind()
     }
 
-    // The session in progress, not the bound one: the surface (and with it
-    // the binding) goes before onStop().
     override fun onStart() {
         super.onStart()
-        DisplaySession.current?.show(true)
+        Front.started()  // the app is in front: the PC's camera or a new desktop may come up
+        mine = DisplaySession.current
+        mine?.show(true)
     }
 
     override fun onStop() {
         super.onStop()
-        DisplaySession.current?.show(false)  // another app, the screen off: the PC rests
+        Front.stopped()
+        // Another app, the screen off: the PC rests.
+        mine?.takeIf { it === DisplaySession.current }?.show(false)
     }
 
     override fun onDestroy() {
-        // Back, or swiped away from Recents: the desktop is no longer wanted here.
-        if (isFinishing) (session ?: DisplaySession.current)?.end()
+        // Back, or swiped away from Recents: the desktop is no longer wanted
+        // here. (Not when it went because the session ended: then mine is
+        // over, and DisplaySession.current is another's or nobody's.)
+        if (isFinishing) mine?.takeIf { it === DisplaySession.current }?.end()
         if (instance === this) instance = null
         super.onDestroy()
     }
@@ -76,6 +94,7 @@ class DisplayActivity : Activity(), SurfaceHolder.Callback {
     /** The session in progress into the surface, if both are there. */
     private fun bind() {
         val current = DisplaySession.current ?: return finish()
+        mine = current
         if (current === session) return
         session?.detach()
         session = null
@@ -85,15 +104,42 @@ class DisplayActivity : Activity(), SurfaceHolder.Callback {
         current.show(true)
     }
 
+    /** child at aspect (width / height), as large as fits, centred on black. */
+    private class Letterbox(context: Context, private val child: View, private val aspect: Float) :
+        FrameLayout(context) {
+        init {
+            setBackgroundColor(Color.BLACK)
+            addView(child)
+        }
+
+        override fun onMeasure(widthSpec: Int, heightSpec: Int) {
+            val width = MeasureSpec.getSize(widthSpec)
+            val height = MeasureSpec.getSize(heightSpec)
+            val wide = width >= height * aspect
+            val w = if (wide) Math.round(height * aspect) else width
+            val h = if (wide) height else Math.round(width / aspect)
+            child.measure(MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY),
+                MeasureSpec.makeMeasureSpec(h, MeasureSpec.EXACTLY))
+            setMeasuredDimension(width, height)
+        }
+
+        override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+            val x = (width - child.measuredWidth) / 2
+            val y = (height - child.measuredHeight) / 2
+            child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)
+        }
+    }
+
     companion object {
         // On the main thread only.
         private var instance: DisplayActivity? = null
 
         /** On the main thread: a session ended. The activity goes, unless a
-         * newer session took it over meanwhile. */
+         * newer session is there to take it over (its startActivity() comes
+         * as onNewIntent()). */
         fun ended(session: DisplaySession) {
             val activity = instance ?: return
-            if (DisplaySession.current == null || activity.session === session) activity.finish()
+            if (DisplaySession.current?.takeIf { it !== session } == null) activity.finish()
         }
     }
 }

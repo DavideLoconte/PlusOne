@@ -33,13 +33,6 @@ import java.util.concurrent.Executors
  * decoded here is measured, not guessed. (Not to the glass: MediaCodec's
  * "rendered" times only gave back the time it was released with.)
  */
-/** The display notification's Stop. */
-class DisplayStopReceiver : android.content.BroadcastReceiver() {
-    override fun onReceive(context: android.content.Context, intent: android.content.Intent) {
-        DisplaySession.current?.end()
-    }
-}
-
 class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pcPort: Int) {
     val socket = DatagramSocket(0).apply { receiveBufferSize = 4 shl 20 }
     private val sealed = Sealed(key)
@@ -54,6 +47,9 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
     private val handler = Handler(callbacks.looper)
     private val free = ConcurrentLinkedQueue<Int>()
     @Volatile private var codec: MediaCodec? = null
+    private var surface: Surface? = null  // attach()'s, for a decoder made again after an error
+    @Volatile private var restarts = 0    // decoders made again since one last decoded a frame
+    private val main = Handler(android.os.Looper.getMainLooper())
 
     /** Ends the session from here (Back, Stop): set by the service. */
     var onEnd: (() -> Unit)? = null
@@ -117,11 +113,19 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
     @Synchronized
     fun attach(surface: Surface) {
         detach()
+        this.surface = surface
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, MAX_WIDTH, MAX_HEIGHT).apply {
             setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             setInteger(MediaFormat.KEY_PRIORITY, 0)  // real time
         }
-        val decoder = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+        val decoder = try {
+            MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+        } catch (e: Exception) {
+            // None free (another app holds them all): nothing shown, rather
+            // than the process gone, the service and its other sessions with it.
+            Log.w(CompanionService.TAG, "display: no decoder: $e")
+            return
+        }
         decoder.setCallback(object : MediaCodec.Callback() {
             override fun onInputBufferAvailable(codec: MediaCodec, index: Int) {
                 free.add(index)
@@ -136,8 +140,11 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
             }
 
             override fun onError(codec: MediaCodec, e: MediaCodec.CodecException) {
-                Log.w(CompanionService.TAG, "display: decoder: $e")
+                Log.w(CompanionService.TAG, "display: decoder: $e (transient: ${e.isTransient})")
                 needKeyframe = true
+                // Past a transient error the decoder takes no more input: a
+                // new one (on the main thread: these callbacks never wait for it).
+                if (!e.isTransient) main.post { restart(codec) }
             }
 
             override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {
@@ -162,8 +169,23 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
         askedAt = 0L
     }
 
+    /** A decoder in place of failed, if it is still the one: a few times in
+     * a row at most (one that fails at once would fail forever). */
+    @Synchronized
+    private fun restart(failed: MediaCodec) {
+        val surface = surface
+        if (codec !== failed || surface == null || !running) return
+        if (++restarts > MAX_RESTARTS) {
+            Log.w(CompanionService.TAG, "display: the decoder keeps failing: none")
+            detach()
+            return
+        }
+        attach(surface)
+    }
+
     @Synchronized
     fun detach() {
+        surface = null
         val decoder = codec ?: return
         codec = null
         free.clear()
@@ -217,6 +239,12 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
         }
         frames.remove(number)
         newest = number
+        if (codec == null) {
+            // Nothing to decode into (no surface, no decoder): no keyframes
+            // asked for meanwhile; attach() asks at the next frame.
+            needKeyframe = true
+            return
+        }
         if (needKeyframe && !frame.keyframe) {
             askKeyframe()
             return
@@ -232,22 +260,27 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
     private fun decode(frame: Frame, number: Int): Boolean {
         val decoder = codec ?: return false
         val index = free.poll() ?: return false
+        var queued = false
         return try {
             val input = decoder.getInputBuffer(index) ?: return false
             input.clear()
             for (part in frame.parts) input.put(part!!)
             synchronized(timing) { timing[number.toLong()] = longArrayOf(frame.captured, frame.first) }
             decoder.queueInputBuffer(index, 0, input.position(), number.toLong(), 0)
+            queued = true
             true
         } catch (e: Exception) {
             Log.w(CompanionService.TAG, "display: $e")
             false
+        } finally {
+            if (!queued) free.add(index)  // still the decoder's to fill: not lost
         }
     }
 
     private fun decoded(frame: Long, nanos: Long) = synchronized(timing) {
         val (captured, first) = timing.remove(frame) ?: return
         shown++
+        restarts = 0
         if (offsetAt != 0L) captureToDecoded += ((nanos + offset - captured) / 100_000).toInt()
         firstToDecoded += ((nanos - first) / 100_000).toInt()
         // Frames that never come out (dropped by the decoder) do not pile up.
@@ -273,11 +306,19 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
         }
     }
 
-    /** Every second: a ping for the clocks, and what was shown to the PC. */
+    /** Every second: a ping for the clocks, and what was shown to the PC.
+     * Hidden, a ping now and then only (it says hidden, should the one
+     * show(false) sent be lost): nothing to tell, the radio left to rest. */
     private fun tick() {
+        var ticks = 0
         while (running) {
-            ping()
-            stats()
+            if (visible) {
+                ping()
+                stats()
+            } else if (ticks % HIDDEN_PING_EVERY == 0) {
+                ping()
+            }
+            ticks++
             try {
                 Thread.sleep(1000)
             } catch (e: InterruptedException) {
@@ -331,8 +372,17 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
         const val MAX_HEIGHT = 2400
         const val KEYFRAME_AGAIN = 250_000_000L  // ns
         const val OFFSET_AGE = 10_000_000_000L   // ns
+        const val MAX_RESTARTS = 3
+        const val HIDDEN_PING_EVERY = 10        // ticks (seconds)
 
         /** The session being shown, for DisplayActivity. */
         @Volatile var current: DisplaySession? = null
+    }
+}
+
+/** The display notification's Stop. */
+class DisplayStopReceiver : android.content.BroadcastReceiver() {
+    override fun onReceive(context: android.content.Context, intent: android.content.Intent) {
+        DisplaySession.current?.end()
     }
 }

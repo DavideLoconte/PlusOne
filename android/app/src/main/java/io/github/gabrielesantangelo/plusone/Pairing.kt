@@ -93,6 +93,9 @@ object Pairing {
 /** The pairing question, over whatever is on screen. Its own layout: an
  * AlertDialog inside a dialog-themed activity was dismissed as it opened. */
 class PairActivity : AppCompatActivity() {
+    private var pair: android.view.View? = null
+    private val arm = Runnable { pair?.isEnabled = true }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         DynamicColors.applyToActivityIfAvailable(this)  // the wallpaper's colours, as the app's other screens
         super.onCreate(savedInstanceState)
@@ -136,16 +139,29 @@ class PairActivity : AppCompatActivity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.END
                 addView(button(getString(R.string.cancel), Look.TEXT) { answer(false) })
-                addView(button(getString(R.string.pair), Look.FILLED) { answer(true) },
-                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) })
+                val yes = button(getString(R.string.pair), Look.FILLED) { answer(true) }.apply { isEnabled = false }
+                pair = yes
+                addView(yes, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) })
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         })
         window.setLayout(minOf(resources.displayMetrics.widthPixels - dp(48), dp(400)), ViewGroup.LayoutParams.WRAP_CONTENT)
     }
 
+    /** A tap meant for what was under the question when it opened is not a
+     * yes (an app here could time the question to come under a finger): Pair
+     * works a moment after it is in front, and again after anything covered it. */
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        val pair = pair ?: return
+        pair.removeCallbacks(arm)
+        pair.isEnabled = false
+        if (hasFocus) pair.postDelayed(arm, ARM_DELAY)
+    }
+
     companion object {
         const val EXTRA_CODE = "code"
+        const val ARM_DELAY = 800L  // ms
     }
 }
 

@@ -99,7 +99,7 @@ class PcmPlayback(key: ByteArray, private val pc: InetAddress, private val pcPor
             val data: ByteArray = synchronized(lock) {
                 if (!started) {
                     // The first packets: wait for PREFILL of them, from the oldest.
-                    while (running && packets.size < PREFILL) lock.wait(100)
+                    while (running && packets.size < PREFILL) lock.wait()  // stop() wakes it too
                     if (!running) return
                     next = packets.keys.minWithOrNull { a, b -> a - b }!!
                     started = true

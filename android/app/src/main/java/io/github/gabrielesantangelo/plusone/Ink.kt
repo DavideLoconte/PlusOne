@@ -175,7 +175,6 @@ class TextMark(val x: Float, val y: Float, val text: String, val size: Float = I
 class Signature(val width: Float, val strokes: List<FloatArray>,
                 val id: String = java.util.UUID.randomUUID().toString().replace("-", "")) {
 
-    /** ink.py place(): its left end and vertical centre at x, y, with the pen's colour. */
     /** The strokes with their left, vertical centre at x, y: SIGNATURE_WIDTH wide,
      * or less when that would make them taller than MAX_TALL times it
      * (narrow initials, normalized to a width of 1, would be metres tall),
@@ -232,7 +231,6 @@ class Signature(val width: Float, val strokes: List<FloatArray>,
             })
         }
 
-        /** null if it is not a signature with an id. */
         /** null if it is not a signature with an id: finite numbers, points of
          * three, no empty stroke, a sane size (it may come from a PC). */
         fun fromJson(json: JSONObject): Signature? = try {
