@@ -3,7 +3,7 @@ import base64
 
 from gi.repository import GLib
 
-from plusone.nearby import BROWSER, COMPANION, KDE_CONNECT, QUICK_SHARE, RETRIES, Nearby, tablet_name
+from plusone.link.nearby import BROWSER, COMPANION, KDE_CONNECT, QUICK_SHARE, RETRIES, Nearby, tablet_name
 
 
 def quick_share(first_byte, name=None):

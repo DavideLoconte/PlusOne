@@ -5,7 +5,7 @@ where it was last.
 """
 from dataclasses import dataclass
 
-from . import companion
+from .trust import MAX_NAME, Paired
 
 
 @dataclass(frozen=True)
@@ -26,11 +26,11 @@ class Tablets:
         self.settings = settings
         self.save = save
         self.nearby = nearby
-        self.paired = paired or companion.Paired()
+        self.paired = paired or Paired()
 
     def all(self):
         """The paired tablets, by name."""
-        return sorted((Tablet(fp, entry["name"][:companion.MAX_NAME])
+        return sorted((Tablet(fp, entry["name"][:MAX_NAME])
                        for fp, entry in self.paired.entries().items()),
                       key=lambda t: (t.name.lower(), t.fingerprint))
 

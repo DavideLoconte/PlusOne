@@ -432,12 +432,14 @@ What comes next, and the convenience rules every feature follows, is in
 ## Development
 
 ```
-plusone/          the app: app.py (background app, D-Bus, notifications), gui.py (window),
+plusone/link/     connectivity, under every service: discovery (nearby.py), trust and pairing
+                  (trust.py), the tablets (tablets.py), transports, links (link.py: connect,
+                  request, hold), datagrams (sealed UDP)
+plusone/          the services and the app: app.py (background app, D-Bus, notifications), gui.py (window),
                   engine.py + appdisplay.py + media.py + display.py + pen.py (the desktop on the tablet),
-                  signing.py + sign.py + pdf.py + ink.py + modeler.py (Sign on Tablet),
+                  signing.py + sign_jobs.py + sign.py + pdf.py + ink.py + modeler.py (Sign on Tablet),
                   devices.py + rtc.py + pcm.py (the tablet's camera, microphone and speakers),
-                  nearby.py (the apps on the network), tablets.py (the paired ones, the one in
-                  use), companion.py (the app's protocol), updates.py (both sides up to date)
+                  updates.py (both sides up to date)
 data/gnome-shell/ the Quick Settings extension
 data/nautilus/    the Files context-menu entry
 android/          the companion app for the tablet (Kotlin)

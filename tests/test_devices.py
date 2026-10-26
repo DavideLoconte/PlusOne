@@ -8,7 +8,7 @@ import gi
 gi.require_version("Gst", "1.0")
 from gi.repository import GLib  # noqa: E402
 
-from plusone import companion, devices  # noqa: E402
+from plusone import devices, link  # noqa: E402
 
 
 def spin(until, timeout=5):
@@ -147,7 +147,7 @@ class FakeWire:
     def __init__(self, reply):
         self.sent, self.reply, self.hung_up = [], reply, threading.Event()
 
-    def send(self, message):
+    def send(self, message, payload=None):
         self.sent.append(message)
 
     def receive(self, *args):
@@ -164,11 +164,19 @@ class FakeSock:
     def __init__(self, wire):
         self.wire = wire
 
+    def getpeername(self):
+        return ("10.0.0.2", 47236)
+
     def shutdown(self, how):
         self.wire.hung_up.set()
 
     def close(self):
         pass
+
+
+def fake_link(wire):
+    """A Link over a scripted wire: what link.connect() gives."""
+    return link.Link(FakeSock(wire), wire, "Tab", "a1b2" + "0" * 60, {"version": link.PROTOCOL})
 
 
 class FakeReceiver:
@@ -195,8 +203,8 @@ class FakeReceiver:
 def test_the_feed_offers_and_hangs_up(monkeypatch):
     wire = FakeWire({"type": "answer", "sdp": "v=0 answer"})
     opened = []
-    monkeypatch.setattr(companion, "open_link", lambda targets, expect: opened.append((targets, expect))
-                        or (FakeSock(wire), wire))
+    monkeypatch.setattr(link, "connect", lambda targets, expect: opened.append((targets, expect))
+                        or fake_link(wire))
     receivers, ready = [], []
     feed = devices.Feed({"type": "microphone"}, lambda: ([("10.0.0.2", 47236)], "a1b2"),
                         lambda: receivers.append(FakeReceiver()) or receivers[-1], lambda: ready.append(1),
@@ -212,13 +220,13 @@ def test_the_feed_offers_and_hangs_up(monkeypatch):
 
 def test_a_session_that_breaks_is_made_again_and_pings_meanwhile(monkeypatch):
     monkeypatch.setattr(devices, "RETRY", 0.05)
-    monkeypatch.setattr(devices, "KEEPALIVE", 0.1)
+    monkeypatch.setattr(link.link, "KEEPALIVE", 0.1)
     wires = []
 
-    def open_link(targets, expect):
+    def connect(targets, expect):
         wires.append(FakeWire({"type": "answer", "sdp": "v=0 answer"}))
-        return FakeSock(wires[-1]), wires[-1]
-    monkeypatch.setattr(companion, "open_link", open_link)
+        return fake_link(wires[-1])
+    monkeypatch.setattr(link, "connect", connect)
     receivers = []
     feed = devices.Feed({"type": "microphone"}, lambda: ([("10.0.0.2", 47236)], "a1b2"),
                         lambda: receivers.append(FakeReceiver()) or receivers[-1], lambda: None, lambda reason: None)
@@ -254,11 +262,10 @@ def test_a_refusal_is_said_and_asked_again_later(monkeypatch):
     monkeypatch.setattr(devices, "REFUSED_RETRY", 0.05)
     tries, problems = [], []
 
-    def open_link(targets, expect):
+    def connect(targets, expect):
         tries.append(1)
-        wire = FakeWire({"type": "refused", "reason": "permission"})
-        return FakeSock(wire), wire
-    monkeypatch.setattr(companion, "open_link", open_link)
+        return fake_link(FakeWire({"type": "refused", "reason": "permission"}))
+    monkeypatch.setattr(link, "connect", connect)
     feed = devices.Feed({"type": "camera"}, lambda: ([("10.0.0.2", 47236)], "a1b2"),
                         FakeReceiver, lambda: None, problems.append)
     feed.start()

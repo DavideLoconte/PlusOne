@@ -1,5 +1,5 @@
 """The tablet's camera and microphone over WebRTC (android/.../Rtc.kt): the
-PC offers to receive, over the paired TLS link (companion.py), which vouches
+PC offers to receive, over the paired TLS link (link.py), which vouches
 for the DTLS fingerprints in the offer and the answer; the app answers and
 sends. webrtcbin does the rest: ICE (host addresses: the same network),
 DTLS-SRTP, the jitter buffer, retransmissions and key frame requests, and

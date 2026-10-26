@@ -9,7 +9,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
-from . import __version__, companion, log, once, pen  # noqa: E402
+from . import __version__, link, log, once, pen  # noqa: E402
 from .app import APP_ID, IN_FLATPAK, set_shell_extension, shell_extension_state  # noqa: E402
 from .devices import neural_available  # noqa: E402
 from .engine import State, parse_size  # noqa: E402
@@ -671,8 +671,8 @@ class PairDialog(Adw.Dialog):
 
         def work():
             try:
-                fingerprint, paired_name = companion.pair(targets, lambda n, code: self._ask(attempt, n, code))
-            except companion.PairingRefused:
+                fingerprint, paired_name = link.pair(targets, lambda n, code: self._ask(attempt, n, code))
+            except link.PairingRefused:
                 GLib.idle_add(once(self._failed, attempt, _("Not paired: the code was not confirmed on both screens")))
             except Exception as e:  # noqa: BLE001 - shown to the user
                 log("pairing:", repr(e))
@@ -691,7 +691,7 @@ class PairDialog(Adw.Dialog):
             return False
         answered, answer = self.answer = (threading.Event(), [])
         GLib.idle_add(once(self._show_code, attempt, code))
-        if not answered.wait(companion.PAIRING_TIMEOUT):
+        if not answered.wait(link.PAIRING_TIMEOUT):
             log("pairing: the code was not confirmed in time")
         return bool(answer and answer[0])
 

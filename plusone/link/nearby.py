@@ -1,4 +1,6 @@
-"""Tablets on the local network, from what their apps announce over mDNS.
+"""Discovery over mDNS: the tablets on the local network, from what their
+apps announce, Plus One's own (where to connect, its id and version) and
+others' (that a tablet is there at all).
 
 Android's Quick Share and KDE Connect both say what kind of device they run
 on, and Avahi listens to the network anyway, so watching costs next to
@@ -12,14 +14,14 @@ import binascii
 
 from gi.repository import Gio, GLib
 
-from . import log, once
+from .. import log, once
 
 AVAHI = "org.freedesktop.Avahi"
 SERVER = AVAHI + ".Server"
 BROWSER = AVAHI + ".ServiceBrowser"
 QUICK_SHARE = "_FC9F5ED42C8A._tcp"
 KDE_CONNECT = "_kdeconnect._udp"
-COMPANION = "_plusone._tcp"  # Plus One's own app on the tablet (companion.py)
+COMPANION = "_plusone._tcp"  # Plus One's own app on the tablet (link.py)
 SERVICES = (QUICK_SHARE, KDE_CONNECT, COMPANION)
 UNSPEC = -1  # any interface, any protocol
 INET = 0     # Avahi's IPv4: the app is reached at an IPv4 address

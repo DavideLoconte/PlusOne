@@ -1,16 +1,16 @@
 """The paired tablets, the one in use, and the check of Second Screen's tablet."""
 import pytest
 
-from plusone import companion
+from plusone import link
 from plusone.engine import Settings
-from plusone.tablets import Tablets
+from plusone.link import Tablets
 
 KITCHEN, OFFICE = "aaaa" + "0" * 60, "bbbb" + "0" * 60
 
 
 @pytest.fixture
 def paired(tmp_path):
-    store = companion.Paired(str(tmp_path))
+    store = link.Paired(str(tmp_path))
     store.add(OFFICE, "Office")
     store.add(KITCHEN, "Kitchen")
     return store
@@ -43,7 +43,7 @@ def test_the_tablet_in_use(paired):
 
 def test_pairings_of_0_5_are_kept(tmp_path):
     (tmp_path / "paired.json").write_text('{"%s": "Tab", "%s": 3}' % (KITCHEN, OFFICE))
-    store = companion.Paired(str(tmp_path))
+    store = link.Paired(str(tmp_path))
     assert store.all() == {KITCHEN: "Tab"}
     store.learn(KITCHEN, app_at="10.0.0.7:47236")
     store.add(KITCHEN, "Tab S10")  # paired again: what was learned stays

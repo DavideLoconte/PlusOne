@@ -25,7 +25,7 @@ import gi
 gi.require_version("Gst", "1.0")
 from gi.repository import Gio, GLib, Gst  # noqa: E402
 
-from . import companion, log, once  # noqa: E402
+from . import link, log, once  # noqa: E402
 
 CAMERA_LABEL = "Plus One tablet camera"  # data/plus-one-camera-options.conf
 MIC_NAME = "plusone_mic"
@@ -38,7 +38,6 @@ IN_USE_AFTER = 0.2  # seconds a program holds the device before the tablet is as
 IDLE_AFTER = 3      # seconds without one before the tablet stops
 SILENT_FOR = 5      # seconds of a session without a packet before it is made again
 LIVE_GAP = 0.5      # seconds without the tablet's picture before the webcam shows black
-KEEPALIVE = 5       # seconds between the PC's pings while it holds a session (Rtc.kt: SILENT_PC)
 MIC_FEED = "plusone-mic-feed"  # the streams Plus One feeds the microphone with: MIC_FEED-<n>
 # ns of sound that may wait before the oldest goes: what waits stays, as delay,
 # once the sound comes as fast as it is played (160 ms measured 235 end to end).
@@ -135,7 +134,7 @@ class Feed:
         self.receiver, self.on_ready, self.on_problem = receiver, on_ready, on_problem
         self._wanted = threading.Event()
         self._unwanted = threading.Event()  # its opposite, to wait on
-        self._sock = None
+        self._link = None
         self._thread = None
 
     def start(self):
@@ -149,12 +148,9 @@ class Feed:
     def stop(self):
         self._wanted.clear()
         self._unwanted.set()
-        sock, self._sock = self._sock, None
-        if sock is not None:
-            try:
-                sock.shutdown(2)  # the session's thread wakes, and ends it
-            except OSError:
-                pass
+        tablet, self._link = self._link, None
+        if tablet is not None:
+            tablet.shutdown()  # the session's thread wakes, and ends it
 
     def _wait(self, seconds):
         self._unwanted.wait(seconds)
@@ -170,41 +166,37 @@ class Feed:
     def _session(self, kind):
         """One session with the tablet in use, until it ends: seconds to
         wait before the next, or None."""
-        sock = receiver = None
+        tablet = receiver = None
         try:
             where = self.where()
             if not where or not where[0]:
                 self.on_problem("away")
                 return RETRY
-            sock, wire = companion.open_link(where[0], where[1])
-            self._sock = sock
+            tablet = self._link = link.connect(where[0], where[1])
             if not self._wanted.is_set():
-                return None  # stopped while it connected: stop() had no socket to close
+                return None  # stopped while it connected: stop() had no link to close
             receiver = self.receiver()
             if hasattr(receiver, "peer"):
-                receiver.peer = sock.getpeername()[0]  # where pcm.PcmSender sends: the paired app's address
-            wire.send(dict(self.request, sdp=receiver.offer()))
-            reply = wire.receive()
-            if reply.get("type") == "refused":
-                raise companion.Refused(str(reply.get("reason", "")))
+                receiver.peer = tablet.peer  # where pcm.PcmSender sends: the paired app's address
+            reply = tablet.request(dict(self.request, sdp=receiver.offer()))
             if reply.get("type") != "answer":
                 raise ValueError(f"the app answered {reply.get('type')!r}")
             receiver.answer(str(reply.get("sdp", "")))
             log(f"{kind}: to the tablet, as it is" if kind == "speakers" else f"{kind}: from the tablet, over WebRTC")
             self.on_ready()
-            self._hold(kind, wire, receiver)
+            self._hold(kind, tablet, receiver)
             return None
-        except companion.Refused as e:
+        except link.Refused as e:
             log(f"{kind}: the tablet said no ({e})")
             self.on_problem(str(e))
             # Turned off or not allowed there: the user has to act; else soon.
             return REFUSED_RETRY if str(e) in ("off", "permission") else RETRY
-        except companion.PairingRefused as e:
+        except link.PairingRefused as e:
             # The tablet forgot this PC (or is another): pairing again is the user's.
             log(f"{kind}: the tablet does not know this PC ({e})")
             self.on_problem("unpaired")
             return REFUSED_RETRY
-        except companion.Incompatible as e:
+        except link.Incompatible as e:
             log(f"{kind}: {e}")
             self.on_problem("version")
             return REFUSED_RETRY
@@ -217,24 +209,20 @@ class Feed:
         finally:
             if receiver is not None:
                 receiver.close()
-            if sock is not None:
-                sock.close()
-            self._sock = None
+            if tablet is not None:
+                tablet.close()
+            self._link = None
 
-    def _hold(self, kind, wire, receiver):
-        """While wanted, the link up and the media flowing: the app hangs up
-        by closing it, Plus One by closing it too. The pings tell the app
-        this PC is still there (else it lets go)."""
-        said, heard, last, pinged = (0, 0, 0), 0, time.monotonic(), time.monotonic()
-        while self._wanted.is_set():
+    def _hold(self, kind, tablet, receiver):
+        """While wanted, the link up (link.hold) and the media flowing: the
+        app hangs up by closing it, Plus One by closing it too."""
+        said, heard, last = (0, 0, 0), 0, time.monotonic()
+
+        def flowing():
+            nonlocal said, heard, last
             problem = receiver.failed()
             if problem:
                 raise ConnectionError(problem)
-            if wire.readable(1.0):
-                wire.receive()
-            if time.monotonic() - pinged > KEEPALIVE:
-                wire.send({"type": "ping"})
-                pinged = time.monotonic()
             received, *losses = receiver.losses()
             if received > heard:
                 heard, last = received, time.monotonic()
@@ -244,6 +232,9 @@ class Feed:
             if tuple(losses) != said:
                 said = tuple(losses)
                 log(f"{kind}: {received} packets, lost %d, asked again for %d, asked for %d key frames" % said)
+
+        tablet.hold(until=lambda: not self._wanted.is_set(), check=flowing, tick=1.0)
+
 
 class Opened:
     """How many times a device file is open now, by anyone, from inotify's

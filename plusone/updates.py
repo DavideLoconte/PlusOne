@@ -22,7 +22,7 @@ import urllib.request
 
 from gi.repository import Gio, GLib
 
-from . import __version__, companion, log, once
+from . import __version__, link, log, once
 
 RELEASES = "https://github.com/GabrieleSantangelo/PlusOne/releases/download"
 MAX_APK = 64 << 20         # bytes: an app is 15 MB
@@ -30,6 +30,24 @@ DOWNLOAD_TIMEOUT = 60      # seconds without data
 TRY_AGAIN = 10 * 60        # seconds after an attempt, whatever came of it
 SETTLE = 5                 # seconds after the files changed: dpkg is done
 UPDATED_FROM = "PLUSONE_UPDATED_FROM"  # set for the process started again
+
+
+def update_app(targets, expect, apk, version, paired=None):
+    """Blocking: hands the paired tablet's app (whatever its protocol) its
+    update, the APK at apk of version (its versionCode). The app checks
+    it (its package, newer, signed as itself) and installs it; None then,
+    else its reason not to: "busy" (the PC uses it now), "off" (not
+    allowed there), "invalid" or "older"."""
+    with open(apk, "rb") as f:
+        data = f.read()
+    with link.connect(targets, expect, paired, any_version=True) as tablet:
+        tablet.settimeout(link.IO_TIMEOUT * 4)  # 15 MB over a slow Wi-Fi
+        try:
+            tablet.request({"type": "update", "version": version, "sha256": hashlib.sha256(data).hexdigest()},
+                           data, limit=link.UNPAIRED_HEADER)
+        except link.Refused as e:
+            return str(e) or "invalid"
+    return None
 
 
 def version_code(version):
@@ -86,7 +104,7 @@ class TabletUpdates:
     network, older, and nothing is in use. app: the application (its
     settings, tablets, nearby, busy() and notify())."""
 
-    def __init__(self, app, folder=None, fetch=app_apk, send=companion.update_app):
+    def __init__(self, app, folder=None, fetch=app_apk, send=update_app):
         self.app = app
         self.folder = folder or os.path.join(GLib.get_user_cache_dir(), "plus-one", "updates")
         self.fetch, self.send = fetch, send

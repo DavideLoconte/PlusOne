@@ -26,10 +26,9 @@ from gi.repository import Adw, Gio, GLib, Gst  # noqa: E402
 from . import __version__, add_log_handler, i18n, log, once  # noqa: E402
 from .engine import Controller, Settings, State  # noqa: E402
 from .i18n import _  # noqa: E402
-from .nearby import Nearby  # noqa: E402
 from .signing import Signing  # noqa: E402
 from .devices import SPEAKERS_NAME, Devices, make_default_sink  # noqa: E402
-from .tablets import Tablets  # noqa: E402
+from .link import Nearby, Tablets  # noqa: E402
 from .updates import UPDATED_FROM, SelfUpdate, TabletUpdates  # noqa: E402
 
 APP_ID = "io.github.gabrielesantangelo.PlusOne"

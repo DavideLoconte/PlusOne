@@ -4,7 +4,7 @@ import types
 
 import pytest
 
-from plusone import companion, engine
+from plusone import engine, link
 from plusone.engine import Controller, Settings, State
 
 
@@ -80,9 +80,9 @@ def test_the_app_shows_the_desktop(monkeypatch):
 
 
 @pytest.mark.parametrize("error, said", [
-    (companion.Refused("background"), "On {name}, let Plus One display over other apps, or open it"),
-    (companion.PairingRefused("Tab"), "{name} no longer knows this PC: pair it again"),
-    (companion.Incompatible("v2"), "Plus One on {name} and on this PC are different versions: update them"),
+    (link.Refused("background"), "On {name}, let Plus One display over other apps, or open it"),
+    (link.PairingRefused("Tab"), "{name} no longer knows this PC: pair it again"),
+    (link.Incompatible("v2"), "Plus One on {name} and on this PC are different versions: update them"),
     (ConnectionRefusedError(), "{name} did not answer: is Plus One open on it?"),
 ])
 def test_why_the_app_did_not_show_it_is_said(monkeypatch, error, said):

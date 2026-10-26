@@ -49,7 +49,7 @@ def app_constants():
 
 @pytest.mark.parametrize("text", sorted(
     (strings_in("gui.py") | strings_in("app.py") | strings_in("engine.py") | strings_in("sign.py")
-     | strings_in("signing.py") | strings_in("signature_pad.py") | strings_in("tablets.py") | strings_in("pdf.py")
+     | strings_in("signing.py") | strings_in("signature_pad.py") | strings_in("pdf.py")
      | strings_in("updates.py") | app_constants())
     - i18n.NEUTRAL))
 def test_has_italian(text):

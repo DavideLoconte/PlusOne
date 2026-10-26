@@ -8,8 +8,8 @@ import importlib.util
 import threading
 from dataclasses import dataclass
 
-from . import companion, log, media
-from .tablets import Tablets
+from . import link, log, media
+from .link import Tablets
 
 
 @dataclass
@@ -25,7 +25,7 @@ class Settings:
     sign_on_tablet: bool = True
     # The tablet's app brought to this PC's version (updates.py).
     update_tablet: bool = True
-    # The paired tablet in use (its app's certificate fingerprint, tablets.py):
+    # The paired tablet in use (its app's certificate fingerprint, link/tablets.py):
     # the only one that gets the desktop and the PDFs.
     tablet: str | None = None
     # Its camera and microphone as the PC's own (devices.py).
@@ -64,13 +64,13 @@ def parse_size(text):
 
 def why_not(error, name):
     """Why the app did not show the desktop: (English template, args)."""
-    if isinstance(error, companion.Refused):
+    if isinstance(error, link.Refused):
         if str(error) == "background":
             return "On {name}, let Plus One display over other apps, or open it", {"name": name}
         return "{name} did not let the desktop show: {reason}", {"name": name, "reason": str(error)}
-    if isinstance(error, companion.PairingRefused):
+    if isinstance(error, link.PairingRefused):
         return "{name} no longer knows this PC: pair it again", {"name": name}
-    if isinstance(error, companion.Incompatible):
+    if isinstance(error, link.Incompatible):
         return "Plus One on {name} and on this PC are different versions: update them", {"name": name}
     if isinstance(error, OSError):
         return "{name} did not answer: is Plus One open on it?", {"name": name}

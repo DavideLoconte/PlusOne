@@ -18,9 +18,9 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, Gtk  # noqa: E402
 
-from plusone import companion, gui  # noqa: E402
+from plusone import gui, link  # noqa: E402
 from plusone.engine import Settings, State  # noqa: E402
-from plusone.tablets import Tablets  # noqa: E402
+from plusone.link import Tablets  # noqa: E402
 
 KITCHEN, OFFICE = "aaaa" + "0" * 60, "bbbb" + "0" * 60
 
@@ -41,7 +41,7 @@ class Nearby:
 
 def make(monkeypatch, tmp_path, tablets=()):
     monkeypatch.setattr(gui, "shell_extension_state", lambda callback: None)
-    paired = companion.Paired(str(tmp_path))
+    paired = link.Paired(str(tmp_path))
     for fingerprint, name in tablets:
         paired.add(fingerprint, name)
     app = Adw.Application(application_id="io.github.gabrielesantangelo.PlusOne.Test")
@@ -157,7 +157,7 @@ def test_paired_with_the_tablet_chosen(monkeypatch, tmp_path):
         assert ask("New", "654321") is True
         app.tablets.paired.add(new, "New")
         return new, "New"
-    monkeypatch.setattr(companion, "pair", pair)
+    monkeypatch.setattr(link, "pair", pair)
     paired = []
     dialog = gui.PairDialog(app, on_paired=paired.append)
     dialog.rows[0].emit("activated")

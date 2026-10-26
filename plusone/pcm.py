@@ -1,6 +1,6 @@
 """The PC's sound to the tablet's speakers, as it is: 16-bit stereo PCM at
 48 kHz (no codec at all), in UDP packets of 5 ms sealed with AES-GCM under a
-key the paired link hands over (appdisplay.Channel). The app plays it with a
+key the paired link hands over (link.Datagrams). The app plays it with a
 plain media AudioTrack, as the tablet's own players do (PcmPlayback.kt).
 libwebrtc, which played it before, is made for calls: its jitter buffer
 stretched and squeezed the music to keep the delay down, and it sounded so.
@@ -14,14 +14,13 @@ the session's key and ports (JSON) where WebRTC's carry SDP; failed(),
 losses() (here: the sound captured) and close().
 """
 import json
-import os
 import struct
 import threading
 
 from gi.repository import Gst
 
 from . import log
-from .appdisplay import Channel
+from .link import Datagrams
 
 PCM = 7                  # the packets' kind (after appdisplay's)
 STATS = 5                # the app's report (appdisplay.STATS's number, its own layout)
@@ -36,8 +35,8 @@ STATS_EVERY = 30         # the app's reports (one a second) logged: one in so ma
 
 class PcmSender:
     def __init__(self, source):
-        self.key = os.urandom(32)
-        self.channel = Channel(self.key)
+        self.channel = Datagrams()
+        self.key = self.channel.key
         self.peer = None      # the app's address: set by Feed from the paired link
         self.broken = None
         self.sent = 0

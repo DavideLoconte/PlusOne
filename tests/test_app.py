@@ -87,10 +87,10 @@ def test_settings_are_private(tmp_path, monkeypatch):
 
 def test_forgetting_the_tablet_in_use_ends_its_session(tmp_path):
     import types
-    from plusone import app, companion
+    from plusone import app, link
     from plusone.engine import Settings
-    from plusone.tablets import Tablets
-    paired = companion.Paired(str(tmp_path))
+    from plusone.link import Tablets
+    paired = link.Paired(str(tmp_path))
     kitchen, office = "abcd" * 16, "ef" * 32
     paired.add(kitchen, "Kitchen")
     paired.add(office, "Office")

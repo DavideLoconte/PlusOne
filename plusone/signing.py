@@ -1,6 +1,6 @@
 """Sign a PDF on the tablet in one step.
 
-The PDF goes to Plus One's app on the tablet in use (companion.py) over the
+The PDF goes to Plus One's app on the tablet in use (sign_jobs.py) over the
 network, and the ink is drawn on the tablet itself, under the nib. The
 signed copy comes back next to the original, with a notification. When
 the app cannot be reached, the notification says so and offers signing on
@@ -14,7 +14,7 @@ import uuid
 
 from gi.repository import Gio, GLib
 
-from . import companion, log, once, signatures
+from . import link, log, once, sign_jobs, signatures
 from .i18n import _
 
 NOTIFICATION = "sign"
@@ -111,21 +111,21 @@ class Signing:
             GLib.idle_add(once(self._notify_in_app, path, _("Sign {name} on {tablet}"), tablet))
 
         # Taken now, in the order the PDFs were asked for: they reach the tablet in it.
-        turn = companion.next_turn()
+        turn = sign_jobs.next_turn()
 
         def work():
             result = error = None
             try:
-                result = companion.sign(targets, sent, pen=pen, signatures=ours, expect=app_id,
+                result = sign_jobs.sign(targets, sent, pen=pen, signatures=ours, expect=app_id,
                                         on_signatures=theirs, on_opened=opened,
                                         locate=lambda: self._locate_app(app_id),
                                         turn=turn, title=os.path.basename(path))
-            except companion.PairingRefused:
+            except link.PairingRefused:
                 error = "refused"
-            except companion.Lost:
+            except sign_jobs.Lost:
                 error = "lost"
-            except companion.Incompatible as e:
-                log("companion:", e)
+            except link.Incompatible as e:
+                log("signing:", e)
                 error = "incompatible"
             except Exception as e:  # noqa: BLE001 - whatever it was, Second Screen instead
                 error = e
@@ -168,7 +168,7 @@ class Signing:
             return False  # the user chose to sign on the PC meanwhile (or asked again since)
         del self.in_app[path]
         if error == "refused":
-            log("companion: the tablet does not know this PC")
+            log("signing: the tablet does not know this PC")
             note = Gio.Notification.new(_("Not paired"))
             note.set_body(_("{name} no longer knows this PC: pair it again").format(name=self.tablet))
             note.set_default_action("app.show")
@@ -192,7 +192,7 @@ class Signing:
             return False
         if isinstance(result, dict):
             self._keep_from_app(result)
-        marks = companion.to_marks(result) if result else {}
+        marks = sign_jobs.to_marks(result) if result else {}
         if not marks:
             # Not signed: what still waits on the tablet, if anything, or
             # what was signed before it.

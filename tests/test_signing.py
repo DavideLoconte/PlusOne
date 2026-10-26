@@ -2,11 +2,11 @@
 from gi.repository import GLib
 import pytest
 
-from plusone import companion
+from plusone import sign_jobs
 from plusone.engine import Settings, State
 from plusone import signing as signing_module
 from plusone.signing import Signing
-from plusone.tablets import Tablets
+from plusone.link import Tablets
 
 TAB = "a1b2" + "0" * 60  # the paired tablet's fingerprint
 APP = TAB[:16]           # what its app announces
@@ -155,7 +155,7 @@ def test_the_tablets_app_signs_when_it_is_on_the_network(monkeypatch, tmp_path):
     marks = {"pages": [{"page": 1, "marks": [
         {"type": "stroke", "width": 1.2, "color": [0, 0, 0], "points": [10, 20, 0.5, 30, 40, 0.6]}]}]}
     asked, saved = [], []
-    monkeypatch.setattr(companion, "sign", lambda target, path, **kw: asked.append(
+    monkeypatch.setattr(sign_jobs, "sign", lambda target, path, **kw: asked.append(
         (target, path, kw["expect"], kw["title"])) or marks)
     import plusone.pdf
     monkeypatch.setattr(plusone.pdf, "save_signed",
@@ -181,7 +181,7 @@ def test_an_app_that_does_not_answer_offers_signing_here(monkeypatch, tmp_path):
 
     def unreachable(*args, **kwargs):
         raise ConnectionRefusedError()
-    monkeypatch.setattr(companion, "sign", unreachable)
+    monkeypatch.setattr(sign_jobs, "sign", unreachable)
     path = str(tmp_path / "form.pdf")
     signing.request(path)
     assert spin(lambda: notes and notes[-1][0] == path and "did not answer" in notes[-1][1])
@@ -205,7 +205,7 @@ def test_only_the_tablet_in_use_signs(monkeypatch, tmp_path):
     # Another tablet's app on the network, paired or not, gets nothing.
     app, signing, _, _ = make(monkeypatch)
     app.nearby.app_on = ("10.0.0.7", 40000, "Someone's Tab", "ffff" + "0" * 12)
-    monkeypatch.setattr(companion, "sign", lambda *a, **k: (_ for _ in ()).throw(AssertionError("sent")))
+    monkeypatch.setattr(sign_jobs, "sign", lambda *a, **k: (_ for _ in ()).throw(AssertionError("sent")))
     signing.request(str(tmp_path / "form.pdf"))
     assert not signing.in_app
 
@@ -213,13 +213,13 @@ def test_only_the_tablet_in_use_signs(monkeypatch, tmp_path):
 def test_nothing_is_sent_without_a_paired_tablet(monkeypatch, tmp_path):
     app, signing, _, notes = make(monkeypatch, paired=False)
     app.nearby.app_on = ("10.0.0.2", 40000, "Galaxy Tab", APP)
-    monkeypatch.setattr(companion, "sign", lambda *a, **k: (_ for _ in ()).throw(AssertionError("sent")))
+    monkeypatch.setattr(sign_jobs, "sign", lambda *a, **k: (_ for _ in ()).throw(AssertionError("sent")))
     signing.request(str(tmp_path / "form.pdf"))
     assert app.notes == ["sign"] and app.controller.starts == 0 and not signing.in_app
 
 
 def test_one_app_per_tablet():
-    from plusone.nearby import Nearby
+    from plusone.link import Nearby
     nearby = Nearby()
     nearby.companions = {"a": ("10.0.0.2", 1000, "Kitchen", "aaaa"), "b": ("10.0.0.9", 2000, "Office", "bbbb"),
                          "b6": ("10.0.0.9", 2000, "Office", "bbbb")}  # the same app on two interfaces
@@ -229,7 +229,7 @@ def test_one_app_per_tablet():
 def test_a_dropped_link_finds_the_same_tablet_again(monkeypatch):
     # Two tablets on the network: the PDF's comes back from its own, not
     # from whichever would be picked for a new PDF.
-    from plusone.nearby import Nearby
+    from plusone.link import Nearby
     app, signing, _, _ = make(monkeypatch)
     app.nearby = Nearby()
     app.nearby.companions = {"a": ("10.0.0.2", 1000, "Kitchen", "aaaa"), "b": ("10.0.0.9", 2001, "Office", "bbbb")}
@@ -242,7 +242,7 @@ def test_signed_on_the_tablet_is_never_lost_for_a_folder_that_takes_nothing(monk
     app.nearby.app_on = ("10.0.0.2", 40000, "Galaxy Tab", APP)
     marks = {"pages": [{"page": 0, "marks": [
         {"type": "stroke", "width": 1.2, "color": [0, 0, 0], "points": [10, 20, 0.5, 30, 40, 0.6]}]}]}
-    monkeypatch.setattr(companion, "sign", lambda target, path, **kw: marks)
+    monkeypatch.setattr(sign_jobs, "sign", lambda target, path, **kw: marks)
     documents = tmp_path / "Documents"
     documents.mkdir()
     monkeypatch.setattr(signing_module.GLib, "get_user_special_dir", lambda which: str(documents))

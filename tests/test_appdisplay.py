@@ -5,6 +5,7 @@ import struct
 import pytest
 
 from plusone import appdisplay  # noqa: E402
+from plusone.link.datagrams import FROM_APP, FROM_PC, Datagrams  # noqa: E402
 
 crypto = pytest.importorskip("cryptography.hazmat.primitives.ciphers.aead")
 AESGCM = crypto.AESGCM
@@ -13,7 +14,7 @@ KEY = bytes(range(32))
 
 
 def channel_to(peer):
-    channel = appdisplay.Channel(KEY)
+    channel = Datagrams(KEY)
     channel.app = peer.getsockname()
     return channel
 
@@ -32,8 +33,8 @@ def test_a_video_packet_as_the_app_reads_it():
         channel.close()
         app.close()
     # DisplaySession.kt: nonce = direction (4 bytes) and count (8), then the sealed body.
-    assert struct.unpack("!IQ", first[:12]) == (appdisplay.FROM_PC, 0)
-    assert struct.unpack("!IQ", second[:12]) == (appdisplay.FROM_PC, 1)  # never the same nonce twice
+    assert struct.unpack("!IQ", first[:12]) == (FROM_PC, 0)
+    assert struct.unpack("!IQ", second[:12]) == (FROM_PC, 1)  # never the same nonce twice
     assert AESGCM(KEY).decrypt(first[:12], first[12:], None) == body
     assert len(appdisplay.VIDEO_HEADER.pack(1, 0, 0, 0, 1, 0)) + appdisplay.PAYLOAD + 12 + 16 <= 1472
 
@@ -44,7 +45,7 @@ def test_only_the_apps_fresh_packets_are_taken():
     channel = channel_to(app)
     pc = ("127.0.0.1", channel.port)
 
-    def from_app(count, body, key=KEY, direction=appdisplay.FROM_APP):
+    def from_app(count, body, key=KEY, direction=FROM_APP):
         nonce = struct.pack("!IQ", direction, count)
         app.sendto(nonce + AESGCM(key).encrypt(nonce, body, None), pc)
 
@@ -54,7 +55,7 @@ def test_only_the_apps_fresh_packets_are_taken():
         from_app(5, b"\x02")                       # replayed
         from_app(4, b"\x02")                       # older
         from_app(6, b"\x02", key=bytes(32))        # another key
-        from_app(7, b"\x02", direction=appdisplay.FROM_PC)  # its own packets sent back
+        from_app(7, b"\x02", direction=FROM_PC)  # its own packets sent back
         assert channel.receive(0.3) is None
         assert channel.receive(0.3) is None
         assert channel.receive(0.3) is None

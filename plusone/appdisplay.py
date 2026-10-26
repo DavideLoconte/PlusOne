@@ -9,13 +9,8 @@ carry the time they were captured, and pings match the two clocks.
 """
 import argparse
 import collections
-import fcntl
 import math
-import os
-import select
-import socket
 import struct
-import termios
 import threading
 import time
 
@@ -24,14 +19,13 @@ import gi
 gi.require_version("Gst", "1.0")
 from gi.repository import GLib, Gst  # noqa: E402
 
-from . import companion, log, media, once, pen  # noqa: E402
+from . import link, log, media, once, pen  # noqa: E402
+from .link.datagrams import NONCE, TAG, Datagrams  # noqa: E402
 
 VIDEO, KEYFRAME, PING, PONG, STATS, INPUT = 1, 2, 3, 4, 5, 6
-FROM_PC, FROM_APP = 1, 2
-NONCE = struct.Struct("!IQ")         # direction, count
 VIDEO_HEADER = struct.Struct("!BBIHHq")  # kind, flags, frame, index, count, captured
 # H.264 per packet: with the header, nonce and tag, one Ethernet frame.
-PAYLOAD = 1472 - VIDEO_HEADER.size - NONCE.size - 16
+PAYLOAD = 1472 - VIDEO_HEADER.size - NONCE.size - TAG
 MIN_KEYFRAME_GAP = 0.25  # seconds; the app asks again until one comes
 STATS_FORMAT = struct.Struct("!BII6H")
 FINGER = struct.Struct("!BHH")  # id, x, y (0..65535 of the screen)
@@ -381,71 +375,6 @@ class Input:
         self.pen_last = report if report[1] & pen.IN_RANGE else None
 
 
-class Channel:
-    """The session's UDP socket, sealed both ways."""
-
-    def __init__(self, key):
-        # Here, not at the top: the window uses this module's sizes
-        # where python3-cryptography may be missing (from the sources).
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        self.aead = AESGCM(key)
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # Room for a keyframe's packets at once (as much of it as the kernel
-        # allows: net.core.wmem_max; past it, sending waits for the Wi-Fi).
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 << 20)
-        self.sock.bind(("0.0.0.0", 0))
-        self.port = self.sock.getsockname()[1]
-        self.app = None          # (address, port), from the app's answer
-        self._sent = 0
-        self._lock = threading.Lock()
-        self._heard = -1         # the app's highest count: older ones are replays
-        self.errors = set()
-
-    def send(self, body):
-        with self._lock:
-            nonce = NONCE.pack(FROM_PC, self._sent)
-            self._sent += 1
-        try:
-            self.sock.sendto(nonce + self.aead.encrypt(nonce, body, None), self.app)
-        except OSError as e:
-            if e.errno not in self.errors:
-                self.errors.add(e.errno)
-                log("app display: cannot send:", e.strerror)
-
-    def queued(self):
-        """Bytes sent and not yet on the air: in the socket, the queue, the
-        Wi-Fi driver (each packet counts until it is transmitted)."""
-        try:
-            return struct.unpack("i", fcntl.ioctl(self.sock.fileno(), termios.TIOCOUTQ, b"\0" * 4))[0]
-        except (OSError, ValueError):
-            return 0
-
-    def receive(self, timeout):
-        """A body from the app, or None (nothing in time, or not the app's).
-        The socket stays blocking: a timeout on it would be the streaming
-        thread's too, and a frame's tail dropped when the buffer is full."""
-        try:
-            if not select.select([self.sock], [], [], timeout)[0]:
-                return None
-            packet, address = self.sock.recvfrom(2048)
-        except (OSError, ValueError):  # closed
-            return None
-        if address[0] != self.app[0] or len(packet) < NONCE.size + 17:
-            return None
-        direction, count = NONCE.unpack_from(packet)
-        if direction != FROM_APP or count <= self._heard:
-            return None
-        try:
-            body = self.aead.decrypt(packet[:NONCE.size], packet[NONCE.size:], None)
-        except Exception:  # noqa: BLE001 - not sealed with this session's key
-            return None
-        self._heard = count
-        return body
-
-    def close(self):
-        self.sock.close()
-
-
 class RateControl:
     """The bitrate the network takes, from the app's report each second:
     down by a third at once when frames were lost or the delay through the
@@ -701,7 +630,7 @@ class AppDisplay:
         self.on_started = on_started or (lambda mode, screen: None)
         self.on_ended = on_ended or (lambda error, started: None)
         self.on_paused = on_paused or (lambda paused: None)
-        self.channel = self.monitor = self.streamer = self.sock = None
+        self.channel = self.monitor = self.streamer = self.link = None
         self.tablet_size = None  # what the app said its screen is
         self.started = False
         self._reports = 0
@@ -722,18 +651,14 @@ class AppDisplay:
     def _run(self):
         error = None
         try:
-            self.sock, wire = companion.open_link(self.targets, self.app_id)
+            self.link = link.connect(self.targets, self.app_id)
             if self._stopped.is_set():
                 return
-            key = os.urandom(32)
-            self.channel = Channel(key)
-            wire.send({"type": "display", "key": key.hex(), "port": self.channel.port})
-            reply = wire.receive()
-            if reply.get("type") == "refused":
-                raise companion.Refused(str(reply.get("reason", "")))
+            self.channel = Datagrams()
+            reply = self.link.request({"type": "display", "key": self.channel.key.hex(), "port": self.channel.port})
             if reply.get("type") != "display-ready":
                 raise ValueError(f"the app answered {reply.get('type')!r}")
-            address = self.sock.getpeername()[0]
+            address = self.link.peer
             self.channel.app = (address, int(reply["port"]))
             self.tablet_size = (int(reply["width"]), int(reply["height"]))
             log(f"app display: {address} shows {self.tablet_size[0]}x{self.tablet_size[1]}"
@@ -743,29 +668,19 @@ class AppDisplay:
                 width, height = auto_size(self.tablet_size)
             self.mode = (width, height, fps)
             GLib.idle_add(once(self._open))
-            self._hold(wire)
+            # Until the app hangs up (Back on the tablet), is gone, or stop().
+            self.link.hold(until=self._stopped.is_set)
+            try:
+                self.link.send({"type": "stop"})
+            except OSError:
+                pass
         except Exception as e:  # noqa: BLE001 - not there, refused, or gone: said to the caller
             error = e
         finally:
-            if self.sock is not None:
-                self.sock.close()
+            if self.link is not None:
+                self.link.close()
             if not self._stopped.is_set():
                 GLib.idle_add(once(self._ended, error))
-
-    def _hold(self, wire):
-        """While the session lasts: pings (the app lets go of a silent PC),
-        and the end when the app hangs up (Back on the tablet) or stop()."""
-        pinged = time.monotonic()
-        while not self._stopped.is_set():
-            if wire.readable(0.5):
-                wire.receive()  # nothing is expected; EOF raises
-            if time.monotonic() - pinged > 5:
-                wire.send({"type": "ping"})
-                pinged = time.monotonic()
-        try:
-            wire.send({"type": "stop"})
-        except OSError:
-            pass
 
     # -- the main loop ---------------------------------------------------------
     def _open(self):
@@ -855,7 +770,7 @@ def main(argv=None):
     fingers and pen, its delay measured."""
     ap = argparse.ArgumentParser(prog="python3 -m plusone.appdisplay")
     ap.add_argument("address", help="the tablet's address on the network")
-    ap.add_argument("--port", type=int, default=companion.APP_PORT)
+    ap.add_argument("--port", type=int, default=link.APP_PORT)
     ap.add_argument("--size", default="auto", help="WxH at the tablet's proportions, or auto")
     ap.add_argument("--fps", type=int, default=60)
     ap.add_argument("--bitrate", type=int, default=20000, help="kbit/s")
@@ -865,7 +780,7 @@ def main(argv=None):
     ap.add_argument("--preview", action="store_true", help="the test pattern in a window here too, to photograph")
     args = ap.parse_args(argv)
     Gst.init(None)
-    paired = companion.Paired().all()
+    paired = link.Paired().all()
     if len(paired) != 1:
         raise SystemExit("pair exactly one tablet first")
     width, height = (None, None) if args.size == "auto" else map(int, args.size.split("x"))

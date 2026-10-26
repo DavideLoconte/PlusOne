@@ -40,7 +40,7 @@ module (files, clipboard, a phone as a scanner) would add one more copy.
 ### Link
 
 There is one link per paired device: `plusone/link.py` on the PC and
-`Link.kt` in the app. It keeps what `companion.py` and `CompanionService.kt`
+`Link.kt` in the app. It keeps what `companion.py` (now `plusone/link/`) and `CompanionService.kt`
 already do well:
 - pairing, with the commitment, the six-digit code and pinned
   certificates;
