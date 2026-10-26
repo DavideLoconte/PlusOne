@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.hardware.usb.UsbAccessory
+import android.hardware.usb.UsbManager
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
@@ -67,6 +69,9 @@ class CompanionService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         lastUse = System.currentTimeMillis()  // the app was opened, or a job came
+        val accessory = intent?.getParcelableExtra(UsbManager.EXTRA_ACCESSORY, UsbAccessory::class.java)
+            ?: synchronized(this) { if (usb == null) pluggedUsb() else null }
+        accessory?.let(::openUsb)
         return if (Options.alwaysReady(this)) START_STICKY else START_NOT_STICKY
     }
 
@@ -102,6 +107,7 @@ class CompanionService : Service() {
             registration?.let { runCatching { (getSystemService(NSD_SERVICE) as NsdManager).unregisterService(it) } }
             registration = null
             server?.close()
+            usb?.stop()
         }
         connections.shutdownNow()
         super.onDestroy()
@@ -157,21 +163,63 @@ class CompanionService : Service() {
             // Small messages go at once (pairing's, the answers to the PC's
             // pings), not held back by Nagle's algorithm for delayed ACKs.
             try { client.tcpNoDelay = true } catch (e: Exception) {}
-            // Connections not through TLS yet, few at a time: strangers that
-            // never finish their handshake cannot take every thread from a paired PC.
-            if (handshaking.incrementAndGet() > MAX_HANDSHAKING) {
-                handshaking.decrementAndGet()
-                client.close()
-                continue
-            }
-            try {
-                connections.execute { handle(client) }
-            } catch (e: RejectedExecutionException) {
-                handshaking.decrementAndGet()
-                client.close()
-            }
+            accept(client)
         }
     }
+
+    /** A PC's connection, from the network or the cable (UsbTunnel). */
+    fun accept(client: SSLSocket) {
+        // Connections not through TLS yet, few at a time: strangers that
+        // never finish their handshake cannot take every thread from a paired PC.
+        if (handshaking.incrementAndGet() > MAX_HANDSHAKING) {
+            handshaking.decrementAndGet()
+            runCatching { client.close() }
+            return
+        }
+        try {
+            connections.execute { handle(client) }
+        } catch (e: RejectedExecutionException) {
+            handshaking.decrementAndGet()
+            runCatching { client.close() }
+        }
+    }
+
+    /** The PC over the USB cable, the accessory Android just handed to UsbActivity. */
+    private fun openUsb(accessory: UsbAccessory) {
+        val fd = getSystemService(UsbManager::class.java).openAccessory(accessory)
+        if (fd == null) {
+            Log.w(TAG, "usb: the accessory could not be opened")
+            return
+        }
+        synchronized(this) {
+            usb?.stop()
+            usb = UsbTunnel(this, fd) { reopenUsb(accessory, USB_REOPEN_TRIES) }.also { it.start() }
+        }
+        Log.i(TAG, "usb: the cable's link is open")
+    }
+
+    /** The PC's accessory, left on the cable while the app was not running
+     * (Android hands it over only when it attaches): this app's to open. */
+    private fun pluggedUsb(): UsbAccessory? {
+        val manager = getSystemService(UsbManager::class.java)
+        return manager.accessoryList?.firstOrNull { it.manufacturer == "Plus One" && manager.hasPermission(it) }
+    }
+
+    /** The PC resets the cable's link to start afresh, and Android may keep
+     * the accessory through it (no new UsbActivity): opened again while it
+     * is there. Unplugged, it is not, and nothing happens. */
+    private fun reopenUsb(accessory: UsbAccessory, tries: Int) {
+        handler.postDelayed({
+            val manager = getSystemService(UsbManager::class.java)
+            if (stopped || manager.accessoryList?.contains(accessory) != true || !manager.hasPermission(accessory)) {
+                if (tries > 1) reopenUsb(accessory, tries - 1)  // between leaving and coming back
+                return@postDelayed
+            }
+            openUsb(accessory)
+        }, USB_REOPEN_WAIT)
+    }
+
+    private var usb: UsbTunnel? = null  // under this
 
     private fun advertise(port: Int) {
         val info = NsdServiceInfo().apply {
@@ -691,6 +739,8 @@ class CompanionService : Service() {
         private val JOB_ID = Regex("[0-9a-f]{32}")
         const val IDLE_CHECK = 60_000L       // ms
         const val IDLE_STOP = 10 * 60_000L   // ms without a PC when not always ready
+        const val USB_REOPEN_WAIT = 500L     // ms between looks for the accessory after its stream broke
+        const val USB_REOPEN_TRIES = 6
 
         fun deviceName(context: Context): String =
             Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME) ?: Build.MODEL
@@ -700,6 +750,12 @@ class CompanionService : Service() {
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, CompanionService::class.java))
+        }
+
+        /** Started (if it is not) with the PC's USB accessory to open. */
+        fun startUsb(context: Context, accessory: UsbAccessory) {
+            context.startForegroundService(Intent(context, CompanionService::class.java)
+                .putExtra(UsbManager.EXTRA_ACCESSORY, accessory))
         }
     }
 }

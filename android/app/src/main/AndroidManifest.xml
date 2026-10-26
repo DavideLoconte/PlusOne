@@ -22,6 +22,8 @@
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <!-- Lets a PDF sent by the PC open by itself; granted by the user in Settings. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- The PC over the USB cable (Android Open Accessory), where there is one. -->
+    <uses-feature android:name="android.hardware.usb.accessory" android:required="false" />
 
     <application
         android:label="@string/app_name"
@@ -85,6 +87,22 @@
             android:taskAffinity="io.github.gabrielesantangelo.plusone.capture"
             android:excludeFromRecents="true"
             android:noHistory="true" />
+
+        <!-- See-through, for an instant: Android opens it for the PC on the
+             USB cable; it hands the accessory to the service. -->
+        <activity
+            android:name=".UsbActivity"
+            android:exported="true"
+            android:theme="@style/Theme.PlusOne.Capture"
+            android:excludeFromRecents="true"
+            android:noHistory="true">
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED"
+                android:resource="@xml/accessory_filter" />
+        </activity>
 
         <service
             android:name=".CompanionService"

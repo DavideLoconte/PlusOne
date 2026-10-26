@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The PC on the USB cable, as plusone/usb.py names itself. -->
+<resources>
+    <usb-accessory manufacturer="Plus One" model="Plus One" />
+</resources>
