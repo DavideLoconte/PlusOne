@@ -198,6 +198,32 @@ windows move. Still open: the tablet's own resolution (2880×1800 wants a
 fractional scale for the virtual monitor), and a photo of both screens
 for the delay to the glass.
 
+### 0.8 — Up to date, and a touchpad (done)
+
+- **Updates by themselves**: each release an APT repository (apt, Software
+  Updater, unattended-upgrades); Plus One starts again once idle. The
+  tablet's app brought to the PC's version by the PC, without a question
+  after the first time.
+- **The fingers as on a touchpad**, where they touch: tap, drag, hold; two
+  to scroll with momentum, pinch, right button; three to swipe.
+- **The picture follows the network**: the bitrate down as soon as frames
+  are lost or a queue grows, frames not encoded while the data before them
+  waits; on a weak 2.4 GHz network, from 100-170 ms and freezes to 22 ms.
+- The fixes of a review of the whole code (bugs, power, security).
+
+### 0.9 — One link, many channels; the app only
+
+- **Channels** ([CHANNELS.md](CHANNELS.md)): one link per paired device,
+  reliable and datagram channels over it, audio and video channels with
+  filters and effects, modules on top with permissions per PC.
+- **Samsung's Second Screen goes**: the app does all it did, better
+  (latency, quality, touch, the network); RTSP, UIBC, MPEG-TS and adb go
+  with it.
+- **Wi-Fi Direct as a path** of the link when the shared Wi-Fi is weak or
+  missing (both devices keep the home network meanwhile, measured).
+- **Losses recovered** without a whole keyframe (packets asked again, or
+  sent with parity), so a lost packet is not a frozen picture.
+
 ### Later — Tablet modes and picture quality
 
 - **Mirror** an existing monitor (presentations, teaching).

@@ -1,9 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.8.0
 
-From a review of the whole code, bugs and security; and the desktop in
-the app on a weak Wi-Fi.
+Updates by themselves; the fingers as on a touchpad; the picture that
+follows the network; and the fixes of a review of the whole code, bugs
+and security.
 
 - **The picture follows the network**: through the app, the bitrate set
   is the most; it goes down by a third as soon as the tablet reports
