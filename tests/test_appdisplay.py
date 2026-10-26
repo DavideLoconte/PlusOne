@@ -110,79 +110,132 @@ def test_a_finger_tapped_is_the_left_button():
                              ("pointer_button", appdisplay.pen.BTN_LEFT, False)]
 
 
-def test_a_finger_that_moves_is_touches_from_where_it_began():
+def test_a_finger_that_moves_drags_with_the_left_button():
     touch, monitor, clock = touch_input()
     touch.packet(fingers((0, 0.5, 0.5)))
     clock.now += 0.04
-    touch.packet(fingers((0, 0.52, 0.5)))  # a drag: at once, nothing of it lost
-    assert [c[0] for c in monitor.calls] == ["touch_down", "touch_motion"]
-    assert monitor.calls[0][2] == pytest.approx(500, abs=0.1)
-    touch.packet(fingers((0, 0.6, 0.5)))
-    assert monitor.calls[-1][0] == "touch_motion"
+    touch.packet(fingers((0, 0.52, 0.5)))  # text selected, a window moved: from where it began
+    assert [c[0] for c in monitor.calls] == ["pointer_move", "pointer_button", "pointer_move"]
+    assert monitor.calls[0][1] == pytest.approx(500, abs=0.1)
+    assert monitor.calls[1][1:] == (appdisplay.pen.BTN_LEFT, True)
+    touch.packet(fingers())
+    assert monitor.calls[-1] == ("pointer_button", appdisplay.pen.BTN_LEFT, False)
 
 
-def test_a_finger_held_is_a_touch_held():
+def test_a_finger_held_is_the_right_button():
     touch, monitor, clock = touch_input()
     touch.packet(fingers((0, 0.5, 0.5)))
-    clock.now += appdisplay.TAP_TIME / 2
+    clock.now += appdisplay.HOLD / 2
     touch.packet(fingers((0, 0.5, 0.5)))  # the app says it again every 0.1 s
     assert monitor.calls == []
-    clock.now += appdisplay.TAP_TIME / 2 + 0.01
-    touch.check()  # (a long press: the program's own menu, if it has one)
-    assert [c[0] for c in monitor.calls] == ["touch_down"]
-
-
-def test_two_fingers_tapped_are_the_right_button():
-    touch, monitor, clock = touch_input()
-    touch.packet(fingers((0, 0.3, 0.4)))
-    clock.now += 0.03
-    touch.packet(fingers((0, 0.3, 0.4), (1, 0.35, 0.4)))
-    clock.now += 0.1
+    clock.now += appdisplay.HOLD / 2 + 0.01
     touch.check()
-    touch.packet(fingers((1, 0.35, 0.4)))
-    clock.now += 0.05
+    assert [c[1:] for c in monitor.calls if c[0] == "pointer_button"] == [
+        (appdisplay.pen.BTN_RIGHT, True), (appdisplay.pen.BTN_RIGHT, False)]
     touch.packet(fingers())
-    assert monitor.calls == [("pointer_move", pytest.approx(300, abs=0.1), pytest.approx(400, abs=0.1)),
-                             ("pointer_button", appdisplay.pen.BTN_RIGHT, True),
-                             ("pointer_button", appdisplay.pen.BTN_RIGHT, False)]
+    assert len(monitor.calls) == 3  # lifted: nothing more
 
 
-def test_a_pinch_is_touches():
+def scroll(touch, clock, step=0.02, times=5):
+    """Two fingers moved up together, a packet every 10 ms."""
+    y = 0.5
+    touch.packet(fingers((0, 0.4, y), (1, 0.6, y)))
+    for _ in range(times):
+        clock.now += 0.01
+        y -= step
+        touch.packet(fingers((0, 0.4, y), (1, 0.6, y)))
+
+
+def test_two_fingers_scroll_and_a_flick_goes_on():
     touch, monitor, clock = touch_input()
-    touch.packet(fingers((0, 0.3, 0.4)))
-    clock.now += 0.03
-    touch.packet(fingers((0, 0.3, 0.4), (1, 0.4, 0.4)))
-    clock.now += 0.03
-    touch.packet(fingers((0, 0.25, 0.4), (1, 0.45, 0.4)))
-    assert [c[0] for c in monitor.calls] == ["touch_down", "touch_down", "touch_motion", "touch_motion"]
+    scroll(touch, clock)
+    axes = [c for c in monitor.calls if c[0] == "pointer_axis"]
+    assert monitor.calls[0][0] == "pointer_move" and axes  # what is under the fingers scrolls
+    assert all(c[1] == 0 and c[2] > 0 for c in axes)  # fingers up: the page with them (further down)
+    clock.now += 0.005
+    touch.packet(fingers())  # flicked: it goes on by itself
+    assert touch.fling is not None and touch.busy()
+    moved = []
+    for _ in range(200):
+        clock.now += 0.02
+        touch.check()
+        moved += [c[2] for c in monitor.calls[-1:] if c[0] == "pointer_axis"]
+        if touch.fling is None:
+            break
+    assert touch.fling is None and monitor.calls[-1] == ("pointer_axis", 0.0, 0.0, True)  # finished
+    assert moved[0] > moved[len(moved) // 2] > 0  # slowing down
+    assert sum(moved) > 100  # 2 metres a second for 0.35 s: about 700 px of 1000
 
 
-def test_two_fingers_resting_are_touches():
+def test_a_slow_scroll_stops_where_the_fingers_lift():
+    touch, monitor, clock = touch_input()
+    scroll(touch, clock, step=0.001, times=30)
+    clock.now += 0.2  # held still a moment before lifting
+    touch.packet(fingers((0, 0.4, 0.47), (1, 0.6, 0.47)))
+    touch.packet(fingers())
+    assert touch.fling is None and monitor.calls[-1] == ("pointer_axis", 0.0, 0.0, True)
+
+
+def test_a_finger_down_stops_a_flick():
+    touch, monitor, clock = touch_input()
+    scroll(touch, clock)
+    touch.packet(fingers())
+    assert touch.fling is not None
+    clock.now += 0.02
+    touch.packet(fingers((0, 0.5, 0.5)))
+    assert touch.fling is None and monitor.calls[-1] == ("pointer_axis", 0.0, 0.0, True)
+
+
+def test_a_pinch_is_a_pinch_on_the_desktop():
+    # As touches, from where the fingers began: a browser zooms the picture
+    # under them, as a touchpad's pinch does.
+    touch, monitor, clock = touch_input()
+    touch.packet(fingers((0, 0.45, 0.5), (1, 0.55, 0.5)))  # 100 px apart
+    for spread in (0.06, 0.07):
+        clock.now += 0.02
+        touch.packet(fingers((0, 0.5 - spread, 0.5), (1, 0.5 + spread, 0.5)))
+    touch.packet(fingers())
+    assert [c[:2] for c in monitor.calls] == [("touch_down", 0), ("touch_down", 1),
+                                               ("touch_motion", 0), ("touch_motion", 1),
+                                               ("touch_motion", 0), ("touch_motion", 1),
+                                               ("touch_up", 0), ("touch_up", 1)]
+    assert monitor.calls[0][2] == pytest.approx(450, abs=0.1)  # where it began
+
+
+def test_three_fingers_swiped_up_show_the_overview():
+    touch, monitor, clock = touch_input()
+    touch.packet(fingers((0, 0.4, 0.6), (1, 0.5, 0.6), (2, 0.6, 0.6)))
+    clock.now += 0.05
+    touch.packet(fingers((0, 0.4, 0.45), (1, 0.5, 0.45), (2, 0.6, 0.45)))
+    touch.packet(fingers((0, 0.4, 0.3), (1, 0.5, 0.3), (2, 0.6, 0.3)))  # once only
+    touch.packet(fingers())
+    assert [c[1:] for c in monitor.calls] == [(appdisplay.KEY_SUPER, True), (appdisplay.KEY_SUPER, False)]
+
+
+def test_two_fingers_resting_do_nothing():
     touch, monitor, clock = touch_input()
     touch.packet(fingers((0, 0.3, 0.4), (1, 0.4, 0.4)))
     clock.now += appdisplay.TAP_TIME + 0.01
-    touch.check()
-    assert [c[0] for c in monitor.calls] == ["touch_down", "touch_down"]
+    touch.packet(fingers((0, 0.3, 0.4), (1, 0.4, 0.4)))
+    touch.packet(fingers())
+    assert monitor.calls == []
 
 
 def test_silence_lifts_what_touches():
     touch, monitor, clock = touch_input()
     touch.packet(fingers((0, 0.5, 0.5)))
-    clock.now += 0.1
-    touch.check()
+    clock.now += 0.04
+    touch.packet(fingers((0, 0.6, 0.5)))  # a drag
     clock.now += appdisplay.INPUT_SILENCE
     touch.check()
-    assert [c[0] for c in monitor.calls] == ["touch_down", "touch_up"]
+    assert monitor.calls[-1] == ("pointer_button", appdisplay.pen.BTN_LEFT, False) and not touch.busy()
 
 
 def test_the_listener_looks_often_only_while_something_touches():
     touch, _monitor, clock = touch_input()
     assert not touch.busy()
     touch.packet(fingers((0, 0.5, 0.5)))
-    assert touch.busy()  # a second finger may come
-    clock.now += 0.1
-    touch.check()
-    assert touch.busy()  # down
+    assert touch.busy()  # a tap, a drag or a hold: time tells
     touch.packet(fingers())
     assert not touch.busy()
 

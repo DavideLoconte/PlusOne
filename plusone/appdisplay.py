@@ -10,6 +10,7 @@ carry the time they were captured, and pings match the two clocks.
 import argparse
 import collections
 import fcntl
+import math
 import os
 import select
 import socket
@@ -40,15 +41,27 @@ MAX_FINGERS = 10
 INPUT_SILENCE = 0.4  # seconds: the app repeats what touches every 0.1 s; quiet this long, all is lifted
 IDLE_WAIT = 0.25     # seconds the listener sleeps while nothing touches (stop() waits as long)
 STATS_EVERY = 30     # the app's reports (one a second) logged: one in so many, and each with a loss
-# A finger tapped (lifted within TAP_TIME, having moved less than TAP_SLOP
-# of the screen) is the left button, as the pen's tip: a touch tapped is
-# hover and focus to some programs (Qt's, Telegram's), which wanted a
-# second tap. Two fingers tapped together (less than TAP_MOVE) are the right
-# button. Anything else (a drag, a scroll, a pinch, a finger held) goes on
-# as touches, from where it began: a finger waits until it is not a tap.
+# The fingers as on a touchpad (Input): a tap within TAP_TIME, having moved
+# less than TAP_SLOP of the screen (two fingers: TAP_MOVE), clicks; one
+# finger moved further drags, held for HOLD clicks the right button. Two
+# fingers scroll once their middle moved SCROLL_START, pinch once their
+# spread changed by PINCH_START; three
+# swipe once moved SWIPE. A scroll flicked (faster than FLING_START at the
+# lift, over the last VELOCITY_WINDOW) goes on, slowing down by e every
+# FLING_TAU, until FLING_STOP.
 TAP_TIME = 0.3   # seconds
 TAP_SLOP = 0.012
 TAP_MOVE = 0.02
+HOLD = 0.6       # seconds
+SCROLL_START = 0.01
+PINCH_START = 1.12
+SWIPE = 0.1
+VELOCITY_WINDOW = 0.1  # seconds
+FLING_START = 300      # monitor pixels a second
+FLING_TAU = 0.35       # seconds
+FLING_STOP = 20        # monitor pixels a second
+KEY_SUPER, KEY_ESCAPE = 0xffeb, 0xff1b
+KEY_PAGE_UP, KEY_PAGE_DOWN = 0xff55, 0xff56
 # The bitrate follows the network (RateControl): from the one set (its
 # most) down to MIN_KBPS while the app reports frames lost or the delay
 # growing, up again slowly while it does not.
@@ -89,20 +102,63 @@ def bitrate_for(bitrate, size):
     return int(bitrate * max(1.0, size[0] * size[1] / REFERENCE))
 
 
+class Gesture:
+    """What the fingers do, from the first one down to the last one up."""
+
+    def __init__(self, since):
+        self.since = since
+        self.kind = "pending"  # then drag, scroll, pinch, swipe or done
+        self.start = {}        # finger -> where it came down
+        self.most = 0          # fingers at once, at most
+        self.moved = 0.0       # the farthest a finger went from where it came down, of the screen
+        self.fingers = {}      # as they are now
+        self.pair = None       # the first two fingers' distance, together
+        self.last = None       # their middle, as last scrolled from
+        self.samples = collections.deque()  # (time, dx, dy) of the scroll, for its speed
+        self.touching = {}     # a pinch's fingers, as the desktop has them
+
+    def update(self, fingers, size):
+        self.fingers = fingers
+        for finger, where in fingers.items():
+            self.start.setdefault(finger, where)
+        self.most = max(self.most, len(fingers))
+        for finger, (x, y) in fingers.items():
+            x0, y0 = self.start[finger]
+            self.moved = max(self.moved, abs(x - x0) / size[0] + abs(y - y0) / size[1])
+        if len(fingers) == 2 and self.pair is None:
+            self.pair = _spread(fingers), _middle(fingers)
+
+
+def _middle(fingers):
+    points = list(fingers.values())
+    return sum(p[0] for p in points) / len(points), sum(p[1] for p in points) / len(points)
+
+
+def _spread(fingers):
+    (x1, y1), (x2, y2) = list(fingers.values())[:2]
+    return max(1.0, math.hypot(x2 - x1, y2 - y1))
+
+
 class Input:
-    """Fingers and the pen from the app, onto the virtual monitor: each
-    packet says what touches the screen now (DisplayInput.kt), so a finger
-    is put down, moved or lifted from the difference with the one before."""
+    """Fingers and the pen from the app, onto the virtual monitor. Each
+    packet says what touches the screen now (DisplayInput.kt); the fingers
+    work as on a laptop's touchpad, where they touch:
+    - one tapped: the left button; moved: a drag with it (text selected, a
+      window moved); held still: the right button;
+    - two tapped: the right button; moved together: scrolling, smooth, that
+      goes on after they lift (faster flicked, farther), until a finger
+      stops it; moved apart or together: a pinch, as touches (zoom);
+    - three swiped: up the overview, down out of it, sideways another
+      workspace."""
 
     def __init__(self, monitor, size, make_pen, clock=time.monotonic):
         self.monitor, self.size, self.make_pen, self.clock = monitor, size, make_pen, clock
-        self.down = {}       # finger id -> (x, y) in the monitor's pixels
+        self.scale = scale_for(size)  # the monitor's pixels per desktop pixel
         self.pen = None
         self.pen_last = None  # the last report, while the pen is in range
         self.heard = clock()
-        # Fingers not on the desktop yet, while it may be a tap: (since,
-        # [states]), a click, or replayed as touches once it is not one.
-        self.waiting = None
+        self.gesture = None
+        self.fling = None     # [vx, vy, at]: a scroll going on by itself, monitor pixels a second
 
     def packet(self, body):
         """body: an INPUT packet; False if it is not a well-formed one."""
@@ -127,61 +183,177 @@ class Input:
             self._pen(bytes([pen.REPORT_ID]) + body[at + i * PEN_SAMPLE:at + (i + 1) * PEN_SAMPLE])
         return True
 
-    def _touch(self, fingers):
-        """Fingers as they are now: on the desktop, unless they may be a
-        tap (the left button) or a two-finger tap (the right one)."""
-        if self.waiting is None:
-            if self.down or not fingers:
-                self._fingers(fingers)
-                return
-            self.waiting = (self.clock(), [])
-        self.waiting[1].append(fingers)
-        self._decide()
+    def busy(self):
+        """Whether check() has something to look after: fingers, a scroll
+        going on by itself, the pen near."""
+        return self.gesture is not None or self.fling is not None or self.pen_last is not None
 
-    def _decide(self):
-        since, states = self.waiting
-        elapsed = self.clock() - since
-        two = any(len(state) >= 2 for state in states)
-        first = {}
-        for state in states:
-            for finger, where in state.items():
-                first.setdefault(finger, where)
-        moved = max((abs(x - first[f][0]) / self.size[0] + abs(y - first[f][1]) / self.size[1]
-                     for state in states for f, (x, y) in state.items()), default=0)
-        lifted = not states[-1]
-        if not two:
-            if lifted and elapsed < TAP_TIME and moved < TAP_SLOP:
-                self._click(next(iter(first.values())), pen.BTN_LEFT)
-            elif lifted or moved >= TAP_SLOP or elapsed >= TAP_TIME:
-                self._replay()  # a drag, a scroll, a finger held: touches
+    def check(self):
+        """Every few ms while busy(): what time decides (a finger held, a
+        scroll slowing down); and nothing heard for a while, whatever
+        touches is lifted (the app's last packets were lost, or it is gone)."""
+        now = self.clock()
+        if self.fling is not None:
+            self._fling(now)
+        if self.gesture is not None:
+            if now - self.heard >= INPUT_SILENCE:
+                self._touch({}, lost=True)
+            else:
+                self._step(self.gesture, now)
+        if self.pen_last is not None and now - self.heard >= INPUT_SILENCE:
+            self._pen(self.pen_last[:1] + b"\x00" + self.pen_last[2:])
+
+    def close(self):
+        if self.gesture is not None:
+            self._touch({}, lost=True)
+        if self.fling is not None:
+            self._stop_fling()
+        if self.pen_last is not None:
+            self._pen(self.pen_last[:1] + b"\x00" + self.pen_last[2:])
+        if self.pen:
+            self.pen.close()
+        self.pen = None
+
+    # -- fingers ---------------------------------------------------------------
+    def _touch(self, fingers, lost=False):
+        now = self.clock()
+        if self.gesture is None:
+            if not fingers:
+                return
+            if self.fling is not None:
+                self._stop_fling()  # a finger down stops a scroll going on, as on a phone
+            self.gesture = Gesture(now)
+        g = self.gesture
+        g.update(fingers, self.size)
+        if fingers:
+            self._step(g, now)
+        else:
+            self.gesture = None
+            self._end(g, now, lost)
+
+    def _step(self, g, now):
+        fingers = g.fingers
+        if g.kind == "pending":
+            self._decide(g, now)
+        if g.kind == "drag" and fingers:
+            self.monitor.pointer_move(*next(iter(fingers.values())))
+        elif g.kind == "scroll":
+            if len(fingers) != 2:  # one lifted: no more scrolling from these
+                self._scroll_end(g, now, fling=False)
+                g.kind = "done"
+            else:
+                (x, y), (lx, ly) = _middle(fingers), g.last
+                if (x, y) != (lx, ly):
+                    g.last = (x, y)
+                    g.samples.append((now, x - lx, y - ly))
+                    while g.samples and now - g.samples[0][0] > VELOCITY_WINDOW:
+                        g.samples.popleft()
+                    # Natural: the page follows the fingers.
+                    self.monitor.pointer_axis((lx - x) / self.scale, (ly - y) / self.scale)
+        elif g.kind == "pinch":
+            for finger, where in fingers.items():
+                if where != g.touching.get(finger):
+                    self.monitor.touch_motion(finger, *where)
+                    g.touching[finger] = where
+            for finger in [f for f in g.touching if f not in fingers]:
+                self.monitor.touch_up(finger)
+                del g.touching[finger]
+        elif g.kind == "swipe" and len(fingers) >= 3:
+            (x, y), (x0, y0) = _middle(fingers), g.last
+            dx, dy = (x - x0) / self.size[0], (y - y0) / self.size[1]
+            if max(abs(dx), abs(dy)) >= SWIPE:
+                g.kind = "done"
+                if abs(dy) > abs(dx):
+                    self._keys([KEY_SUPER] if dy < 0 else [KEY_ESCAPE])  # the overview, or out of it
+                else:  # the workspace to the right with the fingers going left, as on the touchpad
+                    self._keys([KEY_SUPER, KEY_PAGE_DOWN if dx < 0 else KEY_PAGE_UP])
+
+    def _decide(self, g, now):
+        fingers = g.fingers
+        if g.most >= 3:
+            if len(fingers) >= 3:
+                g.kind, g.last = "swipe", _middle(fingers)
             return
-        if lifted and elapsed < TAP_TIME and moved < TAP_MOVE:
-            self._click(next(iter(first.values())), pen.BTN_RIGHT)
-        elif moved >= TAP_MOVE or elapsed >= TAP_TIME or len(states[-1]) > 2 or lifted:
-            self._replay()  # a pinch, two fingers resting, three: touches
+        if g.most == 2:
+            if len(fingers) != 2:
+                return
+            spread, (x0, y0) = g.pair
+            (x, y) = _middle(fingers)
+            if not 1 / PINCH_START < _spread(fingers) / spread < PINCH_START:
+                # A pinch on a touchscreen: browsers, maps and viewers zoom
+                # the picture under the fingers, as a touchpad's pinch does
+                # (Ctrl and the wheel would zoom the page, reflowed).
+                g.kind = "pinch"
+                for finger in fingers:
+                    self.monitor.touch_down(finger, *g.start[finger])
+                    g.touching[finger] = g.start[finger]
+            elif abs(x - x0) / self.size[0] + abs(y - y0) / self.size[1] >= SCROLL_START:
+                g.kind, g.last = "scroll", (x, y)
+                self.monitor.pointer_move(x, y)  # the scroll goes to what is under the fingers
+            return
+        if g.moved >= TAP_SLOP:
+            g.kind = "drag"
+            self.monitor.pointer_move(*next(iter(g.start.values())))
+            self.monitor.pointer_button(pen.BTN_LEFT, True)
+        elif now - g.since >= HOLD:
+            g.kind = "done"
+            self._click(next(iter(g.start.values())), pen.BTN_RIGHT)
+
+    def _end(self, g, now, lost):
+        quick = now - g.since < TAP_TIME and not lost
+        if g.kind == "pending":
+            if g.most == 1 and quick and g.moved < TAP_SLOP:
+                self._click(next(iter(g.start.values())), pen.BTN_LEFT)
+            elif g.most == 2 and quick and g.moved < TAP_MOVE:
+                self._click(next(iter(g.start.values())), pen.BTN_RIGHT)
+        elif g.kind == "drag":
+            self.monitor.pointer_button(pen.BTN_LEFT, False)
+        elif g.kind == "scroll":
+            self._scroll_end(g, now, fling=not lost)
+        elif g.kind == "pinch":
+            for finger in g.touching:
+                self.monitor.touch_up(finger)
+
+    def _scroll_end(self, g, now, fling):
+        samples = [s for s in g.samples if now - s[0] <= VELOCITY_WINDOW]
+        if fling and len(samples) >= 2:
+            span = max(samples[-1][0] - samples[0][0], 1 / 120)
+            vx = sum(s[1] for s in samples[1:]) / span
+            vy = sum(s[2] for s in samples[1:]) / span
+            if math.hypot(vx, vy) >= FLING_START:
+                self.fling = [vx, vy, now]
+                return
+        self.monitor.pointer_axis(0.0, 0.0, True)  # finish
+
+    def _fling(self, now):
+        vx, vy, at = self.fling
+        dt = now - at
+        decay = math.exp(-dt / FLING_TAU)
+        # What the speed covers over dt, slowing down all the while.
+        dx, dy = vx * FLING_TAU * (1 - decay), vy * FLING_TAU * (1 - decay)
+        vx, vy = vx * decay, vy * decay
+        self.monitor.pointer_axis(-dx / self.scale, -dy / self.scale)
+        if math.hypot(vx, vy) < FLING_STOP:
+            self._stop_fling()
+        else:
+            self.fling = [vx, vy, now]
+
+    def _stop_fling(self):
+        self.fling = None
+        self.monitor.pointer_axis(0.0, 0.0, True)  # finish
 
     def _click(self, where, button):
-        self.waiting = None
         self.monitor.pointer_move(*where)
         self.monitor.pointer_button(button, True)
         self.monitor.pointer_button(button, False)
 
-    def _replay(self):
-        states, self.waiting = self.waiting[1], None
-        for state in states:
-            self._fingers(state)
+    def _keys(self, keys):
+        for key in keys:
+            self.monitor.keysym(key, True)
+        for key in reversed(keys):
+            self.monitor.keysym(key, False)
 
-    def _fingers(self, fingers):
-        for finger in [f for f in self.down if f not in fingers]:
-            self.monitor.touch_up(finger)
-            del self.down[finger]
-        for finger, where in fingers.items():
-            if finger not in self.down:
-                self.monitor.touch_down(finger, *where)
-            elif where != self.down[finger]:
-                self.monitor.touch_motion(finger, *where)
-            self.down[finger] = where
-
+    # -- the pen ---------------------------------------------------------------
     def _pen(self, report):
         if self.pen is None:
             try:
@@ -192,35 +364,6 @@ class Input:
         if self.pen:
             self.pen.report(report)
         self.pen_last = report if report[1] & pen.IN_RANGE else None
-
-    def busy(self):
-        """Whether check() has something to look after: a finger down or
-        waiting, the pen near."""
-        return bool(self.down) or self.waiting is not None or self.pen_last is not None
-
-    def check(self):
-        """Every few ms: a first finger waited long enough for a second; and
-        nothing heard for a while, whatever touches is lifted (the app's last
-        packets were lost, or it is gone)."""
-        if self.waiting is not None:
-            self._decide()
-        if self.clock() - self.heard < INPUT_SILENCE:
-            return
-        if self.waiting is not None:
-            self.waiting = None  # never on the desktop: nothing to lift
-        if self.down:
-            self._fingers({})
-        if self.pen_last is not None:
-            self._pen(self.pen_last[:1] + b"\x00" + self.pen_last[2:])
-
-    def close(self):
-        self.waiting = None
-        self._fingers({})
-        if self.pen_last is not None:
-            self._pen(self.pen_last[:1] + b"\x00" + self.pen_last[2:])
-        if self.pen:
-            self.pen.close()
-        self.pen = None
 
 
 class Channel:

@@ -10,6 +10,8 @@ from gi.repository import Gio, GLib
 from . import log
 
 RD_NAME = "org.gnome.Mutter.RemoteDesktop"
+# NotifyPointerAxis' flags (Mutter's MetaRemoteDesktopNotifyAxisFlags).
+AXIS_FINISH, AXIS_SOURCE_FINGER = 1 << 0, 1 << 2
 SC_NAME = "org.gnome.Mutter.ScreenCast"
 
 
@@ -118,6 +120,19 @@ class VirtualMonitor:
 
     def pointer_button(self, button, pressed):
         self._notify("NotifyPointerButton", GLib.Variant("(ib)", (button, pressed)))
+
+    def pointer_axis(self, dx, dy, finish=False):
+        """Scrolling as from a touchpad's fingers, in desktop pixels; finish
+        when they lifted (a program may then go on by itself)."""
+        flags = AXIS_SOURCE_FINGER | (AXIS_FINISH if finish else 0)
+        self._notify("NotifyPointerAxis", GLib.Variant("(ddu)", (dx, dy, flags)))
+
+    def pointer_axis_discrete(self, axis, steps):
+        """The wheel turned by steps (axis 0: vertical; down is positive)."""
+        self._notify("NotifyPointerAxisDiscrete", GLib.Variant("(ui)", (axis, steps)))
+
+    def keysym(self, keysym, pressed):
+        self._notify("NotifyKeyboardKeysym", GLib.Variant("(ub)", (keysym, pressed)))
 
 
 def set_virtual_monitor_scale(scale):
