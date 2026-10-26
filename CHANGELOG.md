@@ -1,10 +1,19 @@
 # Changelog
 
-## 0.8.0
+## 0.8.1
 
 Updates by themselves; the fingers as on a touchpad; the picture that
-follows the network; and the fixes of a review of the whole code, bugs
-and security.
+follows the network; the speakers in time; and the fixes of a review of
+the whole code, bugs and security. (0.8.0 was never published.)
+
+- **The speakers in time with the picture**: the Wi-Fi stalling, then
+  handing over what it held at once, grew the tablet's wait for good
+  (119 to 372 ms seen); now a nearly silent packet is left out while it
+  is too long, and far over it the rate goes up to 1% for seconds: 27-32 ms
+  waiting, the speaker about 135 ms behind the PC all told (what Android's
+  output holds included), in time with the lips. And a short gap no longer
+  throws away what the player still held (the sound that jumped): it waits,
+  and only after 0.3 s of nothing does it rest.
 
 - **The picture follows the network**: through the app, the bitrate set
   is the most; it goes down by a third as soon as the tablet reports
@@ -28,7 +37,7 @@ and security.
   use, saying so. The tablet's app is brought to the PC's version by the
   PC: the app of its release goes over the paired link while nothing is
   in use, and the app installs it, without a question after the first
-  time (Android 12 and later). From 0.8.0 on: the first time, install both
+  time (Android 12 and later). From 0.8.1 on: the first time, install both
   by hand.
 - Fixed: the webcam showed no black while the tablet was away or
   refusing (and froze on the last picture when its session dropped): its

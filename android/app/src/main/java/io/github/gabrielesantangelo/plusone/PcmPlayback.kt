@@ -18,8 +18,13 @@ import java.nio.ByteBuffer
  * PREFILL packets wait before it starts, against the Wi-Fi's unevenness. The
  * two clocks drift apart (the PC's and the tablet's sound chip, tens of parts
  * per million): the playback rate follows by at most RATE_TRIM, which no ear
- * hears, so the wait neither grows nor runs dry. A packet that does not come
- * is the last one again, fading out.
+ * hears, so the wait neither grows nor runs dry. The Wi-Fi stalling, then
+ * handing over what it held at once, grows the wait by as much, which that
+ * trim took a minute to take back (the sound later and later behind the
+ * picture): over the wait, a packet nearly silent is left out (nobody hears
+ * a silence 5 ms shorter), and far over it the rate goes up to RATE_FAST
+ * for a few seconds. A packet that does not come is the last one again,
+ * fading out.
  */
 class PcmPlayback(key: ByteArray, private val pc: InetAddress, private val pcPort: Int,
                   private val rate: Int, private val frames: Int) {
@@ -33,6 +38,9 @@ class PcmPlayback(key: ByteArray, private val pc: InetAddress, private val pcPor
     private var started = false
     private var missed = 0
     private var late = 0
+    private var dropped = 0      // nearly silent packets left out, the wait too long
+    private var written = 0L     // frames given to the track since it started
+    private var quietFor = 0L    // ms with nothing to play
     private var held = PREFILL.toDouble()  // packets waiting, smoothed
     private val track = AudioTrack.Builder()
         .setAudioAttributes(AudioAttributes.Builder()
@@ -107,23 +115,37 @@ class PcmPlayback(key: ByteArray, private val pc: InetAddress, private val pcPor
                 }
                 var got = packets.remove(next)
                 if (got == null && packets.isEmpty()) {
-                    lock.wait(WAIT_MS)  // a moment for it: the Wi-Fi was slow
+                    // Nothing yet, the Wi-Fi slow: the track still plays what it
+                    // holds (tens of ms), so nothing is written meanwhile. (It
+                    // was flushed after 30 ms: what it held, thrown away, was
+                    // the sound that jumped.)
+                    lock.wait(WAIT_MS)
                     got = packets.remove(next)
                 }
                 if (got == null && packets.isEmpty()) {
-                    // Nothing for a while: the PC stopped, or the network. Start
-                    // again from a full wait when it comes back.
-                    started = false
-                    track.pause()
-                    track.flush()
+                    quietFor += WAIT_MS
+                    if (quietFor >= STOPPED_MS) {
+                        // The PC stopped (a player paused, its silence not
+                        // sent): rest, and start from a full wait when it comes
+                        // back. Nothing thrown away: the track has played it all.
+                        quietFor = 0
+                        started = false
+                        track.pause()
+                    }
                     return@synchronized null
                 }
+                quietFor = 0
                 next++
                 held = held * 0.99 + packets.size * 0.01
+                if (got != null && held > PREFILL + SLACK && packets.size > PREFILL && quiet(got)) {
+                    dropped++
+                    return@synchronized null  // the wait too long: a silence a packet shorter
+                }
                 got ?: fade(last).also { missed++ }
             } ?: continue
             last = data
             track.write(data, 0, data.size)
+            written += frames
             if (++played % TRIM_EVERY == 0) trim()
         }
     }
@@ -131,17 +153,38 @@ class PcmPlayback(key: ByteArray, private val pc: InetAddress, private val pcPor
     /** The playback rate, a hair faster while more than PREFILL waits, slower while less. */
     private fun trim() {
         val error = (held - PREFILL) / PREFILL
-        val factor = 1.0 + (error * RATE_TRIM).coerceIn(-RATE_TRIM, RATE_TRIM)
+        val most = if (held > 2 * PREFILL) RATE_FAST else RATE_TRIM
+        val factor = 1.0 + (error * RATE_TRIM * 2).coerceIn(-RATE_TRIM, most)
         track.playbackRate = (rate * factor).toInt()
-        val report = ByteBuffer.allocate(13).put(STATS).putInt((held * frames).toInt()).putInt(missed).putInt(late).array()
+        // STATS: frames waiting here | missed | late | left out | frames from
+        // here to the speaker (waiting, and in the track not yet played).
+        val report = ByteBuffer.allocate(21).put(STATS).putInt((held * frames).toInt()).putInt(missed)
+            .putInt(late).putInt(dropped).putInt((held * frames).toInt() + inTrack()).array()
         missed = 0
         late = 0
+        dropped = 0
         try {
             val packet = sealed.seal(report)
             socket.send(DatagramPacket(packet, packet.size, pc, pcPort))
         } catch (e: Exception) {
             if (running) Log.w(CompanionService.TAG, "speakers: cannot report: $e")
         }
+    }
+
+    /** Frames written to the track and not played yet (its buffer, the
+     * mixer's, the speaker's), from where Android says it is; 0 unknown. */
+    private fun inTrack(): Int {
+        val stamp = android.media.AudioTimestamp()
+        if (!track.getTimestamp(stamp)) return 0
+        val played = stamp.framePosition + (System.nanoTime() - stamp.nanoTime) * rate / 1_000_000_000
+        return (written - played).coerceIn(0, rate.toLong()).toInt()
+    }
+
+    /** Whether a packet is nearly silent: its loudest sample under QUIET. */
+    private fun quiet(packet: ByteArray): Boolean {
+        val samples = ByteBuffer.wrap(packet).order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+        for (i in 0 until samples.limit()) if (kotlin.math.abs(samples.get(i).toInt()) > QUIET) return false
+        return true
     }
 
     /** The last packet again, fading out: a lost one is barely heard. */
@@ -161,7 +204,11 @@ class PcmPlayback(key: ByteArray, private val pc: InetAddress, private val pcPor
         const val PREFILL = 8         // packets of 5 ms: 40 ms
         const val MAX_HELD = 200      // a second: more is a stuck clock, not jitter
         const val WAIT_MS = 30L
+        const val STOPPED_MS = 300L   // nothing for this long: the PC stopped
         const val TRIM_EVERY = 200    // packets: once a second
         const val RATE_TRIM = 0.002   // at most 0.2 %
+        const val RATE_FAST = 0.01    // far over the wait (twice PREFILL): 1 %, for seconds
+        const val SLACK = 4           // packets over PREFILL before quiet ones are left out
+        const val QUIET = 330         // of 32767: -40 dBFS
     }
 }

@@ -70,7 +70,7 @@ Download `plus-one_<version>_all.deb` from the
 [Releases](../../releases) page, then:
 
 ```bash
-sudo apt install ./plus-one_0.8.0_all.deb
+sudo apt install ./plus-one_0.8.1_all.deb
 ```
 
 The package pulls in GTK 4, libadwaita, GStreamer and NetworkManager bindings
@@ -95,7 +95,7 @@ once a day as it does Ubuntu's security updates
 (`/etc/apt/apt.conf.d/52plus-one-unattended-upgrades`; remove it, or comment
 its line out, to be asked instead). Plus One notices it was replaced and
 starts again once nothing is in use, with a notification; *Restart now* does
-it at once. Installing the `.deb` by hand is needed once, from 0.8.0 on.
+it at once. Installing the `.deb` by hand is needed once, from 0.8.1 on.
 
 Uninstall with `sudo apt remove plus-one` (`purge` also removes the source).
 
@@ -106,7 +106,7 @@ page, then:
 
 ```bash
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-flatpak install --user ./plus-one_v0.8.0_x86_64.flatpak
+flatpak install --user ./plus-one_v0.8.1_x86_64.flatpak
 ```
 
 The GNOME runtime it needs comes from Flathub. Differences from the `.deb`:
@@ -515,7 +515,7 @@ flatpak run org.flatpak.Builder --user --install --force-clean flatpak-build \
 
 1. Bump `__version__` in `plusone/__init__.py` and add a section to
    `CHANGELOG.md`.
-2. Commit, then tag and push: `git tag v0.8.0 && git push origin main v0.8.0`.
+2. Commit, then tag and push: `git tag v0.8.1 && git push origin main v0.8.1`.
 3. The *Release* workflow checks that the tag matches the version, runs the
    tests, builds the `.deb` and the Flatpak bundle and publishes a GitHub
    release with both, the Quick Settings extension zip and the changelog

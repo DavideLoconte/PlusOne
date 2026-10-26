@@ -31,6 +31,7 @@ BYTES = FRAMES * CHANNELS * 2
 HEADER = struct.Struct("!BI")  # kind, packet number
 SILENCE = bytes(BYTES)
 QUIET_AFTER = 200        # packets of silence in a row (a second) after which none go
+STATS_EVERY = 30         # the app's reports (one a second) logged: one in so many, and each with a loss
 
 
 class PcmSender:
@@ -89,14 +90,21 @@ class PcmSender:
         return Gst.FlowReturn.OK
 
     def _listen(self):
-        """The app's reports, for the log: how much it holds, what it missed."""
+        """The app's reports, for the log: how much it holds, what it missed,
+        how far behind the PC its speaker is (an app before 0.9: 13 bytes)."""
+        reports = 0
         while self._running:
             body = self.channel.receive(1.0)
-            if body and body[0] == STATS and len(body) == 13:
-                held, missed, late = struct.unpack_from("!III", body, 1)
-                if missed or late:
-                    log(f"speakers: the tablet holds {held / RATE * 1000:.0f} ms, "
-                        f"missed {missed} packets, {late} came late")
+            if not body or body[0] != STATS or len(body) not in (13, 21):
+                continue
+            held, missed, late, dropped, behind = (struct.unpack_from("!IIIII", body, 1) if len(body) == 21
+                                                   else struct.unpack_from("!III", body, 1) + (0, 0))
+            reports += 1
+            if missed or late or reports % STATS_EVERY == 1:
+                log(f"speakers: the tablet holds {held / RATE * 1000:.0f} ms"
+                    + (f", its speaker is {behind / RATE * 1000:.0f} ms behind" if behind else "")
+                    + f"; missed {missed} packets, {late} came late"
+                    + (f", {dropped} nearly silent left out" if dropped else ""))
 
     def losses(self):
         """(buffers captured, 0, 0, 0): the sound goes as long as this grows,
