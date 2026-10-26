@@ -42,19 +42,23 @@ INPUT_SILENCE = 0.4  # seconds: the app repeats what touches every 0.1 s; quiet 
 IDLE_WAIT = 0.25     # seconds the listener sleeps while nothing touches (stop() waits as long)
 STATS_EVERY = 30     # the app's reports (one a second) logged: one in so many, and each with a loss
 # The fingers as on a touchpad (Input): a tap within TAP_TIME, having moved
-# less than TAP_SLOP of the screen (two fingers: TAP_MOVE), clicks; one
-# finger moved further drags, held for HOLD clicks the right button. Two
-# fingers scroll once their middle moved SCROLL_START, pinch once their
-# spread changed by PINCH_START; three
-# swipe once moved SWIPE. A scroll flicked (faster than FLING_START at the
+# less than TAP_SLOP of the screen (two fingers: TAP_MOVE), clicks. One
+# finger moved further drags, once DRAG_WAIT passed (a second may come:
+# fingers never land together; at once if it moved DRAG_FAST); a second
+# within PROMOTE lets the drag go. Held for HOLD: the right button. Two
+# fingers decide once their middle moved, or their spread changed,
+# GESTURE_START of the screen's width: a pinch if the spread changed more,
+# else a scroll. Three swipe once moved SWIPE. A scroll flicked (faster than FLING_START at the
 # lift, over the last VELOCITY_WINDOW) goes on, slowing down by e every
 # FLING_TAU, until FLING_STOP.
 TAP_TIME = 0.3   # seconds
 TAP_SLOP = 0.012
 TAP_MOVE = 0.02
+DRAG_WAIT = 0.1  # seconds
+DRAG_FAST = 0.05
+PROMOTE = 0.25   # seconds
 HOLD = 0.6       # seconds
-SCROLL_START = 0.01
-PINCH_START = 1.12
+GESTURE_START = 0.015
 SWIPE = 0.1
 VELOCITY_WINDOW = 0.1  # seconds
 FLING_START = 300      # monitor pixels a second
@@ -233,6 +237,11 @@ class Input:
 
     def _step(self, g, now):
         fingers = g.fingers
+        if g.kind == "drag" and len(fingers) >= 2 and now - g.since < PROMOTE:
+            # A second finger, late: it was two from the start (a pinch, a
+            # scroll), not a drag.
+            self.monitor.pointer_button(pen.BTN_LEFT, False)
+            g.kind, g.pair = "pending", (_spread(fingers), _middle(fingers))
         if g.kind == "pending":
             self._decide(g, now)
         if g.kind == "drag" and fingers:
@@ -279,7 +288,11 @@ class Input:
                 return
             spread, (x0, y0) = g.pair
             (x, y) = _middle(fingers)
-            if not 1 / PINCH_START < _spread(fingers) / spread < PINCH_START:
+            shift = math.hypot(x - x0, y - y0)
+            change = abs(_spread(fingers) - spread)
+            if max(shift, change) < GESTURE_START * self.size[0]:
+                return
+            if change > shift:
                 # A pinch on a touchscreen: browsers, maps and viewers zoom
                 # the picture under the fingers, as a touchpad's pinch does
                 # (Ctrl and the wheel would zoom the page, reflowed).
@@ -287,11 +300,12 @@ class Input:
                 for finger in fingers:
                     self.monitor.touch_down(finger, *g.start[finger])
                     g.touching[finger] = g.start[finger]
-            elif abs(x - x0) / self.size[0] + abs(y - y0) / self.size[1] >= SCROLL_START:
-                g.kind, g.last = "scroll", (x, y)
+            else:
+                # From where they began: the way that decided it scrolls too.
+                g.kind, g.last = "scroll", (x0, y0)
                 self.monitor.pointer_move(x, y)  # the scroll goes to what is under the fingers
             return
-        if g.moved >= TAP_SLOP:
+        if g.moved >= TAP_SLOP and (now - g.since >= DRAG_WAIT or g.moved >= DRAG_FAST):
             g.kind = "drag"
             self.monitor.pointer_move(*next(iter(g.start.values())))
             self.monitor.pointer_button(pen.BTN_LEFT, True)

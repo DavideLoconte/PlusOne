@@ -114,7 +114,10 @@ def test_a_finger_that_moves_drags_with_the_left_button():
     touch, monitor, clock = touch_input()
     touch.packet(fingers((0, 0.5, 0.5)))
     clock.now += 0.04
-    touch.packet(fingers((0, 0.52, 0.5)))  # text selected, a window moved: from where it began
+    touch.packet(fingers((0, 0.52, 0.5)))
+    assert monitor.calls == []  # a second finger may still come
+    clock.now += appdisplay.DRAG_WAIT
+    touch.check()  # text selected, a window moved: from where it began
     assert [c[0] for c in monitor.calls] == ["pointer_move", "pointer_button", "pointer_move"]
     assert monitor.calls[0][1] == pytest.approx(500, abs=0.1)
     assert monitor.calls[1][1:] == (appdisplay.pen.BTN_LEFT, True)
@@ -200,6 +203,47 @@ def test_a_pinch_is_a_pinch_on_the_desktop():
                                                ("touch_motion", 0), ("touch_motion", 1),
                                                ("touch_up", 0), ("touch_up", 1)]
     assert monitor.calls[0][2] == pytest.approx(450, abs=0.1)  # where it began
+
+
+def test_a_pinch_whose_second_finger_came_late_is_a_pinch():
+    # The first finger lands and moves a little before the second: not a
+    # drag (a selection), a pinch.
+    touch, monitor, clock = touch_input()
+    touch.packet(fingers((0, 0.45, 0.5)))
+    clock.now += 0.03
+    touch.packet(fingers((0, 0.44, 0.5)))  # moved 1%: a drag, were it alone
+    clock.now += 0.03
+    touch.packet(fingers((0, 0.44, 0.5), (1, 0.55, 0.5)))
+    for x in (0.57, 0.6, 0.63):
+        clock.now += 0.02
+        touch.packet(fingers((0, 0.43, 0.5), (1, x, 0.5)))
+    assert "pointer_button" not in [c[0] for c in monitor.calls]
+    assert [c[0] for c in monitor.calls][:2] == ["touch_down", "touch_down"]
+
+
+def test_a_drag_a_second_finger_soon_joins_is_let_go():
+    touch, monitor, clock = touch_input()
+    touch.packet(fingers((0, 0.4, 0.5)))
+    clock.now += 0.03
+    touch.packet(fingers((0, 0.48, 0.5)))  # fast: a drag at once
+    assert ("pointer_button", appdisplay.pen.BTN_LEFT, True) in monitor.calls
+    clock.now += 0.05
+    touch.packet(fingers((0, 0.48, 0.5), (1, 0.6, 0.5)))
+    assert monitor.calls[-1] == ("pointer_button", appdisplay.pen.BTN_LEFT, False)
+    clock.now += 0.02
+    touch.packet(fingers((0, 0.48, 0.45), (1, 0.6, 0.45)))  # and they scroll
+    assert monitor.calls[-1][0] == "pointer_axis"
+
+
+def test_far_apart_fingers_pinching_are_not_a_scroll():
+    # One finger still, the other moving out: the spread changes twice as
+    # much as the middle moves, however far apart they are.
+    touch, monitor, clock = touch_input()
+    touch.packet(fingers((0, 0.1, 0.5), (1, 0.8, 0.5)))  # 700 px apart
+    for x in (0.81, 0.82, 0.84):
+        clock.now += 0.02
+        touch.packet(fingers((0, 0.1, 0.5), (1, x, 0.5)))
+    assert monitor.calls[0][0] == "touch_down"
 
 
 def test_three_fingers_swiped_up_show_the_overview():
