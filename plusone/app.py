@@ -31,6 +31,7 @@ from .nearby import Nearby  # noqa: E402
 from .signing import Signing  # noqa: E402
 from .devices import SPEAKERS_NAME, Devices, make_default_sink  # noqa: E402
 from .tablets import Tablets  # noqa: E402
+from .updates import UPDATED_FROM, SelfUpdate, TabletUpdates  # noqa: E402
 
 APP_ID = "io.github.gabrielesantangelo.PlusOne"
 INTERFACE = APP_ID + "1"
@@ -235,11 +236,16 @@ class PlusOneApp(Adw.Application):
                                ("disconnect", lambda *a: self.controller.stop()),
                                ("show", lambda *a: self.activate()),
                                ("pair", lambda *a: self._show_and_pair()),
-                               ("quit", lambda *a: self._quit())):
+                               ("quit", lambda *a: self._quit()),
+                               ("restart", lambda *a: self.self_update.pending and self.self_update.restart()),
+                               ("whats-new", lambda *a: Gio.AppInfo.launch_default_for_uri(
+                                   f"https://github.com/GabrieleSantangelo/PlusOne/releases/tag/v{__version__}", None))):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", callback)
             self.add_action(action)
         self.signing = Signing(self)
+        self.tablet_updates = TabletUpdates(self)
+        self.self_update = SelfUpdate(self)
         self._device_states = {}  # the camera's, the microphone's and the speakers', as last notified
         self.devices = Devices(self)
 
@@ -259,6 +265,12 @@ class PlusOneApp(Adw.Application):
         self.nearby.start()
         self.devices.apply()
         self._update_hold()
+        self.self_update.start()
+        updated_from = os.environ.pop(UPDATED_FROM, None)
+        if updated_from:  # started again by SelfUpdate: say what came
+            self.notify("updates", "Plus One updated to {version}", "From {before}",
+                        version=__version__, before=updated_from,
+                        button=("What's new", "app.whats-new"))
 
     def _quit(self):
         """Ctrl+Q, the extension's Quit: each signing window closed as by its
@@ -347,6 +359,7 @@ class PlusOneApp(Adw.Application):
         signing = self.signing
         if not self.settings.background and not (signing.windows or signing.queue or signing.opening):
             self.controller.stop()
+        self._idle()  # an update may have waited for the window
 
     def save_settings(self):
         save_settings(self.settings)
@@ -366,6 +379,31 @@ class PlusOneApp(Adw.Application):
         self._emit_properties()
         for listener in list(self.listeners):
             listener()
+        if state in (State.IDLE, State.ERROR):
+            self._idle()
+
+    def busy(self):
+        """Whether something is in use: a connection, a PDF being signed, the
+        tablet's camera, microphone or speakers used by a program here."""
+        signing = self.signing
+        return bool(self.controller.running or signing.windows or signing.in_app or signing.queue
+                    or signing.opening or any(getattr(self.devices, kind).state == "in use"
+                                              for kind in ("camera", "microphone", "speakers")))
+
+    def _idle(self):
+        """What waited for nothing to be in use: updates, both sides."""
+        GLib.idle_add(once(self.tablet_updates.check))
+        GLib.idle_add(once(self.self_update.when_idle))
+
+    def notify(self, key, title, body, button=None, **args):
+        """A notification of English templates (i18n) formatted with args;
+        button: (label, action)."""
+        note = Gio.Notification.new(_(title).format(**args))
+        note.set_body(_(body).format(**args))
+        note.set_default_action("app.show")
+        if button:
+            note.add_button(_(button[0]), button[1])
+        self.send_notification(key, note)
 
     def _update_hold(self):
         # Stay without a window while connected, or always in background mode
@@ -469,6 +507,8 @@ class PlusOneApp(Adw.Application):
                 self.send_notification(f"device-{kind}", note)
             else:
                 self.withdraw_notification(f"device-{kind}")
+        if hasattr(self, "devices") and not self.busy():  # (not while Devices is being made)
+            self._idle()
 
     def forget_tablet(self, fingerprint):
         """This PC forgets a paired tablet: using it again takes pairing again."""
@@ -498,6 +538,7 @@ class PlusOneApp(Adw.Application):
         self._emit_properties()
         for listener in list(self.listeners):
             listener()
+        self.tablet_updates.check()  # the tablet's app, older than this PC's?
 
     # -- D-Bus -------------------------------------------------------------
     def _properties(self):

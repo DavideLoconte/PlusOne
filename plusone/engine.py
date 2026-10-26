@@ -46,6 +46,8 @@ class Settings:
     background: bool = True
     # "Sign on Tablet" in Files and Open With.
     sign_on_tablet: bool = True
+    # The tablet's app brought to this PC's version (updates.py).
+    update_tablet: bool = True
     # The paired tablet in use (its app's certificate fingerprint, tablets.py):
     # the only one that gets the desktop and the PDFs.
     tablet: str | None = None

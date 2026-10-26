@@ -163,6 +163,17 @@ _IT = {
     "{name}: paused while Plus One is not on its screen": "{name}: in pausa finché Plus One non è sul suo schermo",
     "The tablet closed the desktop": "Il tablet ha chiuso il desktop",
     "The tablet is no longer reachable": "Il tablet non è più raggiungibile",
+    # 0.8: updates
+    "Updating Plus One on {tablet}": "Aggiornamento di Plus One su {tablet}",
+    "To {version}, as on this PC": "Alla {version}, come su questo PC",
+    "Plus One {version} is installed": "Plus One {version} è installato",
+    "It starts again by itself once nothing is in use": "Si riavvia da solo appena niente è in uso",
+    "Restart now": "Riavvia ora",
+    "Plus One updated to {version}": "Plus One aggiornato alla {version}",
+    "From {before}": "Dalla {before}",
+    "What's new": "Novità",
+    "Keep the tablet's app up to date": "Tieni aggiornata l'app sul tablet",
+    "With this PC's version, while nothing is in use": "Alla versione di questo PC, quando niente è in uso",
     "The desktop stopped: {error}": "Il desktop si è fermato: {error}",
     "The tablet did not answer: open Second Screen on it and connect again":
         "Il tablet non ha risposto: apri Second Screen e collega di nuovo",

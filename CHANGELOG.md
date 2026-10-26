@@ -13,10 +13,22 @@ the app on a weak Wi-Fi.
   2.4 GHz network with a weak signal (2-5 Mbit/s for the tablet), the
   delay went from 100-170 ms, with seconds of frozen picture, to about
   22 ms.
-- **A tap is a click**: a finger tapped on the desktop is the left button,
-  as the pen's tip; Qt's programs (Telegram) took a touch tapped for hover
-  and wanted a second tap. Dragging, scrolling, pinching and a finger held
-  are touches as before; two fingers tapped together the right button.
+- **Fingers as on a touchpad**, where they touch: one tapped clicks
+  (Qt's programs, Telegram, took a touch tapped for hover and wanted a
+  second tap), moved drags, held is the right button; two tapped are the
+  right button, moved together scroll, smoothly, and a flick goes on and
+  slows down as on a phone until a finger touches; two moved apart pinch
+  (browsers zoom the picture, as with a touchpad); three swiped show the
+  overview, leave it, or change workspace.
+- **Updates by themselves**: each release is also an APT repository,
+  signed; the `.deb` installs its source and key, so `apt upgrade` and
+  Software Updater find new versions and unattended-upgrades installs
+  them. Plus One sees it was replaced and starts again once nothing is in
+  use, saying so. The tablet's app is brought to the PC's version by the
+  PC: the app of its release goes over the paired link while nothing is
+  in use, and the app installs it, without a question after the first
+  time (Android 12 and later). From 0.8.0 on: the first time, install both
+  by hand.
 - Fixed: the webcam showed no black while the tablet was away or
   refusing (and froze on the last picture when its session dropped): its
   black frames' timer and the in-use one were the same.

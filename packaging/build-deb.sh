@@ -50,6 +50,16 @@ install -m 644 "$top/data/$pkg-uhid.conf" "$root/usr/lib/modules-load.d/"
 install -m 644 "$top/data/$pkg-camera.conf" "$root/usr/lib/modules-load.d/"
 install -m 644 "$top/data/$pkg-camera-options.conf" "$root/usr/lib/modprobe.d/$pkg-camera.conf"
 
+# Updates: each GitHub release is an APT repository signed with this key;
+# apt and Software Updater find new versions, unattended-upgrades installs
+# them. Conffiles: the user may change or remove them, and purge does.
+install -Dm 644 "$here/apt/plus-one-archive-keyring.gpg" "$root/usr/share/keyrings/plus-one-archive-keyring.gpg"
+install -Dm 644 "$here/apt/plus-one.sources" "$root/etc/apt/sources.list.d/plus-one.sources"
+install -Dm 644 "$here/apt/52plus-one-unattended-upgrades" "$root/etc/apt/apt.conf.d/52plus-one-unattended-upgrades"
+printf '%s\n' /etc/apt/sources.list.d/plus-one.sources /etc/apt/apt.conf.d/52plus-one-unattended-upgrades \
+    > "$root/DEBIAN/conffiles"
+install -Dm 644 "$here/apt/lintian-overrides" "$root/usr/share/lintian/overrides/$pkg"
+
 install -m 644 "$top/README.md" "$root/usr/share/doc/$pkg/README.md"
 {
     echo "Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/"

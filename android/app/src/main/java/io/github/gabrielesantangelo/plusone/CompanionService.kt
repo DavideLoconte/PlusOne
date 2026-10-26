@@ -181,6 +181,8 @@ class CompanionService : Service() {
             setAttribute("id", Identity.fingerprint(Identity.certificate.encoded).take(16))
             // A TXT entry, key and value, is 255 bytes at most.
             setAttribute("name", deviceName(this@CompanionService).take(80))
+            // The app's version: an older one than the PC's gets its update (Updates.kt).
+            setAttribute("v", Updates.versionCode(this@CompanionService).toString())
         }
         val listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(info: NsdServiceInfo) {
@@ -232,9 +234,13 @@ class CompanionService : Service() {
                 // tablet answered itself (over Wi-Fi Direct, say), not
                 // through someone passing the connection on.
                 wire.send(JSONObject().put("type", "hello").put("name", deviceName(this))
-                    .put("version", PROTOCOL).put("paired", known).put("at", address(socket.localAddress)))
-                // Another version: the PC sees ours and says so to its user.
-                if (hello.optInt("version") != PROTOCOL) return
+                    .put("version", PROTOCOL).put("paired", known).put("at", address(socket.localAddress))
+                    .put("app", Updates.versionCode(this)))
+                // Another version: the PC sees ours and says so to its user;
+                // a PC that knows this tablet, and this tablet it, may still
+                // hand over its update (and nothing else).
+                val otherVersion = hello.optInt("version") != PROTOCOL
+                if (otherVersion && !(known && hello.optBoolean("paired"))) return
                 if (!known || !hello.optBoolean("paired")) {
                     // Only when the user pairs, in Plus One's window on the PC.
                     if (!hello.optBoolean("pair")) return
@@ -256,8 +262,10 @@ class CompanionService : Service() {
                     val message = wire.receive()
                     val type = message.optString("type")
                     val size = message.optLong("size", 0)
-                    require(size == 0L || type == "sign") { "unexpected payload" }
+                    require(size == 0L || type == "sign" || type == "update") { "unexpected payload" }
+                    if (otherVersion && type !in listOf("update", "ping", "bye")) return
                     when (type) {
+                        "update" -> return update(wire, message, size)
                         "sign" -> sign(wire, message, size, pcName, fingerprint)
                         "resume" -> {
                             val job = message.optString("job")
@@ -292,6 +300,32 @@ class CompanionService : Service() {
             lastUse = System.currentTimeMillis()
         }
     }
+
+    /** The paired PC's update of this app: taken, checked, installed (this
+     * process ends with it), unless the PC uses the tablet now. */
+    private fun update(wire: Wire, message: JSONObject, size: Long) {
+        require(size in 1..Updates.MAX_APK) { "bad update" }
+        val file = File(cacheDir, "update.apk")
+        try {
+            file.outputStream().use { wire.readPayload(size, it) }
+            val reason = if (busy()) "busy" else Updates.check(this, file, message.optString("sha256"))
+            if (reason != null) {
+                Log.i(TAG, "update refused: $reason")
+                wire.send(JSONObject().put("type", "refused").put("reason", reason))
+                return
+            }
+            wire.send(JSONObject().put("type", "updating"))
+            Log.i(TAG, "updating to ${message.optLong("version")}")
+            Updates.install(this, file)
+        } finally {
+            file.delete()  // the installer's session has its own copy
+        }
+    }
+
+    /** Whether the PC uses the tablet now: an update would end it. */
+    private fun busy(): Boolean =
+        synchronized(captures) { captures.isNotEmpty() || speakerSessions.isNotEmpty() } ||
+            displaying != null || Jobs.waiting().isNotEmpty()
 
     // Connections still in their TLS handshake, and each paired PC's open links.
     private val handshaking = AtomicInteger()

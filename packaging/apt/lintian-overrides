@@ -1,0 +1,5 @@
+# Plus One is not in Debian's or Ubuntu's archive: its updates come from its
+# own APT repository (each GitHub release, signed with the key the package
+# ships). The source is a conffile: the administrator may change or remove
+# it, and purging the package removes it.
+plus-one: package-installs-apt-sources [etc/apt/sources.list.d/plus-one.sources]

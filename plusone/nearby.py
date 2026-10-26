@@ -70,6 +70,7 @@ class Nearby:
         self.companions = {}
         self._browsers = []
         self._failed = {}  # an app's service -> resolves failed in a row
+        self.versions = {}  # an app's service -> its versionCode ("v"; 0 before 0.8)
         self._subscription = self._watch = self._timer = None
 
     def present(self):
@@ -87,6 +88,12 @@ class Nearby:
         for address, port, name, app_id in sorted(self.companions.values()):
             seen.setdefault(app_id or f"{address}:{port}", (app_id, address, port, name))
         return sorted(seen.values(), key=lambda app: (app[3].lower(), app[0]))
+
+    def app_version(self, app_id):
+        """The versionCode the app with this id announces (0: not said, an
+        app before 0.8; None: not on the network)."""
+        found = [self.versions.get(key, 0) for key, v in self.companions.items() if v[3] == app_id]
+        return max(found) if found else None
 
     def addresses(self, app_id):
         """Every (address, port) the app with this id is announced at: someone
@@ -198,15 +205,19 @@ class Nearby:
         self._update(key, tablet_name(key[3], txt) if txt is not None else None)
 
     def _companion(self, key, reply, txt):
-        before = self.companions.get(key)
+        before = self.companions.get(key), self.versions.get(key)
         companions = {k: v for k, v in self.companions.items() if k != key}
         if reply is not None:
             fields = dict(entry.partition(b"=")[::2] for entry in txt)
             name = fields.get(b"name", b"").decode(errors="replace")[:64] or key[2]
             app_id = fields.get(b"id", b"").decode(errors="replace").lower()[:64]
             companions[key] = (reply[7], reply[8], name, app_id)
+            version = fields.get(b"v", b"")
+            self.versions[key] = int(version) if version.isdigit() and len(version) <= 9 else 0
+        else:
+            self.versions.pop(key, None)
         self.companions = companions
-        if self.companions.get(key) != before:
+        if (self.companions.get(key), self.versions.get(key)) != before:
             log("nearby:", f"the Plus One app on {self.companions[key][2]} at {reply[7]}:{reply[8]}"
                 if key in self.companions else "the Plus One app is gone")
             self.on_change()

@@ -130,4 +130,8 @@
     <string name="ask_device_text">A program on that PC wants it, for a call say: tap Allow.</string>
     <string name="onboarding_title">Let Plus One reach you</string>
     <string name="onboarding_text">So the pairing code, PDFs to sign and a PC asking for the camera appear by themselves, allow Plus One\'s notifications and “Display over other apps”.</string>
+    <string name="update_waiting_title">Finish updating Plus One</string>
+    <string name="update_waiting_text">Tap to install the version your PC has</string>
+    <string name="updated_title">Plus One updated to %1$s</string>
+    <string name="updated_text">The same version as on your PC</string>
 </resources>

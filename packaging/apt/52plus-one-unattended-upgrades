@@ -1,0 +1,5 @@
+// Plus One's updates are installed by themselves, as Ubuntu's security
+// updates are (unattended-upgrades, once a day). To be asked instead,
+// remove this file or comment the line out: Software Updater still offers
+// them.
+Unattended-Upgrade::Origins-Pattern:: "origin=Plus One";

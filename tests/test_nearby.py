@@ -109,3 +109,16 @@ def test_other_services_are_ignored():
     nearby, _changes = watching()
     announce(nearby, "ItemNew", (3, 0, "printer", "_ipp._tcp", "local"))
     assert nearby.bus.calls == [] and not nearby.services
+
+
+def test_the_app_says_its_version():
+    nearby, _changes = watching()
+    app = (3, 0, "Plus One on Tab", COMPANION, "local")
+    announce(nearby, "ItemNew", app)
+    assert nearby.app_version("00ff") is None  # not resolved: not there
+    nearby._resolved(nearby.bus, reply(app, [b"name=Tab", b"id=00ff"]), app)
+    assert nearby.app_version("00ff") == 0  # an app before 0.8 says none
+    said = []
+    nearby.on_change = lambda: said.append(nearby.app_version("00ff"))
+    nearby._resolved(nearby.bus, reply(app, [b"name=Tab", b"id=00ff", b"v=800"]), app)
+    assert nearby.app_version("00ff") == 800 and said == [800]  # updated: told

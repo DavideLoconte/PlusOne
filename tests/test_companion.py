@@ -323,6 +323,29 @@ def test_a_sessions_link_gives_up_on_a_tablet_gone_from_the_network(tmp_path, pc
         sock.close()
 
 
+def test_the_app_is_handed_its_update_whatever_its_protocol(tmp_path, pc):
+    # An older app speaks an older protocol: the update still goes, to a
+    # tablet paired both ways, and only the update.
+    _path, paired = pc
+    got = []
+
+    def takes(wire):
+        message, payload = receive(wire)
+        got.append((message, payload))
+        wire.send({"type": "updating"})
+    app = FakeApp(tmp_path, [takes, lambda wire: None], version=companion.PROTOCOL - 1)
+    fp = companion.fingerprint(app.der)
+    paired.add(fp, "Tab")
+    apk = tmp_path / "app.apk"
+    apk.write_bytes(b"an app")
+    assert companion.update_app([app.target], fp[:16], str(apk), 800, paired) is None
+    message, payload = got[0]
+    assert message["type"] == "update" and message["version"] == 800 and payload == b"an app"
+    assert message["sha256"] == hashlib.sha256(b"an app").hexdigest()
+    with pytest.raises(companion.Incompatible):  # anything else: not across versions
+        companion.sign(app.target, str(apk), paired=paired)
+
+
 def says_bye(wire):
     assert receive(wire)[0] == {"type": "bye"}
 

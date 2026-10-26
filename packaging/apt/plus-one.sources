@@ -1,0 +1,8 @@
+# Plus One's updates: each release on GitHub is also a small APT repository
+# (Packages, Release, InRelease next to the .deb), signed with the key in
+# /usr/share/keyrings/plus-one-archive-keyring.gpg. "apt upgrade" and
+# Software Updater find new versions there; removing Plus One removes this.
+Types: deb
+URIs: https://github.com/GabrieleSantangelo/PlusOne/releases/latest/download/
+Suites: ./
+Signed-By: /usr/share/keyrings/plus-one-archive-keyring.gpg

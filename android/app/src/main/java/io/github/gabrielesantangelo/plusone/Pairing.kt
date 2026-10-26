@@ -186,5 +186,9 @@ class BootReceiver : BroadcastReceiver() {
         if (again && Options.alwaysReady(context)) {
             CompanionService.start(context)
         }
+        if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
+            Notifications.channels(context)  // (the service may not be started)
+            Notifications.updated(context)
+        }
     }
 }

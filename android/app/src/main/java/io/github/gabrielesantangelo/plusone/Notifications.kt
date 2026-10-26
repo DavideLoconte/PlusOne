@@ -147,4 +147,32 @@ object Notifications {
     }
 
     private const val WAITING_ID = 2
+    private const val UPDATE_ID = 3
+
+    /** The PC's update waits for the user's tap (Android asks the first time). */
+    fun updateWaiting(context: Context, confirm: Intent) {
+        val notification = Notification.Builder(context, ASK)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(context.getString(R.string.update_waiting_title))
+            .setContentText(context.getString(R.string.update_waiting_text))
+            .setContentIntent(PendingIntent.getActivity(context, UPDATE_ID, confirm,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+            .setAutoCancel(true)
+            .build()
+        context.getSystemService(NotificationManager::class.java).notify(UPDATE_ID, notification)
+    }
+
+    /** Updated: said once, quietly. */
+    fun updated(context: Context) {
+        val version = context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        val notification = Notification.Builder(context, QUEUE)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(context.getString(R.string.updated_title, version))
+            .setContentText(context.getString(R.string.updated_text))
+            .setContentIntent(PendingIntent.getActivity(context, UPDATE_ID, Intent(context, MainActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE))
+            .setAutoCancel(true)
+            .build()
+        context.getSystemService(NotificationManager::class.java).notify(UPDATE_ID, notification)
+    }
 }

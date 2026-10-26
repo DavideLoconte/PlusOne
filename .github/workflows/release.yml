@@ -99,8 +99,45 @@ jobs:
           path: dist/*.apk
           if-no-files-found: ignore
 
+  repo:
+    # The release as an APT repository (packaging/apt): its index of the
+    # .deb, signed with the key the .deb ships, so that apt, Software Updater
+    # and unattended-upgrades take each new release from
+    # releases/latest/download/. The key: this environment's secret, as the
+    # app's, for this job's signing step alone.
+    needs: [deb]
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: deb
+          path: repo
+      - name: Index and sign (skipped without the key in the secrets)
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}  # armored secret key
+        run: |
+          if [ -z "$APT_SIGNING_KEY" ]; then echo "no key: no APT repository in the release"; rm -rf repo; exit 0; fi
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          install -d -m 700 "$GNUPGHOME"
+          echo "$APT_SIGNING_KEY" | gpg --batch --quiet --import
+          key="$(gpg --batch --with-colons --list-secret-keys | awk -F: '/^fpr/ {print $10; exit}')"
+          packaging/apt/make-repo.sh repo "$key"
+          rm -rf "$GNUPGHOME"
+          # Signed with the key the .deb trusts, or apt would refuse it.
+          gpgv --keyring "$PWD/packaging/apt/plus-one-archive-keyring.gpg" repo/InRelease
+          rm repo/*.deb
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: repo
+          path: repo/
+          if-no-files-found: ignore
+
   publish:
-    needs: [deb, flatpak, sign]
+    needs: [deb, flatpak, sign, repo]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -132,5 +169,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           shopt -s nullglob
-          gh release create "$GITHUB_REF_NAME" dist/*.deb dist/*.flatpak dist/*.zip dist/*.apk dist/SHA256SUMS \
+          # A draft until every file is there: "latest" (where apt looks)
+          # never points at a release whose index is missing.
+          files=(dist/*.deb dist/*.flatpak dist/*.zip dist/*.apk dist/SHA256SUMS)
+          for f in Packages Packages.gz Release InRelease Release.gpg; do
+            if [ -e "dist/$f" ]; then files+=("dist/$f"); fi  # the APT index, when the key was there
+          done
+          gh release create "$GITHUB_REF_NAME" --draft "${files[@]}" \
             --title "Plus One $GITHUB_REF_NAME" --notes-file notes.md
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest

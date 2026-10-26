@@ -27,8 +27,8 @@ Through Plus One's small app on the tablet, or the <b>Second Screen</b> feature 
 - **Through Plus One's app, over your Wi-Fi.** With the app open on the
   tablet, the desktop goes to it: about 25 ms from the PC's screen to the
   tablet's decoder at 1920×1200@60 (Second Screen: about 50 ms to the glass),
-  encrypted, no Wi-Fi Direct, every sample of the pen; a tap is a click,
-  two fingers tapped together the right button. The picture's bitrate
+  encrypted, no Wi-Fi Direct, every sample of the pen; the fingers work as
+  a touchpad's (two to scroll, with momentum; a pinch to zoom). The picture's bitrate
   follows what the Wi-Fi takes, so a weak network makes it softer, not late.
   Without the app, Samsung's Second Screen as before.
 - **Low latency.** 60 fps, hardware H.264 (Intel's low-power encoder first,
@@ -86,7 +86,18 @@ off: after logging out and back in, turn it on in Plus One's window
 (*General → Quick Settings toggle* in the window) or in the *Extensions* app. Plus One never
 enables shell extensions by itself.
 
-Uninstall with `sudo apt remove plus-one`.
+**Updates come by themselves.** Each release on GitHub is also a small APT
+repository, signed with Plus One's key: the package installs its source
+(`/etc/apt/sources.list.d/plus-one.sources`, with the key in
+`/usr/share/keyrings/plus-one-archive-keyring.gpg`), so `apt upgrade` and
+Software Updater see new versions, and unattended-upgrades installs them
+once a day as it does Ubuntu's security updates
+(`/etc/apt/apt.conf.d/52plus-one-unattended-upgrades`; remove it, or comment
+its line out, to be asked instead). Plus One notices it was replaced and
+starts again once nothing is in use, with a notification; *Restart now* does
+it at once. Installing the `.deb` by hand is needed once, from 0.8.0 on.
+
+Uninstall with `sudo apt remove plus-one` (`purge` also removes the source).
 
 ### Flatpak (any distribution with GNOME)
 
@@ -146,13 +157,30 @@ confirm on both. The window's **Tablets** page (or a click on the tablet's
 name at the top of the sidebar) pairs another, picks the one in use and
 forgets one.
 
+The app is then kept at the PC's version by the PC itself: when the app on
+the tablet is older and nothing is in use, the PC hands it the app of its
+own version (from its release, checked against `SHA256SUMS`; Android checks
+that it is signed as the app it replaces), and the app installs it. The
+first time Android asks, with one tap (the app did not install itself);
+after that it updates without a question. *Tablets → Keep the tablet's app
+up to date* turns it off.
+
 1. Click **Tablet** in GNOME's Quick Settings (top-right corner), or press
    **Use as second screen** in the Plus One window.
 2. With Plus One's app on the tablet and on the same Wi-Fi, that is all: the
    app opens the desktop by itself, a new monitor to the right of your other
-   screens (arrange it in *Settings → Displays*). Fingers and the S Pen work
-   on it: a tap clicks, two fingers tapped together are the right button,
-   and dragging, scrolling and pinching are touches.
+   screens (arrange it in *Settings → Displays*). The S Pen works on it as a
+   pen tablet; the fingers as a laptop's touchpad, where they touch:
+
+   | Fingers | |
+   |---|---|
+   | one tapped | click |
+   | one moved | drag (select text, move a window) |
+   | one held still | right button |
+   | two tapped | right button |
+   | two moved together | scroll; flicked, it goes on and slows down, until a finger touches |
+   | two moved apart or together | pinch: zoom where the program does (browsers, maps, viewers) |
+   | three swiped | up: the overview; down: out of it; sideways: another workspace |
 3. Without the app (or with *Second screen through: Samsung's Second Screen*
    in the preferences), swipe down on the tablet for quick settings and tap
    **Second screen**; a few seconds later the monitor appears.
@@ -495,6 +523,11 @@ flatpak run org.flatpak.Builder --user --install --force-clean flatpak-build \
 4. With the secrets `ANDROID_KEYSTORE` (the release key, a PKCS#12 file in
    base64) and `ANDROID_KEYSTORE_PASSWORD`, it also builds the companion app,
    signed, and attaches the APK. The app's version is Plus One's.
+5. With the secret `APT_SIGNING_KEY` (the armored secret key whose public
+   half is `packaging/apt/plus-one-archive-keyring.gpg`), it makes the
+   release an APT repository (`packaging/apt/make-repo.sh`: `Packages`,
+   `Release`, `InRelease`, signed) and publishes it only once everything is
+   attached, so `releases/latest/download/` is always a whole one.
 
 ## Acknowledgements
 

@@ -242,20 +242,21 @@ def next_turn():
     return _turns.ticket()
 
 
-def _connect(target, paired, ask_pairing, expect=None):
+def _connect(target, paired, ask_pairing, expect=None, any_version=False):
     """(socket, wire, tablet name) of _handshake()."""
-    sock, wire, name, _fp, _hello = _handshake(target, paired, ask_pairing, expect)
+    sock, wire, name, _fp, _hello = _handshake(target, paired, ask_pairing, expect, any_version=any_version)
     return sock, wire, name
 
 
-def _handshake(target, paired, ask_pairing, expect=None, pin=None, timeout=CONNECT_TIMEOUT):
+def _handshake(target, paired, ask_pairing, expect=None, pin=None, timeout=CONNECT_TIMEOUT, any_version=False):
     """(socket, wire, tablet name, its certificate's fingerprint, its hello)
     of a TLS link to the app at target, the tablet paired: pairing if needed
     when ask_pairing is given (the user chose this tablet to pair with; it
     asks them to compare the code), else raising PairingRefused. expect:
     the id the app was announced with; if it is a paired tablet's, that
     tablet's certificate is required (Impostor otherwise). pin: the only
-    certificate fingerprint accepted."""
+    certificate fingerprint accepted. any_version: an app of another
+    protocol is not Incompatible (to update it), if both know each other."""
     cert, key, ours = identity()
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.minimum_version = ssl.TLSVersion.TLSv1_3
@@ -295,7 +296,10 @@ def _handshake(target, paired, ask_pairing, expect=None, pin=None, timeout=CONNE
         hello = small()
         name = str(hello.get("name") or "tablet")[:MAX_NAME]
         if hello.get("version") != PROTOCOL:
-            raise Incompatible(f"{name} speaks version {hello.get('version')}, this PC {PROTOCOL}")
+            if not any_version:
+                raise Incompatible(f"{name} speaks version {hello.get('version')}, this PC {PROTOCOL}")
+            if not known or not hello.get("paired"):
+                raise PairingRefused(name)  # never paired across versions
         if not known or not hello.get("paired"):
             if ask_pairing is None:
                 raise PairingRefused(name)
@@ -446,12 +450,12 @@ def sign(target, path, paired=None, on_opened=None, pen=None, signatures=None,
         _places.release()
 
 
-def _connect_any(targets, paired, ask_pairing, expect):
+def _connect_any(targets, paired, ask_pairing, expect, any_version=False):
     """_connect() to the first of targets that answers as it should."""
     error = None
     for target in [targets] if isinstance(targets, tuple) else targets:
         try:
-            return _connect(target, paired, ask_pairing, expect)
+            return _connect(target, paired, ask_pairing, expect, any_version)
         except Impostor as e:
             log("companion:", e)
             error = e
@@ -519,6 +523,27 @@ def open_link(targets, expect, paired=None):
     # link up after LINK_TIMEOUT instead of TCP's own quarter of an hour.
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_USER_TIMEOUT, LINK_TIMEOUT * 1000)
     return sock, wire
+
+
+def update_app(targets, expect, apk, version, paired=None):
+    """Blocking: hands the paired tablet's app (whatever its protocol) its
+    update, the APK at apk of version (its versionCode). The app checks
+    it (its package, newer, signed as itself) and installs it; None then,
+    else its reason not to: "busy" (the PC uses it now), "off" (not
+    allowed there), "invalid" or "older"."""
+    with open(apk, "rb") as f:
+        data = f.read()
+    sock, wire, _name = _connect_any(targets, paired or Paired(), None, expect, any_version=True)
+    try:
+        sock.settimeout(IO_TIMEOUT * 4)  # 15 MB over a slow Wi-Fi
+        wire.send({"type": "update", "version": version, "sha256": hashlib.sha256(data).hexdigest()}, data)
+        sock.settimeout(IO_TIMEOUT)
+        reply = wire.receive(UNPAIRED_HEADER)
+    finally:
+        sock.close()
+    if reply.get("type") == "updating":
+        return None
+    return str(reply.get("reason") or reply.get("type") or "invalid")
 
 
 def _finite(value):

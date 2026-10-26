@@ -375,8 +375,20 @@ class Window(Adw.ApplicationWindow):
         group.add(pair)
         group.add(get)
         page.add(group)
+        group = Adw.PreferencesGroup()
+        updates = Adw.SwitchRow(title=_("Keep the tablet's app up to date"), active=self.settings.update_tablet,
+                                subtitle=_("With this PC's version, while nothing is in use"))
+        updates.connect("notify::active", lambda row, _p: self._set_update_tablet(row.get_active()))
+        group.add(updates)
+        page.add(group)
         self.tablet_rows = []
         return page
+
+    def _set_update_tablet(self, on):
+        self.settings.update_tablet = on
+        self.app.save_settings()
+        if on:
+            self.app.tablet_updates.check()
 
     def _general_page(self):
         s = self.settings
