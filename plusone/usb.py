@@ -28,7 +28,7 @@ GET_PROTOCOL, SEND_STRING, START = 51, 52, 53
 CHUNK = 16384          # bytes of a read, either way
 BATCH = 48 * 1024      # bytes of datagrams in one USB write, at most
 SWITCH_WAIT = 10       # seconds for the tablet to come back as an accessory
-ANSWER_WAIT = 60       # seconds for the user to let Plus One have it, the first time
+ANSWER_WAIT = 300      # seconds for the user to let Plus One have it, the first time
 
 
 def frame(kind, connection, data=b""):

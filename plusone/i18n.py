@@ -278,6 +278,68 @@ _IT = {
         "Plus One su {name} e su questo PC sono versioni diverse: aggiornali",
     "Plus One does not answer on {name}: open it on the tablet and connect again":
         "Plus One non risponde su {name}: aprilo sul tablet e collega di nuovo",
+    # macOS: the menu bar and its window
+    "No tablet with Plus One open": "Nessun tablet con Plus One aperto",
+    "A tablet is ready": "Un tablet è pronto",
+    "the tablet on the cable": "il tablet sul cavo",
+    "Show the desktop on {name}": "Mostra il desktop su {name}",
+    "Pair with {name}…": "Abbina {name}…",
+    "Show the desktop over the cable": "Mostra il desktop via cavo",
+    "Pair over the cable…": "Abbina via cavo…",
+    "Open Plus One…": "Apri Plus One…",
+    "Quit Plus One": "Esci da Plus One",
+    "Pair with {name}?": "Abbinare {name}?",
+    "Pair only if {name} shows the same code:\n\n{code}":
+        "Abbina solo se {name} mostra lo stesso codice:\n\n{code}",
+    "Pair": "Abbina",
+    "Not paired with {name}": "Non abbinato a {name}",
+    "Could not pair with {name}": "Impossibile abbinare {name}",
+    "Pairing with {name}…": "Abbinamento con {name}…",
+    "On {name}, {width}x{height}": "Su {name}, {width}x{height}",
+    "On {name}": "Su {name}",
+    "On {name}, paused": "Su {name}, in pausa",
+    "Connecting to {name}…": "Collegamento a {name}…",
+    "No link over the cable": "Nessun collegamento via cavo",
+    "Plus One could not use the cable": "Plus One non è riuscito a usare il cavo",
+    "Opening the link over the cable…": "Apro il collegamento via cavo…",
+    "Ended on {name}": "Terminato su {name}",
+    "Could not show the desktop on {name}": "Impossibile mostrare il desktop su {name}",
+    "The desktop on {name} ended": "Il desktop su {name} si è interrotto",
+    "Disconnected": "Scollegato",
+    "Devices": "Dispositivi",
+    "Settings": "Impostazioni",
+    "Open minimized in the menu bar": "Apri ridotto nella barra dei menu",
+    "Language": "Lingua",
+    "Permissions…": "Permessi…",
+    "Open Plus One on the tablet, on the same Wi-Fi as this Mac or on the cable.":
+        "Apri Plus One sul tablet, sulla stessa Wi-Fi di questo Mac o collegato col cavo.",
+    "Welcome to Plus One": "Benvenuto in Plus One",
+    "To show this Mac's desktop on the tablet, Plus One needs two permissions.":
+        "Per mostrare il desktop di questo Mac sul tablet, Plus One ha bisogno di due permessi.",
+    "Screen Recording": "Registrazione schermo",
+    "To send the desktop to the tablet.": "Per inviare il desktop al tablet.",
+    "Accessibility": "Accessibilità",
+    "So the tablet's touches and the S Pen move the pointer.":
+        "Perché il tocco e la S Pen del tablet muovano il puntatore.",
+    "Allowed": "Consentito",
+    "Allow…": "Consenti…",
+    "macOS may also ask to use the local network: allow it, to find the tablet over Wi-Fi.":
+        "macOS potrebbe chiedere anche la rete locale: consentila, per trovare il tablet in Wi-Fi.",
+    "Once Screen Recording is allowed, Plus One may need to reopen.":
+        "Consentita la registrazione schermo, Plus One potrebbe doversi riaprire.",
+    "Reopen Plus One": "Riapri Plus One",
+    "Later": "Più tardi",
+    "Continue": "Continua",
+    "macOS does not let Plus One record the screen: allow it in System Settings → "
+    "Privacy & Security → Screen Recording, then start it again":
+        "macOS non permette a Plus One di registrare lo schermo: consentilo in Impostazioni di Sistema → "
+        "Privacy e sicurezza → Registrazione schermo, poi riprova",
+    "no tablet on the cable": "nessun tablet sul cavo",
+    "the tablet cannot be an accessory (Android Open Accessory)":
+        "il tablet non può fare da accessorio (Android Open Accessory)",
+    "the tablet did not come back as an accessory": "il tablet non è tornato come accessorio",
+    "Plus One did not open on the tablet (allow it there)": "Plus One non si è aperto sul tablet (consentilo lì)",
+    "Plus One's app did not answer on the cable": "L'app Plus One non ha risposto sul cavo",
 }
 
 # Templates that read the same in every language.
@@ -291,7 +353,11 @@ def system_language():
         value = os.environ.get(var)
         if value:
             return "it" if value.startswith("it") else "en"
-    return "en"
+    try:  # macOS: an app started from Finder has no LANG, the user's languages are here
+        from Foundation import NSLocale
+        return "it" if NSLocale.preferredLanguages()[0].startswith("it") else "en"
+    except Exception:  # noqa: BLE001 - not macOS
+        return "en"
 
 
 def set_language(code):

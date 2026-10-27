@@ -109,6 +109,11 @@ iconutil -c icns "$iconset" -o "$resources/PlusOne.icns"
 rm -rf "$iconset"
 
 codesign --force --deep --sign - "$app"
+# Ad hoc, macOS would know the app by its hash, new at each build: its
+# permissions (Screen Recording, Accessibility) asked for again each time.
+# Known by its identifier instead.
+# ponytail: any app with this identifier would have them; a Developer ID when released.
+codesign --force --sign - --requirements "=designated => identifier \"io.github.gabrielesantangelo.PlusOne\"" "$app"
 zip="dist/PlusOne-$version-macos.zip"
 rm -f "$zip"
 ditto -c -k --keepParent "$app" "$zip"

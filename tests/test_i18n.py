@@ -45,7 +45,7 @@ def app_constants():
 
 @pytest.mark.parametrize("text", sorted(
     (strings_in("gui.py") | strings_in("app.py") | strings_in("engine.py") | strings_in("sign.py")
-     | strings_in("signing.py") | strings_in("signature_pad.py") | strings_in("tablets.py") | strings_in("pdf.py")
+     | strings_in("signing.py") | strings_in("signature_pad.py") | strings_in("tablets.py") | strings_in("pdf.py") | strings_in("menubar.py")
      | app_constants()
      | {NOT_ANSWERING})
     - i18n.NEUTRAL))

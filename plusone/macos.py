@@ -21,6 +21,7 @@ TABLET_POINT = 1    # kCGEventMouseSubtypeTabletPoint
 KEYFRAME_SECONDS = 10  # as media.py's: periodic keyframes
 VBV_FRAMES = 4         # as media.py's: a keyframe may be this many average frames
 KEEPALIVE = 0.1        # seconds: the last frame again (pipewiresrc's keepalive-time on Linux)
+PERMISSION_WAIT = 300  # seconds for the user to answer macOS's Screen Recording question
 START = b"\x00\x00\x00\x01"
 SCREEN_RECORDING = ("macOS does not let Plus One record the screen: allow it in System Settings → "
                     "Privacy & Security → Screen Recording, then start it again")
@@ -86,11 +87,18 @@ def annex_b(data, length_size=4, before=()):
     return bytes(out)
 
 
-def accessibility():
-    """Whether Plus One may move the pointer; if not, macOS is asked to
-    offer it (its dialog, once)."""
+def accessibility(prompt=True):
+    """Whether Plus One may move the pointer; if not and prompt, macOS is
+    asked to offer it (its dialog, once)."""
     import ApplicationServices as AS
-    return AS.AXIsProcessTrustedWithOptions({AS.kAXTrustedCheckOptionPrompt: True})
+    return AS.AXIsProcessTrustedWithOptions({AS.kAXTrustedCheckOptionPrompt: prompt})
+
+
+def screen_recording():
+    """Whether Plus One may record the screen (as this process sees it:
+    allowed meanwhile, it may take a reopen)."""
+    import Quartz
+    return Quartz.CGPreflightScreenCaptureAccess()
 
 
 class Monitor:
@@ -336,10 +344,7 @@ class Video:
         import ScreenCaptureKit as SCK
         display = None
         for _ in range(30):  # the new display reaches ScreenCaptureKit a moment later
-            content, error = _wait(SCK.SCShareableContent.getShareableContentWithCompletionHandler_,
-                                   "list the displays")
-            if error is not None:
-                raise PermissionError(SCREEN_RECORDING if error.code() == -3801 else error.localizedDescription())
+            content = self._shareable()
             display = next((d for d in content.displays() if d.displayID() == self.display_id), None)
             if display is not None or self._done.is_set():
                 break
@@ -364,6 +369,29 @@ class Video:
         if not (added[0] if isinstance(added, tuple) else added):
             raise RuntimeError("ScreenCaptureKit did not take the stream's output")
         self._capture(True)
+
+    def _shareable(self):
+        """What ScreenCaptureKit may capture, once Plus One may record the
+        screen: the first time macOS asks, and the session (its link kept)
+        waits for the answer."""
+        import Quartz
+        import ScreenCaptureKit as SCK
+        deadline = time.monotonic() + PERMISSION_WAIT
+        asked = False
+        while True:
+            content, error = _wait(SCK.SCShareableContent.getShareableContentWithCompletionHandler_,
+                                   "list the displays")
+            if error is None:
+                return content
+            if error.code() != -3801:
+                raise RuntimeError(error.localizedDescription())
+            if not asked:
+                asked = True
+                log("macOS: waiting for Screen Recording to be allowed")
+                Quartz.CGRequestScreenCaptureAccess()  # the question, if macOS has not asked yet
+            # ponytail: a refusal looks like no answer yet; told at the deadline.
+            if self._done.wait(1) or time.monotonic() > deadline:
+                raise PermissionError(SCREEN_RECORDING)
 
     def _capture(self, on):
         if self.stream is None:

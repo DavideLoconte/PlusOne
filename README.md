@@ -140,6 +140,10 @@ sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-
 **Not usable yet: a proof of concept**, to show the port can be done.
 Expect rough edges, no release and no support.
 
+The native app (Swift) is in its own repository,
+[PlusOne-macOS](https://github.com/DavideLoconte/PlusOne-macOS); what
+follows is the first, Python version of it.
+
 Only the desktop goes to Plus One's app, with the fingers and the pen, from
 the menu bar, over Wi-Fi or the USB cable. There is no Second Screen (macOS
 lets no app use Wi-Fi Direct), no camera, microphone or speakers, and no PDF
