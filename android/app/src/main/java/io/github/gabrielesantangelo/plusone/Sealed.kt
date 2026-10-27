@@ -17,7 +17,8 @@ class Sealed(key: ByteArray) {
     private var sent = 0L
 
     /** The body of a packet from the PC, or null if it is not one sealed with
-     * this key. From one thread. */
+     * this key. (The socket's thread, and the cable's.) */
+    @Synchronized
     fun open(packet: ByteArray, length: Int): ByteArray? {
         if (length < NONCE + TAG + 1 || packet[3] != FROM_PC) return null
         return try {

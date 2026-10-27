@@ -33,19 +33,26 @@ import java.util.concurrent.Executors
  * decoded here is measured, not guessed. (Not to the glass: MediaCodec's
  * "rendered" times only gave back the time it was released with.)
  */
-class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pcPort: Int) {
+class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pcPort: Int,
+                     private val mime: String = MediaFormat.MIMETYPE_VIDEO_AVC) {
     val socket = DatagramSocket(0).apply { receiveBufferSize = 4 shl 20 }
     private val sealed = Sealed(key)
     @Volatile private var running = true
     // Packets to the PC go out in order from this thread (input comes on
     // the main one, where Android allows no network).
     private val outbox = Executors.newSingleThreadExecutor()
+    @Volatile private var tunnel: ((ByteArray) -> Unit)? = null  // the cable's, once a packet came through it
 
     // MediaCodec in asynchronous mode: its callbacks on this thread, the
     // input buffers it frees queued for the receiving thread.
     private val callbacks = HandlerThread("plusone-display").apply { start() }
     private val handler = Handler(callbacks.looper)
     private val free = ConcurrentLinkedQueue<Int>()
+    // Whole frames waiting for an input buffer, oldest first: the decoder
+    // busy for a moment (a keyframe) costs a few ms, not a frame and a
+    // keyframe more. Under its own lock, taken by the decoder's callbacks too.
+    private val pending = ArrayDeque<Pair<Frame, Int>>()
+    private val feeding = Any()
     @Volatile private var codec: MediaCodec? = null
     private var surface: Surface? = null  // attach()'s, for a decoder made again after an error
     @Volatile private var restarts = 0    // decoders made again since one last decoded a frame
@@ -114,12 +121,12 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
     fun attach(surface: Surface) {
         detach()
         this.surface = surface
-        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, MAX_WIDTH, MAX_HEIGHT).apply {
+        val format = MediaFormat.createVideoFormat(mime, MAX_WIDTH, MAX_HEIGHT).apply {
             setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             setInteger(MediaFormat.KEY_PRIORITY, 0)  // real time
         }
         val decoder = try {
-            MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            MediaCodec.createDecoderByType(mime)
         } catch (e: Exception) {
             // None free (another app holds them all): nothing shown, rather
             // than the process gone, the service and its other sessions with it.
@@ -129,12 +136,16 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
         decoder.setCallback(object : MediaCodec.Callback() {
             override fun onInputBufferAvailable(codec: MediaCodec, index: Int) {
                 free.add(index)
+                feed()
             }
 
             override fun onOutputBufferAvailable(codec: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
                 decoded(info.presentationTimeUs, System.nanoTime())
                 try {
-                    codec.releaseOutputBuffer(index, true)  // now: no waiting for a presentation time
+                    // Due now: of frames decoded within one refresh the screen
+                    // takes the newest and lets the others go, so a burst (Wi-Fi
+                    // delivers them so) does not hold the decoder's buffers.
+                    codec.releaseOutputBuffer(index, System.nanoTime())
                 } catch (e: IllegalStateException) {
                 }
             }
@@ -162,6 +173,7 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
             return
         }
         Log.i(CompanionService.TAG, "display: decoder ${decoder.name}")
+        synchronized(feeding) { pending.clear() }  // the old decoder's: this one starts at a keyframe
         codec = decoder
         // The next frame that is not a keyframe asks for one (from the
         // receiving thread: not the network on this, the main one).
@@ -207,14 +219,26 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
                 break
             }
             if (packet.address != pc) continue
-            val body = sealed.open(buffer, packet.length) ?: continue  // not sealed with this session's key
-            pcPort = packet.port  // replies go where the PC sends from
-            val b = ByteBuffer.wrap(body).order(ByteOrder.BIG_ENDIAN)
-            when (b.get()) {
-                VIDEO -> video(b)
-                PONG -> pong(b.long, b.long)
-            }
+            if (opened(buffer, packet.length)) pcPort = packet.port  // replies go where the PC sends from
         }
+    }
+
+    /** A packet the cable's tunnel brought: the replies go back through it,
+     * not through a loopback socket (a copy, two system calls and a thread
+     * less each way). */
+    fun fromTunnel(packet: ByteArray, tunnel: (ByteArray) -> Unit) {
+        if (opened(packet, packet.size)) this.tunnel = tunnel
+    }
+
+    /** Whether packet was the PC's, sealed with this session's key. */
+    private fun opened(packet: ByteArray, length: Int): Boolean {
+        val body = sealed.open(packet, length) ?: return false
+        val b = ByteBuffer.wrap(body).order(ByteOrder.BIG_ENDIAN)
+        when (b.get()) {
+            VIDEO -> video(b)
+            PONG -> pong(b.long, b.long)
+        }
+        return true
     }
 
     @Synchronized
@@ -249,10 +273,36 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
             askKeyframe()
             return
         }
-        if (decode(frame, number)) needKeyframe = false else {
-            synchronized(timing) { lost++ }
-            needKeyframe = true
-            askKeyframe()
+        if (frame.keyframe) needKeyframe = false
+        synchronized(feeding) {
+            if (pending.size >= MAX_PENDING) {
+                // The decoder fell behind for good: what waits is dropped,
+                // and the next frame that is not a keyframe asks for one.
+                synchronized(timing) { lost += pending.size }
+                pending.clear()
+                if (!frame.keyframe) {
+                    synchronized(timing) { lost++ }
+                    needKeyframe = true
+                    askKeyframe()
+                    return
+                }
+            }
+            pending.addLast(frame to number)
+        }
+        feed()
+    }
+
+    /** The waiting frames to the decoder, as long as it has buffers free:
+     * from the receiving thread and the decoder's callbacks. */
+    private fun feed() = synchronized(feeding) {
+        while (pending.isNotEmpty() && free.isNotEmpty()) {
+            val (frame, number) = pending.removeFirst()
+            if (!decode(frame, number)) {
+                synchronized(timing) { lost++ }
+                pending.clear()
+                needKeyframe = true
+                askKeyframe()
+            }
         }
     }
 
@@ -351,7 +401,7 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
             outbox.execute {
                 try {
                     val packet = sealed.seal(body)
-                    socket.send(DatagramPacket(packet, packet.size, pc, pcPort))
+                    tunnel?.invoke(packet) ?: socket.send(DatagramPacket(packet, packet.size, pc, pcPort))
                 } catch (e: Exception) {
                     if (running) Log.w(CompanionService.TAG, "display: cannot send: $e")
                 }
@@ -374,6 +424,13 @@ class DisplaySession(key: ByteArray, private val pc: InetAddress, private var pc
         const val OFFSET_AGE = 10_000_000_000L   // ns
         const val MAX_RESTARTS = 3
         const val HIDDEN_PING_EVERY = 10        // ticks (seconds)
+        const val MAX_PENDING = 6               // whole frames waiting for the decoder: 100 ms at 60 fps
+
+        /** Whether a hardware decoder takes mime at this tablet's screen size. */
+        fun decodes(mime: String) = android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
+            !info.isEncoder && info.isHardwareAccelerated && info.supportedTypes.any { it.equals(mime, ignoreCase = true) } &&
+                runCatching { info.getCapabilitiesForType(mime).videoCapabilities.isSizeSupported(1920, 1080) }.getOrDefault(false)
+        }
 
         /** The session being shown, for DisplayActivity. */
         @Volatile var current: DisplaySession? = null

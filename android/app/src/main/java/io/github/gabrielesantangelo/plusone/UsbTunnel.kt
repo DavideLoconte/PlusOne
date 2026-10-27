@@ -6,8 +6,6 @@ import java.io.DataInputStream
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
-import java.net.DatagramPacket
-import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -36,14 +34,10 @@ class UsbTunnel(
     private val output = FileOutputStream(fd.fileDescriptor)
     private val pipes = ConcurrentHashMap<Int, Socket>()  // connection -> our end of its pipe
     private val loopback = InetAddress.getLoopbackAddress()
-    // The display's datagrams, from this socket to DisplaySession's: it
-    // answers where they come from (its pc is the pipe's loopback address).
-    private val datagrams = DatagramSocket(0, loopback)
     @Volatile private var running = true
 
     fun start() {
         Thread(::receive, "plusone-usb-in").start()
-        Thread(::datagramsOut, "plusone-usb-datagrams").start()
     }
 
     fun stop() {
@@ -51,7 +45,6 @@ class UsbTunnel(
         running = false
         Log.i(CompanionService.TAG, "usb: the cable's link ended")
         closeAll()
-        datagrams.close()
         runCatching { fd.close() }
     }
 
@@ -76,9 +69,7 @@ class UsbTunnel(
                         try { pipe.getOutputStream().write(data) } catch (e: Exception) { close(id, tell = true) }
                     }
                     CLOSE -> close(id, tell = false)
-                    DATAGRAM -> DisplaySession.current?.let {
-                        datagrams.send(DatagramPacket(data, data.size, loopback, it.socket.localPort))
-                    }
+                    DATAGRAM -> DisplaySession.current?.fromTunnel(data) { send(DATAGRAM, 0, it) }
                 }
             }
         } catch (e: Exception) {
@@ -141,19 +132,6 @@ class UsbTunnel(
             theirs.close()
         }
         @Suppress("UNREACHABLE_CODE") error("unreachable")
-    }
-
-    private fun datagramsOut() {
-        val buffer = ByteArray(2048)
-        val packet = DatagramPacket(buffer, buffer.size)
-        while (running) {
-            try {
-                datagrams.receive(packet)
-            } catch (e: Exception) {
-                break
-            }
-            if (packet.address.isLoopbackAddress) send(DATAGRAM, 0, buffer.copyOf(packet.length))
-        }
     }
 
     /** One frame, whole, from any thread. */

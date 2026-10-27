@@ -2,8 +2,10 @@ package io.github.gabrielesantangelo.plusone
 
 import android.Manifest
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.hardware.usb.UsbAccessory
@@ -65,6 +67,24 @@ class CompanionService : Service() {
         queueChanged()  // nor a notification for them
         Thread(::serve, "plusone-server").start()
         handler.postDelayed(::idleCheck, IDLE_CHECK)
+        registerReceiver(usbGone, IntentFilter().apply {
+            addAction(UsbManager.ACTION_USB_ACCESSORY_DETACHED)
+            addAction(USB_STATE)
+        }, RECEIVER_NOT_EXPORTED)
+    }
+
+    /** Android left accessory mode (the PC reset the cable, or it was
+     * unplugged): the accessory is let go. Held, it keeps /dev/usb_accessory
+     * busy, and the PC's next request to become an accessory fails. */
+    private val usbGone = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == USB_STATE && intent.getBooleanExtra("accessory", false)) return
+            synchronized(this@CompanionService) {
+                if (usb != null) Log.i(TAG, "usb: Android left accessory mode")
+                usb?.stop()
+                usb = null
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -102,6 +122,7 @@ class CompanionService : Service() {
         instance = null
         Jobs.unlisten(queueChanged)
         handler.removeCallbacksAndMessages(null)
+        runCatching { unregisterReceiver(usbGone) }  // not registered if onCreate stopped early
         synchronized(this) {
             stopped = true
             registration?.let { runCatching { (getSystemService(NSD_SERVICE) as NsdManager).unregisterService(it) } }
@@ -507,7 +528,9 @@ class CompanionService : Service() {
             wire.send(JSONObject().put("type", "refused").put("reason", "background"))
             return
         }
-        val session = DisplaySession(key, socket.inetAddress, port)
+        // HEVC if the PC asks for it and this tablet decodes it in hardware; H.264 otherwise.
+        val codec = if (request.optString("codec") == "hevc" && DisplaySession.decodes(HEVC)) "hevc" else "avc"
+        val session = DisplaySession(key, socket.inetAddress, port, if (codec == "hevc") HEVC else AVC)
         // Ended here (Back, Stop): the link closes, and the PC with it.
         session.onEnd = { Thread { runCatching { socket.close() } }.start() }
         session.onVisible = { lowLatency(false) }  // no low-latency Wi-Fi while nothing is shown
@@ -525,7 +548,7 @@ class CompanionService : Service() {
             wire.send(JSONObject().put("type", "display-ready").put("port", session.socket.localPort)
                 .put("width", maxOf(mode.physicalWidth, mode.physicalHeight))
                 .put("height", minOf(mode.physicalWidth, mode.physicalHeight))
-                .put("refresh", mode.refreshRate.toDouble()))
+                .put("refresh", mode.refreshRate.toDouble()).put("codec", codec))
             startActivity(Intent(this, DisplayActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             displaying = pc
             showCaptures()
@@ -734,6 +757,8 @@ class CompanionService : Service() {
         const val MAX_JOB_BYTES = 1024L * 1024 * 1024
         const val FREE_SPACE = 200L * 1024 * 1024  // left free on the tablet, at least
         const val HANDSHAKE_TIMEOUT = 20_000   // ms for TLS, hello and the pairing messages
+        const val AVC = android.media.MediaFormat.MIMETYPE_VIDEO_AVC
+        const val HEVC = android.media.MediaFormat.MIMETYPE_VIDEO_HEVC
         const val PAIRING_TIMEOUT = 150_000    // ms: the user compares the codes
         const val PAIRED_TIMEOUT = 90_000      // ms without a word from a paired PC
         private val JOB_ID = Regex("[0-9a-f]{32}")
@@ -741,6 +766,7 @@ class CompanionService : Service() {
         const val IDLE_STOP = 10 * 60_000L   // ms without a PC when not always ready
         const val USB_REOPEN_WAIT = 500L     // ms between looks for the accessory after its stream broke
         const val USB_REOPEN_TRIES = 6
+        const val USB_STATE = "android.hardware.usb.action.USB_STATE"  // UsbManager's, hidden
 
         fun deviceName(context: Context): String =
             Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME) ?: Build.MODEL
